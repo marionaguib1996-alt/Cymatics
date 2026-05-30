@@ -1,0 +1,1032 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Music Academy — Finance Manager</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #0f0e0c;
+  --surface: #1a1916;
+  --surface2: #222120;
+  --border: #2e2c28;
+  --border2: #3d3a35;
+  --text: #f0ede6;
+  --text-muted: #8a8680;
+  --text-dim: #5a5752;
+  --gold: #c9a84c;
+  --gold-light: #e2c47a;
+  --gold-dim: #7a6230;
+  --green: #4caf7d;
+  --green-bg: #0d2419;
+  --green-text: #6fcf97;
+  --red: #e05c5c;
+  --red-bg: #2a0f0f;
+  --red-text: #f47c7c;
+  --amber: #d4a017;
+  --amber-bg: #241a04;
+  --amber-text: #f0c040;
+  --blue: #5b9bd5;
+  --blue-bg: #0d1e30;
+  --blue-text: #7fbfef;
+  --radius: 10px;
+  --radius-sm: 6px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{font-size:15px}
+body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;min-height:100vh;line-height:1.6}
+
+/* HEADER */
+.app-header{background:var(--surface);border-bottom:1px solid var(--border);padding:0 2rem;display:flex;align-items:center;justify-content:space-between;height:62px;position:sticky;top:0;z-index:100}
+.logo{display:flex;align-items:center;gap:12px}
+.logo-icon{width:36px;height:36px;background:var(--gold-dim);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:18px}
+.logo-text{font-family:'DM Serif Display',serif;font-size:1.25rem;color:var(--gold-light);letter-spacing:0.01em}
+.logo-sub{font-size:11px;color:var(--text-muted);letter-spacing:0.08em;text-transform:uppercase}
+.month-selector{display:flex;align-items:center;gap:8px}
+.month-selector label{font-size:12px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em}
+.month-selector select{background:var(--surface2);border:1px solid var(--border2);color:var(--text);padding:6px 12px;border-radius:var(--radius-sm);font-family:'DM Sans',sans-serif;font-size:13px;cursor:pointer}
+
+/* NAV */
+.nav-bar{background:var(--surface);border-bottom:1px solid var(--border);padding:0 2rem;display:flex;gap:0}
+.nav-btn{padding:12px 20px;font-size:13px;font-weight:500;cursor:pointer;border:none;background:none;color:var(--text-muted);border-bottom:2px solid transparent;letter-spacing:0.03em;transition:all 0.15s;display:flex;align-items:center;gap:7px}
+.nav-btn:hover{color:var(--text)}
+.nav-btn.active{color:var(--gold-light);border-bottom-color:var(--gold)}
+
+/* MAIN */
+.main{padding:2rem;max-width:1100px;margin:0 auto}
+.page{display:none}
+.page.active{display:block}
+
+/* CARDS */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1.25rem 1.5rem;margin-bottom:1.25rem}
+.card-title{font-size:13px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:var(--text-muted);margin-bottom:1rem;display:flex;align-items:center;gap:8px}
+.card-title::before{content:'';display:inline-block;width:3px;height:14px;background:var(--gold);border-radius:2px}
+
+/* METRIC GRID */
+.metric-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:1.5rem}
+.metric{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:1.1rem 1.25rem;position:relative;overflow:hidden}
+.metric::after{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--gold-dim)}
+.metric.green::after{background:var(--green)}
+.metric.red::after{background:var(--red)}
+.metric.amber::after{background:var(--amber)}
+.metric-label{font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:6px}
+.metric-value{font-family:'DM Serif Display',serif;font-size:1.6rem;color:var(--text)}
+.metric-value.green{color:var(--green-text)}
+.metric-value.red{color:var(--red-text)}
+.metric-value.amber{color:var(--amber-text)}
+
+/* TABLES */
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;padding:10px 12px;font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;border-bottom:1px solid var(--border);white-space:nowrap}
+td{padding:10px 12px;border-bottom:1px solid var(--border);color:var(--text);vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:rgba(255,255,255,0.02)}
+
+/* BADGES */
+.badge{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600;letter-spacing:0.04em}
+.badge-green{background:var(--green-bg);color:var(--green-text);border:1px solid rgba(76,175,125,0.2)}
+.badge-red{background:var(--red-bg);color:var(--red-text);border:1px solid rgba(224,92,92,0.2)}
+.badge-amber{background:var(--amber-bg);color:var(--amber-text);border:1px solid rgba(212,160,23,0.2)}
+.badge-blue{background:var(--blue-bg);color:var(--blue-text);border:1px solid rgba(91,155,213,0.2)}
+
+/* FORM */
+.form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:12px}
+.form-field label{display:block;font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:5px}
+input,select,textarea{width:100%;background:var(--surface2);border:1px solid var(--border2);color:var(--text);padding:8px 12px;border-radius:var(--radius-sm);font-family:'DM Sans',sans-serif;font-size:13px;outline:none;transition:border-color 0.15s}
+input:focus,select:focus{border-color:var(--gold-dim)}
+input::placeholder{color:var(--text-dim)}
+
+/* BUTTONS */
+.btn{padding:8px 16px;border-radius:var(--radius-sm);font-family:'DM Sans',sans-serif;font-size:13px;font-weight:500;cursor:pointer;border:1px solid var(--border2);background:var(--surface2);color:var(--text);transition:all 0.15s;white-space:nowrap}
+.btn:hover{background:var(--surface);border-color:var(--text-muted)}
+.btn-gold{background:var(--gold-dim);border-color:var(--gold);color:var(--gold-light)}
+.btn-gold:hover{background:var(--gold);color:var(--bg)}
+.btn-sm{padding:5px 10px;font-size:12px}
+.btn-danger{background:var(--red-bg);border-color:var(--red);color:var(--red-text)}
+.btn-danger:hover{background:var(--red);color:#fff}
+
+/* TWO COL */
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;margin-bottom:1.25rem}
+
+/* SUMMARY TABLE */
+.summary-row{display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--border)}
+.summary-row:last-child{border-bottom:none}
+.summary-row.total{padding-top:12px;margin-top:4px;border-top:1px solid var(--border2);border-bottom:none}
+.summary-row .s-label{font-size:13px;color:var(--text-muted)}
+.summary-row .s-val{font-size:14px;font-weight:600;color:var(--text)}
+.summary-row.total .s-label{color:var(--text);font-weight:600}
+.summary-row.total .s-val{font-family:'DM Serif Display',serif;font-size:1.1rem}
+.s-val.green{color:var(--green-text)}
+.s-val.red{color:var(--red-text)}
+.s-val.amber{color:var(--amber-text)}
+
+/* EMPTY STATE */
+.empty{text-align:center;padding:3rem 1rem;color:var(--text-dim)}
+.empty-icon{font-size:2.5rem;margin-bottom:0.75rem;opacity:0.4}
+.empty-text{font-size:13px}
+
+/* PROFIT BANNER */
+.profit-banner{border-radius:var(--radius);padding:1.5rem 2rem;margin-bottom:1.5rem;display:flex;align-items:center;justify-content:space-between;border:1px solid}
+.profit-banner.positive{background:var(--green-bg);border-color:rgba(76,175,125,0.25)}
+.profit-banner.negative{background:var(--red-bg);border-color:rgba(224,92,92,0.25)}
+.profit-label{font-size:12px;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-muted);margin-bottom:4px}
+.profit-val{font-family:'DM Serif Display',serif;font-size:2.2rem}
+.profit-val.positive{color:var(--green-text)}
+.profit-val.negative{color:var(--red-text)}
+
+/* ACTIONS */
+.actions{display:flex;gap:6px}
+
+/* UNPAID ALERT */
+.unpaid-item{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-radius:var(--radius-sm);background:var(--surface2);margin-bottom:6px;font-size:13px}
+.unpaid-name{font-weight:500}
+.unpaid-meta{color:var(--text-muted);font-size:12px}
+
+@media(max-width:768px){
+  .metric-grid{grid-template-columns:1fr 1fr}
+  .two-col{grid-template-columns:1fr}
+  .app-header{padding:0 1rem}
+  .main{padding:1rem}
+  .nav-bar{padding:0 1rem;overflow-x:auto}
+}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+
+<header class="app-header">
+  <div class="logo">
+    <div class="logo-icon">🎵</div>
+    <div>
+      <div class="logo-text">Music Academy</div>
+      <div class="logo-sub">Finance Manager</div>
+    </div>
+  </div>
+  <div class="month-selector">
+    <label>Viewing</label>
+    <select id="global-month" onchange="onMonthChange()"></select>
+  </div>
+</header>
+
+<nav class="nav-bar">
+  <button class="nav-btn active" onclick="switchPage('overview',this)">📊 Overview</button>
+  <button class="nav-btn" onclick="switchPage('students',this)">🎓 Students</button>
+  <button class="nav-btn" onclick="switchPage('teachers',this)">🎹 Teachers</button>
+  <button class="nav-btn" onclick="switchPage('lessons',this)">📅 Lessons</button>
+  <button class="nav-btn" onclick="switchPage('expenses',this)">🧾 Expenses</button>
+  <button class="nav-btn" onclick="switchPage('reports',this)">📈 Reports</button>
+  <button class="nav-btn" onclick="switchPage('cloud',this)">☁️ Cloud</button>
+</nav>
+
+<main class="main">
+
+<!-- OVERVIEW -->
+<div id="page-overview" class="page active">
+  <div id="profit-banner"></div>
+  <div class="metric-grid" id="metrics"></div>
+  <div class="two-col">
+    <div class="card">
+      <div class="card-title">Income</div>
+      <div id="income-summary"></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Liabilities &amp; Expenses</div>
+      <div id="expense-summary"></div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-title">Unpaid students</div>
+    <div id="unpaid-students"></div>
+  </div>
+</div>
+
+<!-- STUDENTS -->
+<div id="page-students" class="page">
+  <div class="card">
+    <div class="card-title">Add student</div>
+    <div class="form-grid">
+      <div class="form-field"><label>Full name</label><input id="s-name" placeholder="e.g. Ahmed Hassan"></div>
+      <div class="form-field"><label>Instrument</label><input id="s-instrument" placeholder="e.g. Guitar"></div>
+      <div class="form-field"><label>Teacher</label><input id="s-teacher" placeholder="Teacher name"></div>
+      <div class="form-field"><label>Payment plan</label>
+        <select id="s-plan">
+          <option value="trial">Trial Session (500 EGP)</option>
+          <option value="lesson-1">1 Lesson Left (500 EGP)</option>
+          <option value="lesson-2">2 Lessons Left (1,000 EGP)</option>
+          <option value="lesson-3">3 Lessons Left (1,500 EGP)</option>
+          <option value="monthly-4">Monthly — 4 weeks (2,000 EGP)</option>
+          <option value="monthly-5">Monthly — 5 weeks (2,500 EGP)</option>
+          <option value="weekly">Weekly session (600 EGP)</option>
+        </select>
+      </div>
+    </div>
+    <button class="btn btn-gold" onclick="addStudent()">+ Add student</button>
+  </div>
+  
+<div class="card">
+  <div class="card-title">Student Filters</div>
+  <div class="form-grid">
+    <input id="student-filter-name" placeholder="Student" oninput="renderStudents()">
+    <input id="student-filter-teacher" placeholder="Teacher" oninput="renderStudents()">
+    <input id="student-filter-instrument" placeholder="Instrument" oninput="renderStudents()">
+    <select id="student-filter-status" onchange="renderStudents()">
+      <option value="">All Statuses</option>
+      <option value="paid">Paid</option>
+      <option value="unpaid">Unpaid</option>
+    </select>
+    <select id="student-filter-plan" onchange="renderStudents()">
+      <option value="">All Plans</option>
+      <option value="monthly-4">Monthly 4 Weeks</option>
+      <option value="monthly-5">Monthly 5 Weeks</option>
+      <option value="weekly">Weekly</option>
+    </select>
+    <select id="student-sort" onchange="renderStudents()">
+      <option value="name_asc">Student A-Z</option>
+      <option value="name_desc">Student Z-A</option>
+      <option value="teacher_asc">Teacher A-Z</option>
+      <option value="teacher_desc">Teacher Z-A</option>
+      <option value="instrument_asc">Instrument A-Z</option>
+      <option value="instrument_desc">Instrument Z-A</option>
+    </select>
+  </div>
+  <div id="student-summary" class="metric-grid"></div>
+</div>
+
+<div class="card">
+    <div class="card-title">All students</div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Name</th><th>Instrument</th><th>Teacher</th><th>Plan</th><th>Amount</th><th>Status</th><th>History</th><th>Actions</th></tr></thead>
+      <tbody id="students-tbody"></tbody>
+    </table></div>
+  </div>
+</div>
+
+<!-- TEACHERS -->
+<div id="page-teachers" class="page">
+  <div class="card">
+    <div class="card-title">Log teacher lessons</div>
+    <div class="form-grid">
+      <div class="form-field"><label>Teacher name</label><input id="t-name" placeholder="e.g. Mr. Karim"></div>
+      <div class="form-field"><label>Instrument</label><input id="t-instrument" placeholder="e.g. Guitar"></div>
+      <div class="form-field"><label>Rate per lesson (EGP)</label><input id="t-rate" type="number" value="300" min="0"></div>
+      <div class="form-field"><label>Lessons this month</label><input id="t-lessons" type="number" value="0" min="0"></div>
+    </div>
+    <button class="btn btn-gold" onclick="addTeacher()">+ Save teacher record</button>
+  </div>
+  <div class="card">
+    <div class="card-title">Teacher payouts</div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Teacher</th><th>Instrument</th><th>Rate</th><th>Lessons</th><th>Total owed</th><th>Status</th><th>Actions</th></tr></thead>
+      <tbody id="teachers-tbody"></tbody>
+    </table></div>
+    <div style="margin-top:1rem;padding-top:1rem;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+      <span style="font-size:13px;color:var(--text-muted)">Total pending payouts</span>
+      <span id="teacher-total" style="font-family:'DM Serif Display',serif;font-size:1.3rem;color:var(--amber-text)"></span>
+    </div>
+  </div>
+</div>
+
+<!-- EXPENSES -->
+<div id="page-expenses" class="page">
+  <div class="card">
+    <div class="card-title">Add expense</div>
+    <div class="form-grid">
+      <div class="form-field"><label>Description</label><input id="e-desc" placeholder="e.g. Monthly rent"></div>
+      <div class="form-field"><label>Category</label>
+        <select id="e-cat">
+          <option value="Rent">Rent</option>
+          <option value="Utilities">Utilities</option>
+          <option value="Fridge / Food &amp; Drinks">Fridge / Food &amp; Drinks</option>
+          <option value="Other">Other</option>
+        </select>
+      </div>
+      <div class="form-field"><label>Amount (EGP)</label><input id="e-amount" type="number" placeholder="0" min="0"></div>
+    </div>
+    <button class="btn btn-gold" onclick="addExpense()">+ Add expense</button>
+  </div>
+  <div class="card">
+    <div class="card-title">All expenses this month</div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Description</th><th>Category</th><th>Amount</th><th>Actions</th></tr></thead>
+      <tbody id="expenses-tbody"></tbody>
+    </table></div>
+    <div style="margin-top:1rem;padding-top:1rem;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+      <span style="font-size:13px;color:var(--text-muted)">Total expenses this month</span>
+      <span id="expenses-total" style="font-family:'DM Serif Display',serif;font-size:1.3rem;color:var(--red-text)"></span>
+    </div>
+  </div>
+</div>
+
+
+<!-- LESSONS -->
+<div id="page-lessons" class="page">
+<div class="card">
+<div class="card-title">Quick Attendance Logger</div>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Student</th><th>Instrument</th><th>Teacher</th><th>Date</th><th>Status</th><th>Log</th></tr></thead>
+<tbody id="lesson-logger"></tbody>
+</table>
+</div>
+</div>
+
+
+<div class="card">
+<div class="card-title">Lesson Filters</div>
+<div class="form-grid">
+<input id="filter-student" placeholder="Student" oninput="renderLessons()">
+<input id="filter-teacher" placeholder="Teacher" oninput="renderLessons()">
+<input id="filter-instrument" placeholder="Instrument" oninput="renderLessons()">
+<select id="filter-status" onchange="renderLessons()">
+<option value="">All Statuses</option>
+<option value="attended">Attended</option>
+<option value="absent_paid">Absent & Paid</option>
+<option value="makeup_scheduled">Makeup Scheduled</option>
+<option value="teacher_absent">Teacher Absent</option>
+</select>
+<input id="filter-from" type="date" onchange="renderLessons()">
+<input id="filter-to" type="date" onchange="renderLessons()">
+<select id="sort-lessons" onchange="renderLessons()">
+<option value="date_desc">Date ↓</option>
+<option value="date_asc">Date ↑</option>
+<option value="student_asc">Student A-Z</option>
+<option value="student_desc">Student Z-A</option>
+<option value="teacher_asc">Teacher A-Z</option>
+<option value="teacher_desc">Teacher Z-A</option>
+<option value="instrument_asc">Instrument A-Z</option>
+<option value="instrument_desc">Instrument Z-A</option>
+</select>
+</div>
+<div id="lesson-summary" class="metric-grid"></div>
+</div>
+
+<div class="card">
+<div class="card-title">Attendance Ledger</div>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Date</th><th>Student</th><th>Instrument</th><th>Teacher</th><th>Status</th><th>Actions</th></tr></thead>
+<tbody id="lesson-ledger"></tbody>
+</table>
+</div>
+</div>
+</div>
+
+
+<!-- REPORTS -->
+<div id="page-reports" class="page">
+  <div class="card">
+    <div class="card-title">Teacher Dashboard</div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Teacher</th><th>Payable Lessons</th><th>Amount Due</th></tr></thead>
+      <tbody id="report-teachers"></tbody>
+    </table></div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Makeup Dashboard</div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Student</th><th>Instrument</th><th>Teacher</th><th>Makeups Owed</th></tr></thead>
+      <tbody id="report-makeups"></tbody>
+    </table></div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Export Center</div>
+    <button class="btn btn-gold" onclick="exportAttendanceCSV()">Attendance CSV</button>
+    <button class="btn btn-gold" onclick="exportPayrollCSV()">Payroll CSV</button>
+    <button class="btn btn-gold" onclick="exportStudentsCSV()">Students CSV</button>
+  </div>
+</div>
+
+
+<!-- CLOUD -->
+<div id="page-cloud" class="page">
+  <div class="card">
+    <div class="card-title">Cloud Migration</div>
+    <p style="margin-bottom:12px">Configure your Supabase credentials in this file, then use the tools below.</p>
+    <button class="btn btn-gold" onclick="testCloud()">☁️ Test Connection</button>
+    <button class="btn" onclick="uploadCloud()">☁️ Upload Everything To Cloud</button>
+    <button class="btn" onclick="downloadCloud()">☁️ Download Everything From Cloud</button>
+    <div id="cloud-status" style="margin-top:12px;font-weight:600">Not tested</div><div id="last-sync" style="margin-top:8px;color:#8a8680">Last Sync: Never</div>
+  </div>
+</div>
+
+</main>
+
+<script>
+const PLAN_LABELS = {'trial':'Trial Session','lesson-1':'1 Lesson Left','lesson-2':'2 Lessons Left','lesson-3':'3 Lessons Left','monthly-4':'Monthly (4 wks)','monthly-5':'Monthly (5 wks)','weekly':'Weekly'};
+const PLAN_AMOUNTS = {'trial':500,'lesson-1':500,'lesson-2':1000,'lesson-3':1500,'monthly-4':2000,'monthly-5':2500,'weekly':600};
+
+function egp(n){return Number(Math.round(n)).toLocaleString('en-EG')+' EGP';}
+
+// Generate last 12 months
+function genMonths(){
+  const months=[];
+  const now=new Date();
+  for(let i=-60;i<=60;i++){
+    const d=new Date(now.getFullYear(),now.getMonth()+i,1);
+    const key=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+    const label=d.toLocaleDateString('en-US',{month:'long',year:'numeric'});
+    months.push({key,label});
+  }
+  return months;
+}
+
+const MONTHS=genMonths();
+const sel=document.getElementById('global-month');
+MONTHS.forEach(m=>{const o=document.createElement('option');o.value=m.key;o.textContent=m.label;sel.appendChild(o);});
+const currentKey=new Date().getFullYear()+'-'+String(new Date().getMonth()+1).padStart(2,'0');
+sel.value=(MONTHS.find(m=>m.key===currentKey)||MONTHS[0]).key;
+
+function currentMonth(){return document.getElementById('global-month').value;}
+
+// State
+let db = JSON.parse(localStorage.getItem('musicacademy_db')||'{"students":[],"payments":{},"teachers":[],"teacherPaid":{},"expenses":[],"lessons":[]}'); db.lessons=db.lessons||[];
+function save(){localStorage.setItem('musicacademy_db',JSON.stringify(db));}
+
+// --- STUDENTS ---
+function addStudent(){
+  const name=document.getElementById('s-name').value.trim();
+  const instrument=document.getElementById('s-instrument').value.trim();
+  const teacher=document.getElementById('s-teacher').value.trim();
+  const plan=document.getElementById('s-plan').value;
+  if(!name){alert('Please enter a student name');return;}
+  db.students.push({id:Date.now(),name,instrument,teacher,plan,addedMonth:currentMonth()});
+  save(); autoSync();
+  document.getElementById('s-name').value='';
+  document.getElementById('s-instrument').value='';
+  document.getElementById('s-teacher').value='';
+  renderStudents();
+  renderOverview();
+}
+function togglePayment(id){
+  const key=id+'_'+currentMonth();
+  db.payments[key]=!db.payments[key];
+  save(); autoSync(); renderStudents();renderOverview();
+}
+function deleteStudent(id){
+  if(!confirm('Delete this student?'))return;
+  db.students=db.students.filter(s=>s.id!==id);
+  save(); autoSync(); renderStudents();renderOverview();
+}
+function renderStudents(){
+  const tb=document.getElementById('students-tbody');
+  const month=currentMonth();
+  let students=[...db.students];
+
+  const fn=(document.getElementById('student-filter-name')||{}).value?.toLowerCase()||'';
+  const ft=(document.getElementById('student-filter-teacher')||{}).value?.toLowerCase()||'';
+  const fi=(document.getElementById('student-filter-instrument')||{}).value?.toLowerCase()||'';
+  const fs=(document.getElementById('student-filter-status')||{}).value||'';
+  const fp=(document.getElementById('student-filter-plan')||{}).value||'';
+
+  students=students.filter(s=>
+    (!fn || s.name.toLowerCase().includes(fn)) &&
+    (!ft || (s.teacher||'').toLowerCase().includes(ft)) &&
+    (!fi || (s.instrument||'').toLowerCase().includes(fi)) &&
+    (!fp || s.plan===fp) &&
+    (!fs || ((!!db.payments[s.id+'_'+month]) ? 'paid':'unpaid')===fs)
+  );
+
+  const sort=(document.getElementById('student-sort')||{}).value||'name_asc';
+  students.sort((a,b)=>{
+    if(sort==='name_asc') return a.name.localeCompare(b.name);
+    if(sort==='name_desc') return b.name.localeCompare(a.name);
+    if(sort==='teacher_asc') return (a.teacher||'').localeCompare(b.teacher||'');
+    if(sort==='teacher_desc') return (b.teacher||'').localeCompare(a.teacher||'');
+    if(sort==='instrument_asc') return (a.instrument||'').localeCompare(b.instrument||'');
+    if(sort==='instrument_desc') return (b.instrument||'').localeCompare(a.instrument||'');
+    return 0;
+  });
+
+  const sum=document.getElementById('student-summary');
+  if(sum){
+    const paid=db.students.filter(s=>db.payments[s.id+'_'+month]).length;
+    const unpaid=db.students.length-paid;
+    const weekly=db.students.filter(s=>s.plan==='weekly').length;
+    const monthly=db.students.length-weekly;
+    sum.innerHTML=`<div class="metric"><div class="metric-label">Students</div><div class="metric-value">${db.students.length}</div></div>
+    <div class="metric green"><div class="metric-label">Paid</div><div class="metric-value green">${paid}</div></div>
+    <div class="metric red"><div class="metric-label">Unpaid</div><div class="metric-value red">${unpaid}</div></div>
+    <div class="metric"><div class="metric-label">Monthly / Weekly</div><div class="metric-value">${monthly}/${weekly}</div></div>`;
+  }
+  if(!students.length){tb.innerHTML='<tr><td colspan="7"><div class="empty"><div class="empty-icon">🎓</div><div class="empty-text">No students yet. Add your first student above.</div></div></td></tr>';return;}
+  tb.innerHTML=students.map(s=>{
+    const key=s.id+'_'+currentMonth();
+    const paid=!!db.payments[key];
+    const amt=s.plan==='weekly'?'600 / session':egp(PLAN_AMOUNTS[s.plan]);
+    return `<tr>
+      <td><strong>${s.name}</strong></td>
+      <td>${s.instrument||'—'}</td>
+      <td>${s.teacher||'—'}</td>
+      <td>${PLAN_LABELS[s.plan]}</td>
+      <td style="font-weight:600">${amt}</td>
+      <td><span class="badge ${paid?'badge-green':'badge-red'}">${paid?'✓ Paid':'✗ Unpaid'}</span></td>
+      <td><button class='btn btn-sm' onclick='showHistory(${s.id})'>History</button></td><td><div class="actions">
+        <button class="btn btn-sm" onclick="togglePayment(${s.id})">${paid?'Mark unpaid':'Mark paid'}</button>
+        ${s.plan==='trial' ? `<button class="btn btn-sm btn-gold" onclick="convertTrial(${s.id})">Convert</button>` : ''}
+        <button class="btn btn-sm btn-danger" onclick="deleteStudent(${s.id})">✕</button>
+      </div></td>
+    </tr>`;
+  }).join('');
+}
+
+
+function convertTrial(id){
+ const s=db.students.find(x=>x.id===id);
+ if(!s) return;
+ const plan=prompt('Convert to: monthly-4, monthly-5, lesson-3, lesson-2, lesson-1, weekly','monthly-4');
+ if(!plan) return;
+ s.plan=plan;
+ save();
+ renderStudents();
+ renderOverview();
+}
+
+// --- TEACHERS ---
+function addTeacher(){
+  const name=document.getElementById('t-name').value.trim();
+  const instrument=document.getElementById('t-instrument').value.trim();
+  const rate=parseInt(document.getElementById('t-rate').value)||300;
+  const lessons=parseInt(document.getElementById('t-lessons').value)||0;
+  const month=currentMonth();
+  if(!name){alert('Please enter a teacher name');return;}
+  const existing=db.teachers.find(t=>t.name===name&&t.month===month);
+  if(existing){existing.rate=rate;existing.lessons=lessons;existing.instrument=instrument;}
+  else{db.teachers.push({id:Date.now(),name,instrument,rate,lessons,month});}
+  save();
+  document.getElementById('t-name').value='';
+  document.getElementById('t-lessons').value='0';
+  renderTeachers();renderOverview();
+}
+function toggleTeacherPaid(id){
+  db.teacherPaid[id]=!db.teacherPaid[id];
+  save(); autoSync(); renderTeachers();renderOverview();
+}
+function deleteTeacher(id){
+  if(!confirm('Delete this teacher record?'))return;
+  db.teachers=db.teachers.filter(t=>t.id!==id);
+  save(); autoSync(); renderTeachers();renderOverview();
+}
+function renderTeachers(){
+  const month=currentMonth();
+  const list=db.teachers.filter(t=>t.month===month);
+  const tb=document.getElementById('teachers-tbody');
+  if(!list.length){tb.innerHTML='<tr><td colspan="7"><div class="empty"><div class="empty-icon">🎹</div><div class="empty-text">No teacher records for this month.</div></div></td></tr>';}
+  else{tb.innerHTML=list.map(t=>{
+    const payable=db.lessons.filter(l=>l.month===month && l.teacher===t.name && (l.status==='attended' || l.status==='absent_paid')).length; const total=t.rate*payable;
+    const paid=!!db.teacherPaid[t.id];
+    return `<tr>
+      <td><strong>${t.name}</strong></td>
+      <td>${t.instrument||'—'}</td>
+      <td>${egp(t.rate)}</td>
+      <td>${payable}</td>
+      <td style="font-weight:600">${egp(total)}</td>
+      <td><span class="badge ${paid?'badge-green':'badge-amber'}">${paid?'✓ Paid':'⏳ Pending'}</span></td>
+      <td><div class="actions">
+        <button class="btn btn-sm" onclick="toggleTeacherPaid(${t.id})">${paid?'Undo':'Mark paid'}</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteTeacher(${t.id})">✕</button>
+      </div></td>
+    </tr>`;
+  }).join('');}
+  const pending=list.filter(t=>!db.teacherPaid[t.id]).reduce((a,t)=>{
+      const payable=db.lessons.filter(l=>l.month===month && l.teacher===t.name && (l.status==='attended' || l.status==='absent_paid')).length;
+      return a + (t.rate*payable);
+    },0);
+  document.getElementById('teacher-total').textContent=egp(pending);
+}
+
+// --- EXPENSES ---
+function addExpense(){
+  const desc=document.getElementById('e-desc').value.trim();
+  const cat=document.getElementById('e-cat').value;
+  const amount=parseInt(document.getElementById('e-amount').value)||0;
+  if(!desc||!amount){alert('Please fill in description and amount');return;}
+  db.expenses.push({id:Date.now(),desc,cat,amount,month:currentMonth()});
+  save();
+  document.getElementById('e-desc').value='';
+  document.getElementById('e-amount').value='';
+  renderExpenses();renderOverview();
+}
+function deleteExpense(id){
+  if(!confirm('Delete this expense?'))return;
+  db.expenses=db.expenses.filter(e=>e.id!==id);
+  save(); autoSync(); renderExpenses();renderOverview();
+}
+function renderExpenses(){
+  const month=currentMonth();
+  const list=db.expenses.filter(e=>e.month===month);
+  const tb=document.getElementById('expenses-tbody');
+  if(!list.length){tb.innerHTML='<tr><td colspan="4"><div class="empty"><div class="empty-icon">🧾</div><div class="empty-text">No expenses recorded for this month.</div></div></td></tr>';}
+  else{tb.innerHTML=list.map(e=>`<tr>
+    <td>${e.desc}</td>
+    <td><span class="badge badge-blue">${e.cat}</span></td>
+    <td style="font-weight:600">${egp(e.amount)}</td>
+    <td><button class="btn btn-sm btn-danger" onclick="deleteExpense(${e.id})">✕</button></td>
+  </tr>`).join('');}
+  const total=list.reduce((a,e)=>a+e.amount,0);
+  document.getElementById('expenses-total').textContent=egp(total);
+}
+
+// --- OVERVIEW ---
+function renderOverview(){
+  const month=currentMonth();
+  const monthStudents=db.students;
+  let collected=0,outstanding=0;
+  const unpaid=[];
+  monthStudents.forEach(s=>{
+    const key=s.id+'_'+month;
+    const paid=!!db.payments[key];
+    if(s.plan!=='weekly'){
+      const amt=PLAN_AMOUNTS[s.plan];
+      if(paid)collected+=amt; else{outstanding+=amt;unpaid.push(s);}
+    } else {
+      if(paid)collected+=600; else unpaid.push(s);
+    }
+  });
+  const teacherMonth=db.teachers.filter(t=>t.month===month);
+  const totalTeacher=teacherMonth.reduce((a,t)=>{
+      const payable=db.lessons.filter(l=>l.month===month && l.teacher===t.name && (l.status==='attended' || l.status==='absent_paid')).length;
+      return a + (t.rate*payable);
+    },0);
+  const pendingTeacher=teacherMonth.filter(t=>!db.teacherPaid[t.id]).reduce((a,t)=>{
+      const payable=db.lessons.filter(l=>l.month===month && l.teacher===t.name && (l.status==='attended' || l.status==='absent_paid')).length;
+      return a + (t.rate*payable);
+    },0);
+  const monthExp=db.expenses.filter(e=>e.month===month);
+  const totalExp=monthExp.reduce((a,e)=>a+e.amount,0);
+  const netProfit=collected-totalTeacher-totalExp;
+  const totalLiabilities=pendingTeacher+totalExp+outstanding;
+
+  // Profit banner
+  const banner=document.getElementById('profit-banner');
+  banner.className='profit-banner '+(netProfit>=0?'positive':'negative');
+  banner.innerHTML=`<div><div class="profit-label">Net profit this month</div><div class="profit-val ${netProfit>=0?'positive':'negative'}">${egp(netProfit)}</div></div>
+  <div style="text-align:right"><div class="profit-label">Total liabilities</div><div style="font-family:'DM Serif Display',serif;font-size:1.5rem;color:var(--amber-text)">${egp(totalLiabilities)}</div></div>`;
+
+  // Metrics
+  document.getElementById('metrics').innerHTML=`
+    <div class="metric green"><div class="metric-label">Revenue collected</div><div class="metric-value green">${egp(collected)}</div></div>
+    <div class="metric amber"><div class="metric-label">Outstanding fees</div><div class="metric-value amber">${egp(outstanding)}</div></div>
+    <div class="metric red"><div class="metric-label">Total outgoings</div><div class="metric-value red">${egp(totalTeacher+totalExp)}</div></div>
+    <div class="metric"><div class="metric-label">Active students</div><div class="metric-value">${db.students.length}</div></div>
+  `;
+
+  // Income
+  const paidCount=monthStudents.filter(s=>!!db.payments[s.id+'_'+month]).length;
+  document.getElementById('income-summary').innerHTML=`
+    <div class="summary-row"><span class="s-label">Fees collected (${paidCount} students)</span><span class="s-val green">${egp(collected)}</span></div>
+    <div class="summary-row"><span class="s-label">Still outstanding (${unpaid.length} students)</span><span class="s-val amber">${egp(outstanding)}</span></div>
+    <div class="summary-row total"><span class="s-label">Total expected</span><span class="s-val">${egp(collected+outstanding)}</span></div>
+  `;
+
+  // Expenses
+  const cats={};
+  monthExp.forEach(e=>{cats[e.cat]=(cats[e.cat]||0)+e.amount;});
+  const catRows=Object.entries(cats).map(([k,v])=>`<div class="summary-row"><span class="s-label">${k}</span><span class="s-val">${egp(v)}</span></div>`).join('');
+  document.getElementById('expense-summary').innerHTML=`
+    <div class="summary-row"><span class="s-label">Teacher payouts (total)</span><span class="s-val red">${egp(totalTeacher)}</span></div>
+    ${catRows}
+    <div class="summary-row"><span class="s-label">Pending teacher payout</span><span class="s-val amber">${egp(pendingTeacher)}</span></div>
+    <div class="summary-row total"><span class="s-label">Total pending liabilities</span><span class="s-val red">${egp(totalLiabilities)}</span></div>
+  `;
+
+  // Unpaid
+  const upEl=document.getElementById('unpaid-students');
+  if(!unpaid.length){upEl.innerHTML='<div class="empty"><div class="empty-icon">✅</div><div class="empty-text">All students have paid for this month!</div></div>';}
+  else{upEl.innerHTML=unpaid.map(s=>`<div class="unpaid-item">
+    <div><div class="unpaid-name">${s.name}</div><div class="unpaid-meta">${s.instrument||''} ${s.instrument&&s.teacher?'·':''} ${s.teacher||''}</div></div>
+    <div style="display:flex;align-items:center;gap:10px">
+      <span style="font-size:13px;font-weight:600;color:var(--red-text)">${s.plan==='weekly'?'600 EGP/session':egp(PLAN_AMOUNTS[s.plan])}</span>
+      <button class="btn btn-sm btn-gold" onclick="togglePayment(${s.id});renderStudents()">Mark paid</button>
+    </div>
+  </div>`).join('');}
+}
+
+
+// LESSONS
+function addLesson(studentId){
+ const s=db.students.find(x=>x.id==studentId);
+ if(!s) return;
+ const date=document.getElementById('lesson_date_'+studentId).value;
+ const status=document.getElementById('lesson_status_'+studentId).value;
+
+ db.lessons.push({
+   id:Date.now(),
+   studentId:s.id,
+   student:s.name,
+   instrument:s.instrument||'',
+   teacher:s.teacher||'',
+   date:date,
+   status:status,
+   month:currentMonth()
+ });
+ save();
+ renderLessons();
+ renderTeachers();
+ alert('Lesson logged');
+}
+
+function renderLessons(){
+ const logger=document.getElementById('lesson-logger');
+ const ledger=document.getElementById('lesson-ledger');
+ if(logger){
+   logger.innerHTML=db.students.map(s=>`
+   <tr>
+    <td>${s.name}</td>
+    <td>${s.instrument||'—'}</td>
+    <td>${s.teacher||'—'}</td>
+    <td><input type="date" id="lesson_date_${s.id}" value="${new Date().toISOString().slice(0,10)}"></td>
+    <td>
+      <select id="lesson_status_${s.id}">
+       <option value="attended">Attended</option>
+       <option value="absent_paid">Absent & Paid</option>
+       <option value="makeup_scheduled">Makeup Scheduled</option>
+       <option value="teacher_absent">Teacher Absent</option>
+      </select>
+    </td>
+    <td><button class="btn btn-gold btn-sm" onclick="addLesson(${s.id})">Log</button></td>
+   </tr>`).join('');
+ }
+ if(ledger){
+   
+let list=db.lessons.filter(l=>l.month===currentMonth());
+const fs=(document.getElementById('filter-student')||{}).value?.toLowerCase()||'';
+const ft=(document.getElementById('filter-teacher')||{}).value?.toLowerCase()||'';
+const fi=(document.getElementById('filter-instrument')||{}).value?.toLowerCase()||'';
+const fst=(document.getElementById('filter-status')||{}).value||'';
+const ff=(document.getElementById('filter-from')||{}).value||'';
+const fto=(document.getElementById('filter-to')||{}).value||'';
+list=list.filter(l=>(!fs||l.student.toLowerCase().includes(fs))&&(!ft||l.teacher.toLowerCase().includes(ft))&&(!fi||l.instrument.toLowerCase().includes(fi))&&(!fst||l.status===fst)&&(!ff||l.date>=ff)&&(!fto||l.date<=fto));
+const sort=(document.getElementById('sort-lessons')||{}).value||'date_desc';
+list.sort((a,b)=>{
+ if(sort==='date_asc') return a.date.localeCompare(b.date);
+ if(sort==='date_desc') return b.date.localeCompare(a.date);
+ if(sort==='student_asc') return a.student.localeCompare(b.student);
+ if(sort==='student_desc') return b.student.localeCompare(a.student);
+ if(sort==='teacher_asc') return a.teacher.localeCompare(b.teacher);
+ if(sort==='teacher_desc') return b.teacher.localeCompare(a.teacher);
+ if(sort==='instrument_asc') return a.instrument.localeCompare(b.instrument);
+ if(sort==='instrument_desc') return b.instrument.localeCompare(a.instrument);
+ return 0;
+});
+const all=db.lessons.filter(l=>l.month===currentMonth());
+const sum=document.getElementById('lesson-summary');
+if(sum){sum.innerHTML=`<div class="metric"><div class="metric-label">Lessons</div><div class="metric-value">${all.length}</div></div>
+<div class="metric green"><div class="metric-label">Attended</div><div class="metric-value green">${all.filter(x=>x.status==='attended').length}</div></div>
+<div class="metric amber"><div class="metric-label">Absent Paid</div><div class="metric-value amber">${all.filter(x=>x.status==='absent_paid').length}</div></div>
+<div class="metric red"><div class="metric-label">Makeups+Teacher Absent</div><div class="metric-value red">${all.filter(x=>x.status==='makeup_scheduled'||x.status==='teacher_absent').length}</div></div>`;}
+
+   ledger.innerHTML=list.map(l=>`
+   <tr>
+    <td>${l.date}</td>
+    <td>${l.student}</td>
+    <td>${l.instrument}</td>
+    <td>${l.teacher}</td>
+    <td><span class="badge ${
+      l.status==='attended'?'badge-green':
+      l.status==='absent_paid'?'badge-amber':
+      l.status==='makeup_scheduled'?'badge-blue':'badge-red'
+    }">${l.status}</span></td>
+    <td>
+      <button class="btn btn-sm" onclick="editLesson(${l.id})">Edit</button>
+      <button class="btn btn-sm btn-danger" onclick="deleteLesson(${l.id})">Delete</button>
+    </td>
+   </tr>`).join('') || '<tr><td colspan="5">No lessons logged.</td></tr>';
+ }
+}
+
+
+function deleteLesson(id){
+ if(!confirm('Delete lesson?')) return;
+ db.lessons=db.lessons.filter(l=>l.id!==id);
+ save(); autoSync(); renderLessons(); renderTeachers(); renderOverview();
+}
+
+function editLesson(id){
+ const l=db.lessons.find(x=>x.id===id);
+ if(!l) return;
+ const d=prompt('Date (YYYY-MM-DD)', l.date);
+ if(d===null) return;
+ const t=prompt('Teacher', l.teacher);
+ if(t===null) return;
+ const i=prompt('Instrument', l.instrument);
+ if(i===null) return;
+ const s=prompt('Status: attended, absent_paid, makeup_scheduled, teacher_absent', l.status);
+ if(s===null) return;
+
+ l.date=d; l.teacher=t; l.instrument=i; l.status=s;
+ save(); autoSync(); renderLessons(); renderTeachers(); renderOverview();
+}
+
+
+function showHistory(studentId){
+ const student=db.students.find(s=>s.id===studentId);
+ const lessons=db.lessons.filter(l=>l.studentId===studentId).sort((a,b)=>a.date.localeCompare(b.date));
+ let attended=lessons.filter(x=>x.status==='attended').length;
+ let absentPaid=lessons.filter(x=>x.status==='absent_paid').length;
+ let makeups=lessons.filter(x=>x.status==='makeup_scheduled').length;
+ let teacherAbsent=lessons.filter(x=>x.status==='teacher_absent').length;
+ document.getElementById('history-title').innerText=student.name+' - '+(student.instrument||'');
+ document.getElementById('history-content').innerHTML=lessons.map(l=>'<div>'+l.date+' - '+l.status+'</div>').join('')+
+ '<hr><b>Attended:</b> '+attended+'<br><b>Absent Paid:</b> '+absentPaid+'<br><b>Teacher Absent:</b> '+teacherAbsent+'<br><b>Makeups Owed:</b> '+(makeups+teacherAbsent);
+ document.getElementById('history-modal').style.display='block';
+}
+function closeHistory(){document.getElementById('history-modal').style.display='none';}
+
+
+
+function renderReports(){
+ const month=currentMonth();
+
+ const rt=document.getElementById('report-teachers');
+ if(rt){
+   const list=db.teachers.filter(t=>t.month===month);
+   rt.innerHTML=list.map(t=>{
+      const payable=db.lessons.filter(l=>l.month===month && (l.teacher||'').toLowerCase()===(t.name||'').toLowerCase() && (l.status==='attended'||l.status==='absent_paid')).length;
+      return `<tr><td>${t.name}</td><td>${payable}</td><td>${egp(payable*t.rate)}</td></tr>`;
+   }).join('') || '<tr><td colspan="3">No teacher records.</td></tr>';
+ }
+
+ const rm=document.getElementById('report-makeups');
+ if(rm){
+   rm.innerHTML=db.students.map(s=>{
+      const owed=db.lessons.filter(l=>l.studentId===s.id && (l.status==='makeup_scheduled'||l.status==='teacher_absent')).length;
+      return `<tr><td>${s.name}</td><td>${s.instrument||''}</td><td>${s.teacher||''}</td><td>${owed}</td></tr>`;
+   }).sort().join('');
+ }
+}
+
+function downloadCSV(name, rows){
+ let csv=rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+ const blob=new Blob([csv],{type:'text/csv'});
+ const a=document.createElement('a');
+ a.href=URL.createObjectURL(blob);
+ a.download=name;
+ a.click();
+}
+
+function exportAttendanceCSV(){
+ const rows=[['Date','Student','Instrument','Teacher','Status']];
+ db.lessons.forEach(l=>rows.push([l.date,l.student,l.instrument,l.teacher,l.status]));
+ downloadCSV('attendance.csv',rows);
+}
+
+function exportPayrollCSV(){
+ const rows=[['Teacher','Month','Payable Lessons','Amount Due']];
+ db.teachers.forEach(t=>{
+   const payable=db.lessons.filter(l=>l.month===t.month && (l.teacher||'').toLowerCase()===(t.name||'').toLowerCase() && (l.status==='attended'||l.status==='absent_paid')).length;
+   rows.push([t.name,t.month,payable,payable*t.rate]);
+ });
+ downloadCSV('payroll.csv',rows);
+}
+
+function exportStudentsCSV(){
+ const rows=[['Student','Instrument','Teacher','Plan']];
+ db.students.forEach(s=>rows.push([s.name,s.instrument,s.teacher,s.plan]));
+ downloadCSV('students.csv',rows);
+}
+
+
+
+const SUPABASE_URL='https://qgemnelkdyhwmnxoqmkx.supabase.co';
+const SUPABASE_KEY='sb_publishable__oGaCB9QMgIe5uf-jTbXSg_BSEmtL_f';
+
+function getClient(){
+ return window.supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
+}
+
+async function testCloud(){
+ try{
+   const supa=getClient();
+   const {error}=await supa.from('students').select('*').limit(1);
+   document.getElementById('cloud-status').innerHTML =
+      error ? '🔴 '+error.message : '🟢 Connected to Supabase';
+ }catch(e){
+   document.getElementById('cloud-status').innerHTML='🔴 '+e.message;
+ }
+}
+
+async function uploadCloud(){
+ const status=document.getElementById('cloud-status');
+ status.innerHTML='Uploading...';
+
+ try{
+   const supa=getClient();
+
+   await supa.from('students').delete().neq('id',0);
+   await supa.from('teachers').delete().neq('id',0);
+   await supa.from('lessons').delete().neq('id',0);
+   await supa.from('expenses').delete().neq('id',0);
+
+   if(db.students.length){
+     await supa.from('students').insert(db.students);
+   }
+   if(db.teachers.length){
+     await supa.from('teachers').insert(db.teachers);
+   }
+   if(db.lessons.length){
+     await supa.from('lessons').insert(db.lessons);
+   }
+   if(db.expenses.length){
+     await supa.from('expenses').insert(db.expenses);
+   }
+
+   status.innerHTML=`🟢 Upload Complete<br>
+   Students: ${db.students.length}<br>
+   Teachers: ${db.teachers.length}<br>
+   Lessons: ${db.lessons.length}<br>
+   Expenses: ${db.expenses.length}`;
+ }catch(e){
+   status.innerHTML='🔴 Upload failed: '+e.message;
+ }
+}
+
+
+
+async function downloadCloud(){
+ const status=document.getElementById('cloud-status');
+ status.innerHTML='Downloading...';
+
+ try{
+   const supa=getClient();
+
+   const {data:students,error:e1}=await supa.from('students').select('*');
+   const {data:teachers,error:e2}=await supa.from('teachers').select('*');
+   const {data:lessons,error:e3}=await supa.from('lessons').select('*');
+   const {data:expenses,error:e4}=await supa.from('expenses').select('*');
+
+   if(e1||e2||e3||e4){
+      throw new Error((e1||e2||e3||e4).message);
+   }
+
+   db.students=students||[];
+   db.teachers=teachers||[];
+   db.lessons=lessons||[];
+   db.expenses=expenses||[];
+
+   save();
+
+   renderOverview();
+   renderStudents();
+   renderTeachers();
+   renderLessons();
+   renderExpenses();
+   renderReports();
+
+   status.innerHTML=`🟢 Download Complete<br>
+   Students: ${db.students.length}<br>
+   Teachers: ${db.teachers.length}<br>
+   Lessons: ${db.lessons.length}<br>
+   Expenses: ${db.expenses.length}`;
+
+ }catch(e){
+   status.innerHTML='🔴 Download failed: '+e.message;
+ }
+}
+
+
+
+async function autoSync(){
+ try{
+   const el=document.getElementById('cloud-status');
+   if(el) el.innerHTML='🟡 Syncing...';
+   await uploadCloud();
+   const ls=document.getElementById('last-sync');
+   if(ls) ls.innerHTML='Last Sync: '+new Date().toLocaleString();
+ }catch(e){
+   const el=document.getElementById('cloud-status');
+   if(el) el.innerHTML='🔴 Sync Error: '+e.message;
+ }
+}
+
+// Page switching
+function switchPage(page, btn){
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
+  document.getElementById('page-'+page).classList.add('active');
+  btn.classList.add('active');
+  if(page==='overview')renderOverview();
+  if(page==='students')renderStudents();
+  if(page==='teachers')renderTeachers();
+  if(page==='lessons')renderLessons();
+  if(page==='expenses')renderExpenses();
+  if(page==='reports')renderReports();
+  if(page==='cloud'){}
+}
+function onMonthChange(){renderOverview();renderStudents();renderTeachers();renderLessons();renderExpenses();renderReports();}
+
+// Init
+renderOverview();renderStudents();renderTeachers();renderLessons();renderExpenses();renderReports();
+</script>
+
+<div id="history-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:9999;padding:40px;overflow:auto">
+<div style="max-width:700px;margin:auto;background:#1a1916;padding:20px;border:1px solid #3d3a35;border-radius:10px">
+<div style="display:flex;justify-content:space-between"><h3 id="history-title">History</h3><button class="btn" onclick="closeHistory()">Close</button></div>
+<div id="history-content"></div>
+</div></div>
+
+</body>
+</html>
