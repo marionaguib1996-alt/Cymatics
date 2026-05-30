@@ -1002,6 +1002,37 @@ async function autoSync(){
  }
 }
 
+
+async function initializeCloudSafe(){
+ try{
+   const localEmpty =
+     (!db.students || db.students.length===0) &&
+     (!db.lessons || db.lessons.length===0) &&
+     (!db.teachers || db.teachers.length===0) &&
+     (!db.expenses || db.expenses.length===0);
+
+   if(localEmpty){
+      const supa=getClient();
+      const {data:students}=await supa.from('students').select('*');
+      const {data:teachers}=await supa.from('teachers').select('*');
+      const {data:lessons}=await supa.from('lessons').select('*');
+      const {data:expenses}=await supa.from('expenses').select('*');
+
+      db.students=students||[];
+      db.teachers=teachers||[];
+      db.lessons=lessons||[];
+      db.expenses=expenses||[];
+
+      save();
+
+      const el=document.getElementById('cloud-status');
+      if(el) el.innerHTML='🟢 Auto-restored from cloud';
+   }
+ }catch(e){
+   console.error('Cloud startup error',e);
+ }
+}
+
 // Page switching
 function switchPage(page, btn){
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
@@ -1019,7 +1050,14 @@ function switchPage(page, btn){
 function onMonthChange(){renderOverview();renderStudents();renderTeachers();renderLessons();renderExpenses();renderReports();}
 
 // Init
-renderOverview();renderStudents();renderTeachers();renderLessons();renderExpenses();renderReports();
+initializeCloudSafe().then(()=>{
+ renderOverview();
+ renderStudents();
+ renderTeachers();
+ renderLessons();
+ renderExpenses();
+ renderReports();
+});
 </script>
 
 <div id="history-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:9999;padding:40px;overflow:auto">
