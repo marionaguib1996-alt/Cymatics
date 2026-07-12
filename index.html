@@ -280,7 +280,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.12-1</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-1</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-failure-badge" onclick="showSyncFailurePanel()" style="display:none;cursor:pointer;background:#7a1f1f;color:#ffb3b3;border:1px solid #e06c6c;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:700;margin-right:12px">
@@ -306,6 +306,7 @@ input::placeholder{color:var(--text-dim)}
   <button class="nav-btn" onclick="switchPage('reports',this)">📈 Reports</button>
   <button class="nav-btn" onclick="switchPage('database',this)">🗄️ Database</button>
   <button class="nav-btn" onclick="switchPage('resources',this)">📁 Resources</button>
+  <button class="nav-btn" onclick="switchPage('notes',this)">🗒️ Notes</button>
   <button class="nav-btn" onclick="switchPage('cloud',this)">☁️ Cloud</button>
 </nav>
 
@@ -519,7 +520,7 @@ input::placeholder{color:var(--text-dim)}
 <option value="">All Statuses</option>
 <option value="scheduled">Scheduled</option>
 <option value="attended">Attended</option>
-<option value="absent_paid">Absent (No Notice)</option>
+<option value="absent_paid">Absent &amp; Paid</option>
 <option value="absent_excused">Excused Absence</option>
 <option value="teacher_absent">Teacher Absent</option>
 </select>
@@ -835,6 +836,21 @@ input::placeholder{color:var(--text-dim)}
 </div>
 </div>
 
+<div id="page-notes" class="page">
+<div class="card">
+<div class="card-title">Add a Note</div>
+<div class="teacher-row-meta" style="margin-bottom:12px">Quick notes for yourself — reminders, ideas, things to follow up on. Not visible to teachers or students.</div>
+<textarea id="note-text" placeholder="Write a note..." style="width:100%;min-height:80px;resize:vertical"></textarea>
+<button class="btn btn-gold" style="margin-top:10px" onclick="addNote()">+ Add Note</button>
+</div>
+
+<div class="card">
+<div class="card-title">Notes</div>
+<input id="note-search" placeholder="Search notes..." oninput="renderNotesPage()" style="margin-bottom:12px;max-width:280px">
+<div id="notes-list"></div>
+</div>
+</div>
+
 <div id="page-cloud" class="page">
   <div class="card">
     <div class="card-title">Cloud Migration</div>
@@ -894,7 +910,6 @@ input::placeholder{color:var(--text-dim)}
       <button class="teacher-nav-btn" onclick="switchTeacherPage('schedule',this)">Schedule</button>
       <button class="teacher-nav-btn" onclick="switchTeacherPage('plans',this)">Lesson Plans</button>
       <button class="teacher-nav-btn" onclick="switchTeacherPage('logs',this)">Lesson Logs</button>
-      <button class="teacher-nav-btn" onclick="switchTeacherPage('homework',this)">Homework</button>
     </nav>
   </aside>
 
@@ -913,10 +928,10 @@ input::placeholder{color:var(--text-dim)}
     <div id="teacher-panel-dashboard" class="teacher-panel active">
       <div id="teacher-dashboard">
         <div class="teacher-grid">
-          <div class="metric"><div class="metric-label">Today's Lessons</div><div id="teacher-lessons-count" class="metric-value">0</div></div>
-          <div class="metric green"><div class="metric-label">My Students</div><div id="teacher-students-count" class="metric-value green">0</div></div>
-          <div class="metric amber"><div class="metric-label">Pending Homework</div><div id="teacher-homework-count" class="metric-value amber">0</div></div>
-          <div class="metric"><div class="metric-label">Next Lesson</div><div id="teacher-next-lesson" class="metric-value">--</div></div>
+          <div class="metric"><div class="metric-label">Sessions This Week</div><div id="teacher-sessions-week" class="metric-value">0</div></div>
+          <div class="metric green"><div class="metric-label">Sessions This Month</div><div id="teacher-sessions-month" class="metric-value green">0</div></div>
+          <div class="metric amber"><div class="metric-label">Excused Absences</div><div id="teacher-excused-count" class="metric-value amber">0</div></div>
+          <div class="metric red"><div class="metric-label">Makeups Owed</div><div id="teacher-makeups-count" class="metric-value red">0</div></div>
         </div>
         <div class="teacher-section-grid">
           <div class="card">
@@ -934,7 +949,20 @@ input::placeholder{color:var(--text-dim)}
     <div id="teacher-panel-students" class="teacher-panel">
       <div class="card">
         <div class="card-title">My Students</div>
-        <input id="teacher-students-search" placeholder="Search students..." oninput="renderTeacherWorkspace()" style="margin-bottom:10px;max-width:240px">
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+          <input id="teacher-students-search" placeholder="Search students..." oninput="renderTeacherWorkspace()" style="max-width:240px">
+          <label for="teacher-students-day-filter" class="visually-hidden">Filter by day</label>
+          <select id="teacher-students-day-filter" onchange="renderTeacherWorkspace()" style="max-width:150px">
+            <option value="">All days</option>
+            <option value="Sunday">Sunday</option>
+            <option value="Monday">Monday</option>
+            <option value="Tuesday">Tuesday</option>
+            <option value="Wednesday">Wednesday</option>
+            <option value="Thursday">Thursday</option>
+            <option value="Friday">Friday</option>
+            <option value="Saturday">Saturday</option>
+          </select>
+        </div>
         <div id="teacher-students-list" class="teacher-list" style="max-height:340px;overflow-y:auto"></div>
       </div>
       <div id="teacher-student-workspace" class="teacher-student-workspace"></div>
@@ -964,20 +992,21 @@ input::placeholder{color:var(--text-dim)}
           <input id="teacher-logs-search" placeholder="Search students..." oninput="renderTeacherWorkspace()" style="max-width:240px">
           <label for="teacher-logs-month-select" class="visually-hidden">Viewing month</label>
           <select id="teacher-logs-month-select" onchange="renderTeacherWorkspace()" style="max-width:180px"></select>
+          <label for="teacher-logs-day-filter" class="visually-hidden">Filter by day</label>
+          <select id="teacher-logs-day-filter" onchange="renderTeacherWorkspace()" style="max-width:150px">
+            <option value="">All days</option>
+            <option value="Sunday">Sunday</option>
+            <option value="Monday">Monday</option>
+            <option value="Tuesday">Tuesday</option>
+            <option value="Wednesday">Wednesday</option>
+            <option value="Thursday">Thursday</option>
+            <option value="Friday">Friday</option>
+            <option value="Saturday">Saturday</option>
+          </select>
         </div>
         <div id="teacher-lesson-logs-list" class="teacher-list" style="max-height:340px;overflow-y:auto"></div>
       </div>
       <div id="teacher-logs-student-detail"></div>
-    </div>
-
-    <div id="teacher-panel-homework" class="teacher-panel">
-      <div class="card">
-        <div class="teacher-student-header">
-          <div class="card-title">Homework</div>
-          <button class="btn btn-sm btn-gold" onclick="openAssignHomeworkPicker()">+ Assign Homework</button>
-        </div>
-        <div id="teacher-homework-list" class="teacher-list"></div>
-      </div>
     </div>
   </section>
 </div>
@@ -1265,61 +1294,86 @@ async function confirmRefund(studentId){
 }
 
 function sendPaymentReminder(studentId){
-  const student=(db.students||[]).find(s=>s.id===studentId);
-  if(!student){ alert('Student not found.'); return; }
+  try{
+    const student=(db.students||[]).find(s=>s.id===studentId);
+    if(!student){ showToast('Student not found.'); return; }
 
-  const phone=toWhatsAppNumber(student.phone1||student.phone2);
-  if(!phone){ alert('No phone number on file for '+student.name+'. Add one via Edit Student first.'); return; }
+    const phone=toWhatsAppNumber(student.phone1||student.phone2);
+    if(!phone){
+      showToast('No phone number on file for '+(student.name||'this student')+' — opening Edit Student so you can add one.');
+      if(typeof editStudent==='function') editStudent(studentId);
+      return;
+    }
 
-  if(!student.lesson_day){
-    alert('This student has no regular lesson day set, so their monthly schedule can\'t be worked out. Set one via Edit Student first.');
-    return;
+    if(!student.lesson_day){
+      showToast('No regular lesson day set for '+(student.name||'this student')+' — opening Edit Student so you can set one.');
+      if(typeof editStudent==='function') editStudent(studentId);
+      return;
+    }
+
+    const month=getNextMonthString();
+    const monthName=formatMonthName(month);
+
+    // Deliberately computed from the student's regular weekday, not from
+    // db.lessons — represents only their main recurring plan, excluding
+    // any makeups/reschedules, and works even for a future month that
+    // hasn't been scheduled yet.
+    const dayNumbers=getWeekdayDatesInMonth(month, student.lesson_day);
+    const lessonCount=dayNumbers.length;
+    const dateList=joinDatesNaturally(dayNumbers.map(ordinalDay));
+    const price=getStudentPlanAmount(student);
+    const firstName=student.first_name||(student.name||'').split(' ')[0]||student.name;
+
+    const message='Hello '+firstName+' ! \n'+
+      'Hope you\'re having a blast at Cymatics!\n'+
+      'Just a little reminder that your payment for '+monthName+' sessions ('+lessonCount+' lessons on the '+dateList+') is due Today 🎹🎤\n'+
+      'It\'s '+Math.round(price)+' EGP for the month — keeping things up to date means you won\'t miss a single beat of the fun! \n'+
+      'Instapay : 01277336092 - Mario Naguib\n'+
+      'Can\'t wait to see you at the next session! 💫';
+
+    const win=window.open('https://wa.me/'+phone+'?text='+encodeURIComponent(message), '_blank');
+    if(!win){
+      showToast('Your browser blocked the WhatsApp popup — allow popups for this site, then try again.');
+    }
+  }catch(err){
+    console.error('sendPaymentReminder failed:', err);
+    showToast('Could not open the reminder — '+(err.message||'unexpected error')+'. Check the browser console for details.');
   }
-
-  const month=getNextMonthString();
-  const monthName=formatMonthName(month);
-
-  // Deliberately computed from the student's regular weekday, not from
-  // db.lessons — represents only their main recurring plan, excluding
-  // any makeups/reschedules, and works even for a future month that
-  // hasn't been scheduled yet.
-  const dayNumbers=getWeekdayDatesInMonth(month, student.lesson_day);
-  const lessonCount=dayNumbers.length;
-  const dateList=joinDatesNaturally(dayNumbers.map(ordinalDay));
-  const price=getStudentPlanAmount(student);
-  const firstName=student.first_name||(student.name||'').split(' ')[0]||student.name;
-
-  const message='Hello '+firstName+' ! \n'+
-    'Hope you\'re having a blast at Cymatics!\n'+
-    'Just a little reminder that your payment for '+monthName+' sessions ('+lessonCount+' lessons on the '+dateList+') is due Today 🎹🎤\n'+
-    'It\'s '+Math.round(price)+' EGP for the month — keeping things up to date means you won\'t miss a single beat of the fun! \n'+
-    'Instapay : 01277336092 - Mario Naguib\n'+
-    'Can\'t wait to see you at the next session! 💫';
-
-  window.open('https://wa.me/'+phone+'?text='+encodeURIComponent(message), '_blank');
 }
 
 // Short, immediate nudge for a specific lesson — "your teacher is waiting" —
 // distinct from the payment reminder above (that one's about the upcoming
 // month; this one's about right now, for a single lesson).
 function sendLessonReminder(lessonId){
-  const lesson=(db.lessons||[]).find(l=>l.id===lessonId);
-  if(!lesson){ alert('Lesson not found.'); return; }
+  try{
+    const lesson=(db.lessons||[]).find(l=>l.id===lessonId);
+    if(!lesson){ showToast('Lesson not found.'); return; }
 
-  const student=(db.students||[]).find(s=>String(s.id)===String(lesson.studentId) || s.name===lesson.student);
-  if(!student){ alert('Could not find this lesson\'s student record.'); return; }
+    const student=(db.students||[]).find(s=>String(s.id)===String(lesson.studentId) || s.name===lesson.student);
+    if(!student){ showToast('Could not find this lesson\'s student record.'); return; }
 
-  const phone=toWhatsAppNumber(student.phone1||student.phone2);
-  if(!phone){ alert('No phone number on file for '+student.name+'. Add one via Edit Student first.'); return; }
+    const phone=toWhatsAppNumber(student.phone1||student.phone2);
+    if(!phone){
+      showToast('No phone number on file for '+(student.name||'this student')+' — opening Edit Student so you can add one.');
+      if(typeof editStudent==='function') editStudent(student.id);
+      return;
+    }
 
-  const teacherProfile=(db.teacherProfiles||[]).find(t=>t.name===lesson.teacher);
-  const title=teacherProfile?.title||'Mr';
-  const teacherFirstName=(lesson.teacher||'').split(' ')[0]||lesson.teacher||'';
-  const studentFirstName=student.first_name||(student.name||'').split(' ')[0]||student.name;
+    const teacherProfile=(db.teacherProfiles||[]).find(t=>t.name===lesson.teacher);
+    const title=teacherProfile?.title||'Mr';
+    const teacherFirstName=(lesson.teacher||'').split(' ')[0]||lesson.teacher||'';
+    const studentFirstName=student.first_name||(student.name||'').split(' ')[0]||student.name;
 
-  const message='Hi '+studentFirstName+', '+title+' '+teacherFirstName+' is waiting for you';
+    const message='Hi '+studentFirstName+', '+title+' '+teacherFirstName+' is waiting for you';
 
-  window.open('https://wa.me/'+phone+'?text='+encodeURIComponent(message), '_blank');
+    const win=window.open('https://wa.me/'+phone+'?text='+encodeURIComponent(message), '_blank');
+    if(!win){
+      showToast('Your browser blocked the WhatsApp popup — allow popups for this site, then try again.');
+    }
+  }catch(err){
+    console.error('sendLessonReminder failed:', err);
+    showToast('Could not open the reminder — '+(err.message||'unexpected error')+'. Check the browser console for details.');
+  }
 }
 
 // Generate month range (±12 months from today = 25 options)
@@ -2545,7 +2599,7 @@ logger.innerHTML=lessonStudents.map(s=>`
       <select id="lesson_status_${s.id}">
        <option value="scheduled">Scheduled</option>
        <option value="attended">Attended</option>
-       <option value="absent_paid">Absent (No Notice)</option>
+       <option value="absent_paid">Absent &amp; Paid</option>
        <option value="absent_excused">Excused Absence</option>
               <option value="teacher_absent">Teacher Absent</option>
       </select>
@@ -2610,7 +2664,7 @@ if(archiveView==='archived') all=all.filter(l=>(l.status_record||'active')==='ar
 const sum=document.getElementById('lesson-summary');
 if(sum){sum.innerHTML=`<div class="metric"><div class="metric-label">Lessons</div><div class="metric-value">${all.length}</div></div>
 <div class="metric green"><div class="metric-label">Attended</div><div class="metric-value green">${all.filter(x=>x.status==='attended').length}</div></div>
-<div class="metric red"><div class="metric-label">Absent (No Notice)</div><div class="metric-value red">${all.filter(x=>x.status==='absent_paid').length}</div></div>
+<div class="metric red"><div class="metric-label">Absent &amp; Paid</div><div class="metric-value red">${all.filter(x=>x.status==='absent_paid').length}</div></div>
 <div class="metric amber"><div class="metric-label">Excused</div><div class="metric-value amber">${all.filter(x=>x.status==='absent_excused').length}</div></div>
 <div class="metric red"><div class="metric-label">Makeups Owed</div><div class="metric-value red">${all.filter(l=>isMakeupOwed(l)).length}</div></div>`;}
 
@@ -2685,13 +2739,23 @@ function getLessonTimeOptions(teacherName, dayName, currentTime, date, excludeLe
     if(t===currentTime) return `<option value="${t}" selected>${formatTime12h(t)}</option>`;
     const roomFull=date && typeof isRoomFullDuringRange==='function' && isRoomFullDuringRange(date,t,dur,excludeLessonId);
     const teacherBusy=date && typeof isTeacherBusyDuringRange==='function' && isTeacherBusyDuringRange(teacherName,date,t,dur,excludeLessonId);
+    if((roomFull||teacherBusy) && date && typeof resolveShiftedBookableTime==='function'){
+      // The nominal slot is blocked — either room capacity or the
+      // teacher's own longer lesson still running — but a genuine
+      // opening may exist partway through it (a practice session ending
+      // mid-slot, or the teacher's own Group session ending mid-slot).
+      // Offer that shifted start as a real, bookable option instead of a
+      // dead "Full" / "Teacher Busy" entry.
+      const shifted=resolveShiftedBookableTime(date, t, dur, teacherName, excludeLessonId);
+      if(shifted) return `<option value="${shifted}">${formatTime12h(shifted)} (room frees then)</option>`;
+    }
     const blocked=roomFull||teacherBusy;
     const reason=roomFull?' (Rooms Full)':(teacherBusy?' (Teacher Busy)':'');
     return `<option value="${t}" ${blocked?'disabled':''}>${formatTime12h(t)}${reason}</option>`;
   }).join('');
 }
 
-const STATUS_LABELS={attended:'Attended',absent_paid:'Absent (No Notice)',absent_excused:'Excused Absence',teacher_absent:'Teacher Absent',scheduled:'Scheduled'};
+const STATUS_LABELS={attended:'Attended',absent_paid:'Absent & Paid',absent_excused:'Excused Absence',teacher_absent:'Teacher Absent',scheduled:'Scheduled'};
 
 function editLesson(id){
  const l=db.lessons.find(x=>x.id===id);
@@ -2988,6 +3052,68 @@ async function deleteResource(id){
   save();
   renderResourcesPage();
   showToast('Resource deleted');
+}
+
+// ── Notes tab ────────────────────────────────────────────────────────
+function addNote(){
+  const textEl=document.getElementById('note-text');
+  const text=(textEl?.value||'').trim();
+  if(!text){ showToast('Write something before adding a note.'); return; }
+  const note={id:Date.now(), text, createdAt:new Date().toISOString()};
+  db.notes=db.notes||[];
+  db.notes.unshift(note);
+  save();
+  if(textEl) textEl.value='';
+  renderNotesPage();
+  if(typeof syncNoteToSupabase==='function') syncNoteToSupabase(note);
+  showToast('Note added');
+}
+
+function deleteNote(id){
+  if(!confirm('Delete this note?')) return;
+  db.notes=(db.notes||[]).filter(n=>n.id!==id);
+  save();
+  renderNotesPage();
+  if(typeof deleteNoteFromSupabase==='function') deleteNoteFromSupabase(id);
+  showToast('Note deleted');
+}
+
+function renderNotesPage(){
+  const list=document.getElementById('notes-list');
+  if(!list) return;
+  const search=(document.getElementById('note-search')?.value||'').toLowerCase().trim();
+  const filtered=(db.notes||[]).filter(n=>!search || (n.text||'').toLowerCase().includes(search));
+  filtered.sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||'')));
+
+  list.innerHTML=filtered.map(n=>`
+    <div class="card" style="margin-bottom:10px;padding:14px">
+      <div style="white-space:pre-wrap;word-break:break-word">${escapeHtml(n.text)}</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px">
+        <span style="font-size:12px;color:var(--text-muted)">${n.createdAt ? escapeHtml(new Date(n.createdAt).toLocaleString()) : ''}</span>
+        <button class="btn btn-sm btn-danger" onclick="deleteNote(${n.id})">Delete</button>
+      </div>
+    </div>
+  `).join('') || '<div class="teacher-empty">No notes yet.</div>';
+}
+
+async function syncNoteToSupabase(note){
+  try{
+    if(!window.supabaseClientV1) return;
+    const {error}=await window.supabaseClientV1.from('notes').insert({
+      id: note.id,
+      text: note.text,
+      created_at: note.createdAt
+    });
+    if(error) console.warn('Note sync failed:', error.message);
+  }catch(err){ console.warn('Note sync failed:', err.message); }
+}
+
+async function deleteNoteFromSupabase(id){
+  try{
+    if(!window.supabaseClientV1) return;
+    const {error}=await window.supabaseClientV1.from('notes').delete().eq('id', id);
+    if(error) console.warn('Note delete failed:', error.message);
+  }catch(err){ console.warn('Note delete failed:', err.message); }
 }
 
 function removeStudentPermanently(id){
@@ -4124,6 +4250,7 @@ function switchPage(page, btn){
   if(page==='instruments')renderInstrumentPage();
   if(page==='database')renderDatabase(); if(page==='cloud'){}
   if(page==='resources' && typeof renderResourcesPage==='function')renderResourcesPage();
+  if(page==='notes' && typeof renderNotesPage==='function')renderNotesPage();
 }
 function onMonthChange(){renderOverview();renderStudents();renderTeachers();renderLessons();renderExpenses();if(typeof renderOtherRevenue==='function')renderOtherRevenue();renderReports(); if(typeof renderTeacherWorkspace==='function')renderTeacherWorkspace();}
 
@@ -4278,7 +4405,19 @@ let supabaseClient=null;
 // removed duplicate declaration
 
 
-async function autoLoadFromCloud(){
+let _autoLoadFromCloudInFlight=null;
+function autoLoadFromCloud(){
+  // If a load is already running, join it rather than starting a second,
+  // concurrent one — two overlapping downloads racing to write db.lessons
+  // and db.students is exactly what caused lessons to inconsistently
+  // appear/disappear across refreshes, since the final state depended on
+  // whichever call happened to finish writing last.
+  if(_autoLoadFromCloudInFlight) return _autoLoadFromCloudInFlight;
+  _autoLoadFromCloudInFlight=_autoLoadFromCloudImpl().finally(()=>{ _autoLoadFromCloudInFlight=null; });
+  return _autoLoadFromCloudInFlight;
+}
+
+async function _autoLoadFromCloudImpl(){
  // Reuse the already-initialized client — avoids multiple GoTrueClient instances
  const client = window.supabaseClientV1;
  if(!client){
@@ -6518,8 +6657,7 @@ const TEACHER_PAGE_META={
   students:  {title:'My Students', meta:'Students assigned to you'},
   schedule:  {title:'Schedule', meta:'Upcoming lessons'},
   plans:     {title:'Lesson Plans', meta:'Prep notes for upcoming lessons'},
-  logs:      {title:'Lesson Logs', meta:'Session records for the selected month'},
-  homework:  {title:'Homework', meta:'Assigned work and follow-up items'}
+  logs:      {title:'Lesson Logs', meta:'Session records for the selected month'}
 };
 
 function switchTeacherPage(page, btn){
@@ -6562,18 +6700,31 @@ function renderTeacherWorkspace(){
 
   const data=getTeacherWorkspaceData();
   const todayKey=new Date().toISOString().slice(0,10);
-  const todaysLessons=data.allLessons.filter(l=>lessonDateKey(l.date||l.lesson_date)===todayKey);
-  const nextLesson=data.upcomingLessons[0];
-  const homeworkItems=data.allLogs.filter(l=>l.homework && String(l.homework).trim());
+  const currentMonthKey=todayKey.slice(0,7);
+  // "This week" anchored to the same Friday-start convention used
+  // elsewhere in the app (the Attendance Ledger's own week boundary).
+  const weekStart=(typeof getFridayWeekStart==='function') ? getFridayWeekStart(todayKey) : todayKey;
+  const weekEnd=(typeof addDaysToDateStringLocal==='function') ? addDaysToDateStringLocal(weekStart,7) : todayKey;
 
-  const lessonsCount=document.getElementById('teacher-lessons-count');
-  const studentsCount=document.getElementById('teacher-students-count');
-  const homeworkCount=document.getElementById('teacher-homework-count');
-  const nextLessonEl=document.getElementById('teacher-next-lesson');
-  if(lessonsCount) lessonsCount.textContent=todaysLessons.length;
-  if(studentsCount) studentsCount.textContent=data.students.length;
-  if(homeworkCount) homeworkCount.textContent=homeworkItems.filter(h=>!h.homeworkCompleted).length;
-  if(nextLessonEl) nextLessonEl.textContent=nextLesson ? formatTeacherLessonDate(nextLesson.date||nextLesson.lesson_date) : '--';
+  const sessionsThisWeek=data.allLessons.filter(l=>{
+    const d=lessonDateKey(l.date||l.lesson_date);
+    return d>=weekStart && d<weekEnd;
+  }).length;
+  const sessionsThisMonth=data.allLessons.filter(l=>lessonDateKey(l.date||l.lesson_date).slice(0,7)===currentMonthKey).length;
+  const excusedCount=data.allLogs.filter(l=>l.attendance==='absent_excused').length;
+  const makeupsOwedCount=data.allLogs.filter(l=>{
+    const lesson=(db.lessons||[]).find(x=>x.id==l.lessonId);
+    return lesson ? isMakeupOwed(lesson) : (l.attendance==='teacher_absent'||l.attendance==='absent_excused');
+  }).length;
+
+  const weekEl=document.getElementById('teacher-sessions-week');
+  const monthEl=document.getElementById('teacher-sessions-month');
+  const excusedEl=document.getElementById('teacher-excused-count');
+  const makeupsEl=document.getElementById('teacher-makeups-count');
+  if(weekEl) weekEl.textContent=sessionsThisWeek;
+  if(monthEl) monthEl.textContent=sessionsThisMonth;
+  if(excusedEl) excusedEl.textContent=excusedCount;
+  if(makeupsEl) makeupsEl.textContent=makeupsOwedCount;
 
   const schedulePreview=document.getElementById('teacher-schedule');
   if(schedulePreview){
@@ -6594,25 +6745,22 @@ function renderTeacherWorkspace(){
 
   const summary=document.getElementById('teacher-dashboard-summary');
   if(summary){
-    const attended=data.allLogs.filter(l=>l.attendance==='attended').length;
-    const absentPaid=data.allLogs.filter(l=>l.attendance==='absent_paid').length;
-    const excused=data.allLogs.filter(l=>l.attendance==='absent_excused').length;
-    const makeups=data.allLogs.filter(l=>{
-      const lesson=(db.lessons||[]).find(x=>x.id==l.lessonId);
-      return lesson ? isMakeupOwed(lesson) : (l.attendance==='teacher_absent'||l.attendance==='absent_excused');
-    }).length;
     summary.innerHTML=`
-      <div class="summary-row"><span class="s-label">Session logs</span><span class="s-val">${data.allLogs.length}</span></div>
-      <div class="summary-row"><span class="s-label">Attended</span><span class="s-val green">${attended}</span></div>
-      <div class="summary-row"><span class="s-label">Absent (No Notice)</span><span class="s-val red">${absentPaid}</span></div>
-      <div class="summary-row"><span class="s-label">Excused</span><span class="s-val amber">${excused}</span></div>
-      <div class="summary-row total"><span class="s-label">Makeups owed</span><span class="s-val red">${makeups}</span></div>`;
+      <div class="summary-row"><span class="s-label">Sessions this week</span><span class="s-val">${sessionsThisWeek}</span></div>
+      <div class="summary-row"><span class="s-label">Sessions this month</span><span class="s-val green">${sessionsThisMonth}</span></div>
+      <div class="summary-row"><span class="s-label">Excused absences</span><span class="s-val amber">${excusedCount}</span></div>
+      <div class="summary-row total"><span class="s-label">Makeups owed</span><span class="s-val red">${makeupsOwedCount}</span></div>`;
   }
 
   const studentsList=document.getElementById('teacher-students-list');
   if(studentsList){
     const studentSearch=(document.getElementById('teacher-students-search')||{}).value?.toLowerCase()||'';
-    const filteredStudents=data.students.filter(s=>!studentSearch || (s.name||'').toLowerCase().includes(studentSearch));
+    const studentDayFilter=document.getElementById('teacher-students-day-filter')?.value||'';
+    const filteredStudents=data.students
+      .filter(s=>(s.status||'active')!=='archived')
+      .filter(s=>!studentSearch || (s.name||'').toLowerCase().includes(studentSearch))
+      .filter(s=>!studentDayFilter || s.lesson_day===studentDayFilter)
+      .sort((a,b)=>(a.name||'').localeCompare(b.name||''));
     const rows=filteredStudents.map(s=>`
       <div class="teacher-row">
         <div>
@@ -6639,7 +6787,17 @@ function renderTeacherWorkspace(){
       byDate[dateKey].push(l);
     });
     const dateKeys=Object.keys(byDate).sort();
-    Object.values(byDate).forEach(list=>list.sort((a,b)=>(a.time||'').localeCompare(b.time||'')));
+    // Within each day: genuinely happening lessons (scheduled/attended)
+    // sort first by time as before; any absent-status lesson (excused,
+    // absent-paid, teacher-absent) — which won't actually happen or
+    // already didn't — sorts to the bottom instead of mixing in by raw
+    // time, where it could look like the next real lesson coming up.
+    const isAbsentStatus=l=>['absent_paid','absent_excused','teacher_absent'].includes(String(l.status||''));
+    Object.values(byDate).forEach(list=>list.sort((a,b)=>{
+      const aAbsent=isAbsentStatus(a), bAbsent=isAbsentStatus(b);
+      if(aAbsent!==bAbsent) return aAbsent ? 1 : -1;
+      return (a.time||'').localeCompare(b.time||'');
+    }));
 
     const todayKey=new Date().toISOString().slice(0,10);
     const tomorrowKey=addDaysToDateString(todayKey,1);
@@ -6681,11 +6839,12 @@ function renderTeacherWorkspace(){
           </div>
         </div>`;
       });
+      const realCount=lessons.filter(l=>!isAbsentStatus(l)).length;
       return `
         <div style="margin-bottom:14px">
           <div style="font-size:12px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;color:var(--text-muted);padding:6px 2px;border-bottom:1px solid var(--border);margin-bottom:6px">
             ${escapeHtml(dayLabel)}${dayLabel!=='Today' && dayLabel!=='Tomorrow' ? ', '+escapeHtml(formatDateDMY(dateKey)) : ' — '+escapeHtml(formatDateDMY(dateKey))}
-            <span style="font-weight:400;color:var(--text-muted);float:right">${lessons.length} lesson${lessons.length===1?'':'s'}</span>
+            <span style="font-weight:400;color:var(--text-muted);float:right">${realCount} lesson${realCount===1?'':'s'}</span>
           </div>
           ${rows.join('')}
         </div>`;
@@ -6726,9 +6885,19 @@ function renderTeacherWorkspace(){
   const logsList=document.getElementById('teacher-lesson-logs-list');
   if(logsList){
     const logsSearch=(document.getElementById('teacher-logs-search')||{}).value?.toLowerCase()||'';
+    const dayFilter=document.getElementById('teacher-logs-day-filter')?.value||'';
+    // Only attended sessions represent real lesson content worth showing
+    // here — an excused absence or a day the teacher was out has nothing
+    // to log (no topic covered, no performance to rate).
+    const attendedLogs=data.logs.filter(log=>String(log.attendance||'').trim().toLowerCase()==='attended');
+    const dayFilteredLogs=dayFilter ? attendedLogs.filter(log=>{
+      if(!log.lessonDate) return false;
+      const d=parseDateUTC(log.lessonDate);
+      return d && WEEKDAY_NAMES[d.getUTCDay()]===dayFilter;
+    }) : attendedLogs;
     // Group logs by student name — one row per student instead of one per session
     const byStudent={};
-    data.logs.forEach(log=>{
+    dayFilteredLogs.forEach(log=>{
       const name=log.studentName||'Student';
       if(!byStudent[name]) byStudent[name]=[];
       byStudent[name].push(log);
@@ -6737,43 +6906,18 @@ function renderTeacherWorkspace(){
       .filter(name=>!logsSearch || name.toLowerCase().includes(logsSearch))
       .sort((a,b)=>a.localeCompare(b));
     const rows=studentNames.map(name=>{
-      const logs=byStudent[name];
-      const attendedCount=logs.filter(l=>l.attendance==='attended').length;
+      const matchedStudent=(db.students||[]).find(s=>s.name===name);
+      const isTrial=matchedStudent && matchedStudent.plan==='trial';
       return `
       <div class="teacher-row">
         <div>
-          <div class="teacher-row-title">${escapeHtml(name)}</div>
-          <div class="teacher-row-meta">${logs.length} session log(s) - ${attendedCount} attended</div>
+          <div class="teacher-row-title">${escapeHtml(name)}${isTrial?' <span class="badge badge-blue" title="Trial student">🎓 Trial</span>':''}</div>
         </div>
         <button class="btn btn-sm btn-gold" onclick="openTeacherLogsForStudent('${jsString(name)}')">Open</button>
       </div>`;
     });
     const monthLabel=(typeof MONTHS!=='undefined' ? MONTHS.find(m=>m.key===getTeacherLogsMonth())?.label : null) || getTeacherLogsMonth();
-    logsList.innerHTML=renderTeacherRows(rows,'No lesson logs for '+escapeHtml(monthLabel)+'.');
-  }
-
-  const homeworkList=document.getElementById('teacher-homework-list');
-  if(homeworkList){
-    const todayKey=new Date().toISOString().slice(0,10);
-    const sortedHomework=[...homeworkItems].sort((a,b)=>{
-      const aDue=a.homeworkDueDate||'9999-99-99';
-      const bDue=b.homeworkDueDate||'9999-99-99';
-      return aDue.localeCompare(bDue);
-    });
-    const rows=sortedHomework.map(log=>{
-      const isOverdue=log.homeworkDueDate && log.homeworkDueDate<todayKey && !log.homeworkCompleted;
-      return `
-      <div class="teacher-row">
-        <div>
-          <div class="teacher-row-title">${escapeHtml(log.studentName||'Student')} <span class="badge ${log.homeworkCompleted?'badge-green':'badge-blue'}">${log.homeworkCompleted?'Done':'Not Done'}</span>${isOverdue?' <span class="badge badge-red">Overdue</span>':''}</div>
-          <div class="teacher-row-meta">${escapeHtml(log.homework)}${log.homeworkDueDate?'<br>Due: '+escapeHtml(formatDateDMY(log.homeworkDueDate)):''}</div>
-        </div>
-        <button class="btn btn-sm ${log.homeworkCompleted?'':'btn-gold'}" onclick="toggleHomeworkDone('${jsString(log.id)}')">${log.homeworkCompleted?'Mark Not Done':'Mark Done'}</button>
-        <button class="btn btn-sm" onclick="openTeacherLessonLogEditor('${jsString(log.id)}')">Edit</button>
-        <button class="btn btn-sm btn-danger" onclick="deleteHomework('${jsString(log.id)}')">Delete</button>
-      </div>`;
-    });
-    homeworkList.innerHTML=renderTeacherRows(rows,'No homework assigned yet.');
+    logsList.innerHTML=renderTeacherRows(rows,'No lesson logs for '+escapeHtml(monthLabel)+(dayFilter?' on '+escapeHtml(dayFilter):'')+'.');
   }
 }
 
@@ -6845,19 +6989,20 @@ function openTeacherLogsForStudent(studentName){
   const data=getTeacherWorkspaceData();
   const logs=data.logs
     .filter(log=>(log.studentName||'Student')===studentName)
-    .sort((a,b)=>String(b.lessonDate||'').localeCompare(String(a.lessonDate||'')));
+    .filter(log=>String(log.attendance||'').trim().toLowerCase()==='attended')
+    .sort((a,b)=>String(a.lessonDate||'').localeCompare(String(b.lessonDate||'')));
 
   const rows=logs.map(log=>`
     <div class="teacher-row">
       <div>
         <div class="teacher-row-title">${escapeHtml(formatTeacherLessonDate(log.lessonDate))}</div>
         <div class="teacher-row-meta">
-          ${escapeHtml(log.instrument||'')} - ${escapeHtml(log.attendance||'not marked')} - Performance ${renderStars(log.performanceRating)}
+          ${escapeHtml(log.instrument||'')} - Performance ${renderStars(log.performanceRating)}
           ${log.topicCovered?'<br>Topic: '+escapeHtml(log.topicCovered):''}
           ${log.nextLessonGoal?'<br>Goal: '+escapeHtml(log.nextLessonGoal):''}
         </div>
       </div>
-      <button class="btn btn-sm" onclick="openTeacherLessonLogEditor('${jsString(log.id)}')">${String(log.attendance||'').trim().toLowerCase()==='attended'?'Edit':'View'}</button>
+      <button class="btn btn-sm" onclick="openTeacherLessonLogEditor('${jsString(log.id)}')">Edit</button>
     </div>`);
 
   host.innerHTML=`
@@ -6928,34 +7073,6 @@ async function syncLessonLogToSupabase(log){
   }catch(err){ console.warn('Lesson log sync failed:', err.message); }
 }
 
-function openAssignHomeworkPicker(){
-  const scopeName=teacherScopeName();
-  const isDemoMode=!scopeName && !session.teacherId;
-  const candidates=(db.lessonLogs||[])
-    .map(log=>normalizeLessonLog(log, db.lessons.find(l=>l.id==log.lessonId)))
-    .filter(log=>{
-      if(log.homework) return false;
-      const lesson=db.lessons.find(l=>l.id==log.lessonId);
-      const status=String(lesson?.status||log.attendance||'').trim().toLowerCase();
-      if(status!=='attended') return false;
-      if(session.teacherId && log.teacherId) return log.teacherId===session.teacherId;
-      if(scopeName) return String(log.teacherName||'').toLowerCase()===scopeName;
-      return isDemoMode;
-    })
-    .sort((a,b)=>String(b.lessonDate||'').localeCompare(String(a.lessonDate||'')));
-  const rows=candidates.map(log=>`
-    <div class="teacher-row">
-      <div>
-        <div class="teacher-row-title">${escapeHtml(log.studentName||'Student')}</div>
-        <div class="teacher-row-meta">${escapeHtml(formatTeacherLessonDate(log.lessonDate))} - ${escapeHtml(log.instrument||'')}</div>
-      </div>
-      <button class="btn btn-sm btn-gold" onclick="closeModal();openTeacherLessonLogEditor('${jsString(log.id)}')">Assign</button>
-    </div>`).join('');
-  openModal('Assign Homework', `
-    <div class="teacher-list">${rows || teacherEmpty('No attended sessions without homework found yet. Homework can only be assigned once a session is marked attended.')}</div>`);
-}
-
-
 function openTeacherStudentWorkspace(studentId){
   const student=(db.students||[]).find(s=>String(s.id)===String(studentId) || String(s.public_id||'')===String(studentId));
   const host=document.getElementById('teacher-student-workspace');
@@ -6990,7 +7107,7 @@ function openTeacherStudentWorkspace(studentId){
           <div class="summary-row"><span class="s-label">Email</span><span class="s-val">${escapeHtml(student.email||'--')}</span></div>
           <div class="card-title" style="margin-top:18px">Attendance Summary</div>
           <div class="summary-row"><span class="s-label">Attended</span><span class="s-val green">${attended}</span></div>
-          <div class="summary-row"><span class="s-label">Absent (No Notice)</span><span class="s-val red">${absentPaid}</span></div>
+          <div class="summary-row"><span class="s-label">Absent &amp; Paid</span><span class="s-val red">${absentPaid}</span></div>
           <div class="summary-row"><span class="s-label">Excused</span><span class="s-val amber">${excused}</span></div>
           <div class="summary-row"><span class="s-label">Teacher Absent</span><span class="s-val red">${teacherAbsent}</span></div>
           <div class="card-title" style="margin-top:18px">Current Goal</div>
@@ -7008,8 +7125,6 @@ function openTeacherStudentWorkspace(studentId){
           <div class="teacher-timeline">${homeworkHistory.slice(0,8).map(log=>`<div class="teacher-timeline-item"><strong>${escapeHtml(formatTeacherLessonDate(log.lessonDate))}</strong><span>${escapeHtml(log.homework)} ${log.homeworkCompleted?'(completed)':'(open)'}</span></div>`).join('') || teacherEmpty('No homework history yet.')}</div>
           <div class="card-title" style="margin-top:18px">Performance Timeline</div>
           <div class="teacher-timeline">${studentLogs.filter(log=>log.performanceRating).slice(0,8).map(log=>`<div class="teacher-timeline-item"><strong>${escapeHtml(formatTeacherLessonDate(log.lessonDate))}</strong><span>${renderStars(log.performanceRating)} ${escapeHtml(log.teacherNotes||'')}</span></div>`).join('') || teacherEmpty('No performance ratings yet.')}</div>
-          <div class="card-title" style="margin-top:18px">Milestones <button class="btn btn-sm btn-gold" onclick="openAddMilestone('${jsString(student.id)}')">+ Add</button></div>
-          <div class="teacher-timeline" id="milestone-list-${jsString(student.id)}">${renderMilestoneTimeline(student)}</div>
         </div>
       </div>
     </div>`;
@@ -7070,21 +7185,6 @@ function toggleHomeworkDone(logId){
   if(typeof renderTeacherWorkspace==='function') renderTeacherWorkspace();
    syncLessonLogToSupabase(log);
   showToast(log.homeworkCompleted?'Marked done ✓':'Marked not done');
-}
-
-function deleteHomework(logId){
-  const log=(db.lessonLogs||[]).find(l=>String(l.id)===String(logId));
-  if(!log) return;
-  if(!confirm('Delete this homework assignment? The lesson log itself (notes, performance) will be kept.')) return;
-  log.homework='';
-  log.homeworkStatus='';
-  log.homeworkAssignedDate='';
-  log.homeworkDueDate='';
-  log.homeworkCompleted=false;
-  save();
-  if(typeof renderTeacherWorkspace==='function') renderTeacherWorkspace();
-   syncLessonLogToSupabase(log);
-  showToast('Homework deleted');
 }
 
 function getAllHomeworkLogs(){
@@ -7222,7 +7322,7 @@ function openAdminStudentProfile(studentId,studentName){
           }).join('') || teacherEmpty('No payment history yet.')}</div>
           <div class="card-title" style="margin-top:18px">Attendance Summary</div>
           <div class="summary-row"><span class="s-label">Attended</span><span class="s-val green">${attended}</span></div>
-          <div class="summary-row"><span class="s-label">Absent (No Notice)</span><span class="s-val red">${absentPaid}</span></div>
+          <div class="summary-row"><span class="s-label">Absent &amp; Paid</span><span class="s-val red">${absentPaid}</span></div>
           <div class="summary-row"><span class="s-label">Excused</span><span class="s-val amber">${excused}</span></div>
           <div class="summary-row"><span class="s-label">Teacher Absent</span><span class="s-val red">${teacherAbsent}</span></div>
           <div class="card-title" style="margin-top:18px">Current Goal</div>
@@ -7761,9 +7861,9 @@ const ACADEMY_WORKING_HOURS={
   Wednesday:['16:00','22:00'],
   Thursday:['16:00','22:00'],
   Friday:'custom',
-  Saturday:['15:15','22:00']
+  Saturday:['10:00','22:00']
 };
-const FRIDAY_SLOTS=['12:15','13:15','14:00','14:45','15:30','16:15','17:00','17:45','18:30','19:15','20:00','20:45','21:30'];
+const FRIDAY_SLOTS=['10:00','10:45','11:30','12:15','13:15','14:00','14:45','15:30','16:15','17:00','17:45','18:30','19:15','20:00','20:45','21:30'];
 const SESSION_DURATION_MINUTES=45;
 
 function generateSlotsForDay(day){
@@ -7964,22 +8064,24 @@ function getAvailableSlotsWithCapacity(teacherName, dayName, excludeStudentId, f
 
   return effectiveSlots
     .map((slot,i)=>({slot,i}))
-    .filter(({slot,i})=>{
+    .filter(({slot})=>{
       if(slot.occupiedBy) return false;
       // The grid walk above only sees bookings sitting exactly on the
       // teacher's cursor positions — an off-grid booking (e.g. a shifted
       // 5:00 lesson booked earlier) overlaps nominal slots invisibly to
       // it. The range check catches those, preventing double-booking the
-      // teacher for the overlapping stretch.
+      // teacher for the overlapping stretch. This ALSO correctly covers
+      // the full 60/90-minute footprint of a Group or double session on
+      // its own — no separate "is the next nominal slot also free" check
+      // is needed: that check is mathematically redundant with this one
+      // (when this slot isn't occupied, "the next nominal slot" is
+      // always exactly slot.time+45, which is exactly what this range
+      // check already tests) — and being redundant, it was also
+      // needlessly excluding the very last slot of the day from Group
+      // availability, since a genuinely last slot has no "next" entry to
+      // check at all, regardless of whether extending past it would
+      // actually be fine.
       if(isTeacherBusyDuringRange(teacherName, targetDate, slot.time, bookingDuration, ownLesson?.id||null)) return false;
-      if(forDoubleSession){
-        // A Group-plan booking here needs the NEXT effective slot (in the
-        // current, pre-booking cascade) to also be free — booking Group
-        // here will push that next slot's start time later, which is
-        // only fine if nothing was already sitting there waiting.
-        const next=effectiveSlots[i+1];
-        if(!next || next.occupiedBy) return false;
-      }
       return true;
     })
     .map(({slot})=>{
@@ -9064,9 +9166,17 @@ function nextRoomBookableTime(date, time, durationMinutes){
 }
 
 // Universal "book it anyway, just later" resolver: a slot whose nominal
-// start is room-blocked can still be genuinely bookable partway through
+// start is blocked can still be genuinely bookable partway through
 // itself — e.g. a practice session ending at 5:00 frees a room 15
 // minutes into the 4:45 slot, so a lesson CAN happen, starting 5:00.
+// Equally, a slot can be blocked because the SPECIFIC teacher's own
+// longer lesson (Group/double session) is still running even though
+// academy-wide room capacity is fine — that teacher becoming free is
+// just as real a shift as a room freeing up, so candidate boundaries are
+// drawn from BOTH: every real booking's end time (room-relevant) AND,
+// when a teacher is given, that teacher's own lessons' end times
+// specifically (teacher-relevant, since a different teacher's lesson
+// ending doesn't help THIS teacher's own availability).
 // Returns that shifted start time when it exists, or null. Rules:
 // - the shifted start must fall within the nominal slot's own window
 //   (otherwise it belongs to a later slot and would just duplicate it)
@@ -9079,12 +9189,29 @@ function nextRoomBookableTime(date, time, durationMinutes){
 //   teacher (when given) must be free for that full range too
 function resolveShiftedBookableTime(date, nominalTime, durationMinutes, teacherName, excludeLessonId){
   if(!date || !nominalTime) return null;
-  const shifted=nextRoomBookableTime(date, nominalTime, durationMinutes);
-  if(!shifted) return null;
-  if(timeToMinutes(shifted)<=timeToMinutes(nominalTime)) return null; // not a genuine shift
-  if(timeToMinutes(shifted)>=timeToMinutes(nominalTime)+SESSION_DURATION_MINUTES) return null; // outside this slot's own window
-  if(teacherName && isTeacherBusyDuringRange(teacherName, date, shifted, durationMinutes, excludeLessonId)) return null;
-  return shifted;
+  const startMin=timeToMinutes(nominalTime);
+  const windowEnd=startMin+SESSION_DURATION_MINUTES; // only this nominal slot's own window is in scope
+  const candidates=new Set();
+  (db.lessons||[]).forEach(l=>{
+    if(l.date!==date || !l.time || (l.status_record||'active')==='archived') return;
+    if(l.status==='absent_excused' || l.status==='teacher_absent') return;
+    if(excludeLessonId && l.id===excludeLessonId) return;
+    const end=timeToMinutes(l.time)+getLessonDurationMinutes(l);
+    if(end>startMin && end<windowEnd) candidates.add(end);
+  });
+  (db.practiceSessions||[]).forEach(p=>{
+    if(p.date!==date || !p.time || (p.status_record||'active')==='archived' || p.status==='cancelled') return;
+    const end=timeToMinutes(p.time)+PRACTICE_SESSION_DURATION_MINUTES;
+    if(end>startMin && end<windowEnd) candidates.add(end);
+  });
+  const sorted=[...candidates].sort((a,b)=>a-b);
+  for(const m of sorted){
+    const t=String(Math.floor(m/60)).padStart(2,'0')+':'+String(m%60).padStart(2,'0');
+    if(isRoomFullDuringRange(date, t, durationMinutes, excludeLessonId)) continue;
+    if(teacherName && isTeacherBusyDuringRange(teacherName, date, t, durationMinutes, excludeLessonId)) continue;
+    return t;
+  }
+  return null;
 }
 
 // --- Cascade: resolving a makeup automatically clears the original missed lesson ---
@@ -9209,11 +9336,12 @@ function updateMakeupSeparateDaySlots(missedLessonId){
 
   timeEl.innerHTML=slots.map(t=>{
     const teacherBusy=isTeacherBusyDuringRange(teacherName,date,t,SESSION_DURATION_MINUTES,null);
-    const roomFull=!teacherBusy && isRoomFullDuringRange(date,t,SESSION_DURATION_MINUTES,null);
-    if(roomFull){
-      // A room may genuinely free partway through this slot (e.g. a
-      // practice session ending mid-slot) — offer that shifted start as
-      // a real, bookable option instead of a dead "Rooms Full" entry.
+    const roomFull=isRoomFullDuringRange(date,t,SESSION_DURATION_MINUTES,null);
+    if(roomFull||teacherBusy){
+      // A genuine opening may exist partway through this slot — either a
+      // room freeing up (a practice session ending mid-slot) or the
+      // teacher's own longer lesson ending mid-slot. Offer that shifted
+      // start as a real, bookable option instead of a dead entry.
       const shifted=resolveShiftedBookableTime(date, t, SESSION_DURATION_MINUTES, teacherName, null);
       if(shifted) return `<option value="${shifted}">${formatTime12h(shifted)} (room frees then)</option>`;
     }
@@ -9812,6 +9940,47 @@ async function syncPracticeSessionUpdateToSupabase(session){
 })();
 
 // (Practice column is built directly inside renderCalendarPage — see Phase 23 block)
+
+// Fold notes into the auto cloud load
+(function(){
+  const origAutoLoad3=window.autoLoadFromCloud;
+  if(typeof origAutoLoad3!=='function') return;
+  window.autoLoadFromCloud=async function(){
+    await origAutoLoad3();
+    try{
+      if(!window.supabaseClientV1) return;
+      const {data,error}=await window.supabaseClientV1.from('notes').select('*');
+      if(error){ console.warn('Notes load failed:', error.message); return; }
+      if(data){
+        db.notes=data.map(n=>({id:n.id, text:n.text||'', createdAt:n.created_at||''}));
+        save();
+        if(document.getElementById('page-notes')?.classList.contains('active') && typeof renderNotesPage==='function') renderNotesPage();
+      }
+    }catch(err){ console.warn('Notes load failed:', err.message); }
+  };
+})();
+
+// Final in-flight deduplication, wrapping the fully-composed function
+// (core load + practice sessions + expenses/instruments, all layered on
+// by the IIFEs above). The app has two independent initialization paths
+// that can each call autoLoadFromCloud on the same page load
+// (checkExistingRealSession and the SDK-retry tryLoad) — without this,
+// two concurrent calls would each independently re-fetch and overwrite
+// every slice of data, and the final state would depend on whichever
+// call happened to finish writing last: a non-deterministic partial
+// overwrite that's exactly what caused lessons to inconsistently
+// appear/disappear across refreshes. A second call while one is already
+// running now simply joins the same in-flight promise instead.
+(function(){
+  const fullyComposedAutoLoad=window.autoLoadFromCloud;
+  if(typeof fullyComposedAutoLoad!=='function') return;
+  let inFlight=null;
+  window.autoLoadFromCloud=function(){
+    if(inFlight) return inFlight;
+    inFlight=fullyComposedAutoLoad().finally(()=>{ inFlight=null; });
+    return inFlight;
+  };
+})();
 </script>
 
 <script>
