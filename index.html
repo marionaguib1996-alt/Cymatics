@@ -280,7 +280,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.11-6</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.12-1</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-failure-badge" onclick="showSyncFailurePanel()" style="display:none;cursor:pointer;background:#7a1f1f;color:#ffb3b3;border:1px solid #e06c6c;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:700;margin-right:12px">
@@ -4550,7 +4550,15 @@ window.addEventListener('load',function(){
     attempts++;
     if(typeof window.initSupabaseClientV1==='function') window.initSupabaseClientV1();
     if(window.supabaseClientV1){
-      autoLoadFromCloud();
+      // Flush any writes queued from a previous session/offline period
+      // FIRST, so our local edits reach the cloud before we pull it down
+      // — otherwise autoLoadFromCloud could overwrite a not-yet-synced
+      // local change with the older cloud value.
+      if(typeof window.flushOutbox==='function'){
+        Promise.resolve(window.flushOutbox()).finally(()=>autoLoadFromCloud());
+      } else {
+        autoLoadFromCloud();
+      }
     } else if(attempts < 40){
       setTimeout(tryLoad, 500);
     } else {
@@ -4597,30 +4605,115 @@ try{
    if(window.syncFailures.length>20) window.syncFailures.length=20;
    if(typeof updateSyncFailureBadge==='function') updateSyncFailureBadge();
  };
+
+ // ── Offline write outbox ────────────────────────────────────────────
+ // Any table write that never reaches the server (offline, DNS, or the
+ // SDK/page still loading right after a fresh hosted page load) is queued
+ // here and replayed automatically once connectivity returns — so an edit
+ // is never silently lost the way it was on Vercel. Persisted to
+ // localStorage so it even survives a refresh made before the flush.
+ const OUTBOX_KEY='cymatics_sync_outbox_v1';
+ function loadOutbox(){
+   try{ return JSON.parse(localStorage.getItem(OUTBOX_KEY)||'[]'); }catch(e){ return []; }
+ }
+ function saveOutbox(items){
+   try{ localStorage.setItem(OUTBOX_KEY, JSON.stringify(items.slice(-500))); }catch(e){}
+ }
+ function enqueueOutboxWrite(url, options){
+   // Only the method, url, and body are stored — NOT the auth header,
+   // which is re-attached fresh at replay time so a token refresh in the
+   // meantime doesn't invalidate a queued write.
+   const items=loadOutbox();
+   items.push({
+     url:String(url),
+     method:(options&&options.method)||'POST',
+     body:(options&&typeof options.body==='string')?options.body:(options&&options.body?JSON.stringify(options.body):null),
+     headers:sanitizeOutboxHeaders(options&&options.headers),
+     ts:Date.now()
+   });
+   saveOutbox(items);
+   if(typeof updateSyncFailureBadge==='function') updateSyncFailureBadge();
+ }
+ // Keep only content headers (Prefer, Content-Type). Drop apikey/Authorization
+ // — those get re-applied fresh at replay from the live client.
+ function sanitizeOutboxHeaders(h){
+   if(!h) return {};
+   const out={};
+   Object.keys(h).forEach(k=>{
+     const lk=k.toLowerCase();
+     if(lk==='prefer'||lk==='content-type') out[k]=h[k];
+   });
+   return out;
+ }
+ window.getOutboxCount=function(){ return loadOutbox().length; };
+
+ // Replays queued writes in order. Called after the client is ready and
+ // whenever the browser reports it's back online. Uses the live SDK's
+ // session for fresh auth headers.
+ let flushingOutbox=false;
+ async function flushOutbox(){
+   if(flushingOutbox) return;
+   if(!window.supabaseClientV1) return;
+   if(typeof navigator!=='undefined' && navigator.onLine===false) return;
+   let items=loadOutbox();
+   if(!items.length) return;
+   flushingOutbox=true;
+   try{
+     // Fresh auth: the anon key plus, if a user is signed in, their token.
+     let authHeaders={
+       'apikey':'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFnZW1uZWxrZHlod21ueG9xbWt4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAxNTM3OTEsImV4cCI6MjA5NTcyOTc5MX0.5BsV3antpG5STg1LJiZ9yLQRp_Fzi_4oOaLwVp5cCAE',
+       'Authorization':'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFnZW1uZWxrZHlod21ueG9xbWt4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAxNTM3OTEsImV4cCI6MjA5NTcyOTc5MX0.5BsV3antpG5STg1LJiZ9yLQRp_Fzi_4oOaLwVp5cCAE'
+     };
+     try{
+       const { data } = await window.supabaseClientV1.auth.getSession();
+       if(data && data.session && data.session.access_token){
+         authHeaders['Authorization']='Bearer '+data.session.access_token;
+       }
+     }catch(e){}
+
+     const remaining=[];
+     for(const item of items){
+       try{
+         const resp=await fetch(item.url, {
+           method:item.method,
+           headers:{...authHeaders, 'Content-Type':'application/json', ...(item.headers||{})},
+           body:item.body,
+           keepalive:true
+         });
+         // 2xx = done; a 4xx that isn't 406 means the write is malformed
+         // and will never succeed, so drop it rather than loop forever.
+         if(!resp.ok && resp.status!==406 && resp.status<500){
+           console.warn('Outbox item dropped (permanent error '+resp.status+')');
+         } else if(!resp.ok){
+           remaining.push(item); // 5xx / transient — keep for next attempt
+         }
+       }catch(e){
+         remaining.push(item); // still offline — keep
+       }
+     }
+     saveOutbox(remaining);
+     if(items.length!==remaining.length && typeof window.stampLastSync==='function') window.stampLastSync('queued edits synced');
+     if(typeof updateSyncFailureBadge==='function') updateSyncFailureBadge();
+   } finally {
+     flushingOutbox=false;
+   }
+ }
+ window.flushOutbox=flushOutbox;
+ if(typeof window!=='undefined'){
+   window.addEventListener('online', ()=>{ flushOutbox(); });
+   // Periodic safety-net flush — catches anything queued from a transient
+   // failure without waiting for an 'online' event or a page reload.
+   setInterval(()=>{ if(window.supabaseClientV1) flushOutbox(); }, 20000);
+ }
+
  const keepaliveFetch=async(...args)=>{
    const [url,options={}]=args;
-   // Auth endpoint calls (login attempts, token refresh, sign-out) are
-   // deliberately excluded from sync-failure tracking below — a wrong
-   // password, an expired session being refreshed, etc. aren't "failed
-   // attempts to save data to the cloud" the way a table write is, and
-   // each already has its own dedicated error handling and messaging
-   // (e.g. showRealLoginError). Surfacing them here as sync issues is
-   // misleading rather than informative — it makes normal, expected
-   // auth events look like data-loss risks.
    const isAuthRequest=String(url).includes('/auth/v1/');
+   const method=(options&&options.method||'GET').toUpperCase();
+   const isTableWrite=/\/rest\/v1\//.test(String(url)) && (method==='POST'||method==='PATCH'||method==='PUT'||method==='DELETE');
    try{
      const response=await fetch(url, {...options, keepalive:true});
-     // 406 is excluded deliberately — PostgREST returns it whenever .single()
-     // matches zero or 2+ rows, which several code paths use intentionally
-     // to check "does this record already exist?". Every other 4xx/5xx is a
-     // genuine problem worth surfacing (including things like a missing
-     // unique constraint breaking every .upsert() call silently).
      if(!isAuthRequest && response.status>=400 && response.status!==406){
-       // Capture the actual error PostgREST returned, not just the status
-       // code — this is what actually says which column/value it rejected
-       // and why, rather than a bare "Error 400" that explains nothing.
-       // Cloned so reading the body here doesn't consume it for the
-       // caller's own .json() call afterward.
        let detail='Error '+response.status;
        try{
          const cloned=response.clone();
@@ -4631,16 +4724,16 @@ try{
        }catch(parseErr){ /* body wasn't JSON — keep the bare status */ }
        recordSyncFailure(url, options, detail);
      } else if(!isAuthRequest && response.ok){
-       // A successful data write (not a read, not an auth call) means the
-       // cloud just received an edit — stamp the Last Sync time so it
-       // reflects real ongoing activity, not only the initial page load.
-       const method=(options&&options.method||'GET').toUpperCase();
-       const isTableWrite=/\/rest\/v1\//.test(String(url)) && (method==='POST'||method==='PATCH'||method==='PUT'||method==='DELETE');
        if(isTableWrite && typeof window.stampLastSync==='function') window.stampLastSync('saved');
      }
      return response;
    }catch(err){
      if(!isAuthRequest) recordSyncFailure(url, options, 'Network error: '+err.message);
+     // A write that never reached the server (offline, DNS, the SDK/page
+     // still loading) would otherwise be silently lost — the exact
+     // "edited on Vercel, reloaded, nothing changed" symptom. Queue it so
+     // the flusher can replay it once connectivity returns.
+     if(isTableWrite) enqueueOutboxWrite(url, options);
      throw err;
    }
  };
@@ -7515,22 +7608,31 @@ function confirmRenewal(id){
   const lastDate=existingDates.length ? existingDates[existingDates.length-1] : todayKey;
 
   let firstNewDate=nextWeekdayStrictlyAfter(lastDate, lessonDay);
-  // A trial conversion specifically should start the regular recurring
-  // schedule next calendar week, not just "sometime after the trial's own
-  // date" — which, if a different day was picked during conversion than
-  // the trial itself was on, could still land later THIS same week. Not
-  // applied to a normal renewal, where "right after the last lesson" is
-  // already the correct, expected behavior.
+  // A trial conversion should start the recurring schedule in the NEXT
+  // calendar week — i.e. the occurrence of the chosen lesson day in the
+  // week after the current one. The previous "at least 7 days out" rule
+  // overshot by a full week whenever the chosen day fell later in the
+  // week than today (e.g. converting on a Monday with a Wednesday lesson
+  // day: next week's Wednesday is only 9 days out, but the ≥7 rule was
+  // computed in a way that skipped to the week after). Anchoring to the
+  // start of next week and taking the first matching day from there is
+  // exact. Not applied to a normal renewal.
   if(wasTrial){
-    const sevenDaysOut=new Date(now); sevenDaysOut.setDate(sevenDaysOut.getDate()+7);
-    const sevenDaysOutKey=sevenDaysOut.getFullYear()+'-'+String(sevenDaysOut.getMonth()+1).padStart(2,'0')+'-'+String(sevenDaysOut.getDate()).padStart(2,'0');
-    if(firstNewDate < sevenDaysOutKey){
-      // nextWeekdayStrictlyAfter needs a date to search "after" — search
-      // from 6 days out so the result lands on or after the 7-day mark,
-      // rather than potentially skipping an extra week.
-      const sixDaysOut=new Date(now); sixDaysOut.setDate(sixDaysOut.getDate()+6);
-      const sixDaysOutKey=sixDaysOut.getFullYear()+'-'+String(sixDaysOut.getMonth()+1).padStart(2,'0')+'-'+String(sixDaysOut.getDate()).padStart(2,'0');
-      firstNewDate=nextWeekdayStrictlyAfter(sixDaysOutKey, lessonDay);
+    // Start of THIS week (Monday) in UTC, then + 7 days = next Monday.
+    const t=parseDateUTC(todayKey);
+    const dow=t.getUTCDay(); // 0=Sun..6=Sat
+    const daysSinceMonday=(dow+6)%7; // Mon->0, Sun->6
+    const nextWeekMonday=new Date(t);
+    nextWeekMonday.setUTCDate(nextWeekMonday.getUTCDate()-daysSinceMonday+7);
+    const nextWeekMondayKey=nextWeekMonday.toISOString().slice(0,10);
+    // First occurrence of lessonDay on or after next week's Monday.
+    const idx=WEEKDAY_NAMES.indexOf(lessonDay);
+    if(idx>=0){
+      const target=new Date(nextWeekMonday);
+      const md=target.getUTCDay();
+      const fwd=(idx-md+7)%7; // 0..6 forward to the chosen weekday
+      target.setUTCDate(target.getUTCDate()+fwd);
+      firstNewDate=target.toISOString().slice(0,10);
     }
   }
 
@@ -8202,6 +8304,60 @@ function renderFreeSlotsOverview(){
   </table></div>`;
 }
 
+// ── Calendar drag-and-drop: move a single lesson to a different time ──────
+// Lets an admin change one lesson's time by dragging its cell onto a free
+// (or "frees at X" / "continues until X, then free") cell in the SAME
+// teacher's column. Deliberately scoped to time-only, same teacher, same
+// day — changing teacher or day is a bigger decision better made
+// explicitly through Edit Lesson, not an easy-to-fumble drag.
+function calendarDragStart(event, lessonId){
+  event.dataTransfer.setData('text/plain', String(lessonId));
+  event.dataTransfer.effectAllowed='move';
+}
+function calendarDragOverCell(event){
+  event.preventDefault(); // required for drop to fire at all
+  event.dataTransfer.dropEffect='move';
+  event.currentTarget.style.outline='2px dashed #e8c468';
+  event.currentTarget.style.outlineOffset='-2px';
+}
+function calendarDragLeaveCell(event){
+  event.currentTarget.style.outline='';
+}
+function calendarDropOnCell(event, teacherName, targetDate, targetTime){
+  event.preventDefault();
+  event.currentTarget.style.outline='';
+  const lessonId=Number(event.dataTransfer.getData('text/plain'));
+  if(!lessonId) return;
+  calendarRescheduleLesson(lessonId, teacherName, targetDate, targetTime);
+}
+function calendarRescheduleLesson(lessonId, teacherName, targetDate, targetTime){
+  const l=(db.lessons||[]).find(x=>x.id===lessonId);
+  if(!l){ showToast('That lesson could not be found.'); return; }
+  if(l.teacher!==teacherName){
+    showToast('Drag within the same teacher\'s column — to move a lesson to a different teacher, use Edit instead.');
+    return;
+  }
+  if(l.date===targetDate && l.time===targetTime) return; // dropped back on itself, no-op
+  const dur=getLessonDurationMinutes(l);
+  // Same range-aware checks used by every other booking flow in the app —
+  // a drag can't create a conflict that a normal booking would be blocked
+  // from creating.
+  if(isTeacherBusyDuringRange(teacherName, targetDate, targetTime, dur, l.id)){
+    showToast(escapeHtml(teacherName)+' already has a lesson overlapping that time — can\'t drop there.');
+    return;
+  }
+  if(isRoomFullDuringRange(targetDate, targetTime, dur, l.id)){
+    showToast('The rooms are at the 3-room limit during that time — can\'t drop there.');
+    return;
+  }
+  const oldTime=l.time;
+  l.time=targetTime;
+  save();
+  renderCalendarPage();
+  if(typeof syncLessonUpdateToSupabase==='function') syncLessonUpdateToSupabase(l);
+  showToast(escapeHtml(l.student||'Lesson')+' moved from '+formatTime12h(oldTime)+' to '+formatTime12h(targetTime));
+}
+
 function renderCalendarPage(){
   const grid=document.getElementById('calendar-grid');
   const statusEl=document.getElementById('cal-room-status');
@@ -8421,19 +8577,22 @@ function renderCalendarPage(){
         const nameBlock=`${escapeHtml(l.student||'Student')}${groupTag}`+
           (originalHolder?`<br><span style="font-size:9px;font-weight:400;opacity:0.75">Originally ${escapeHtml(originalHolder)}</span>`:'');
         const subTitle=originalHolder?` — in ${escapeHtml(originalHolder)}'s usual slot this week`:'';
+        // Draggable so the admin can drop this lesson onto a free/frees-at
+        // cell in the same teacher's column to change its time.
+        const dragAttrs=`draggable="true" ondragstart="calendarDragStart(event,${l.id})"`;
         if(isTrial){
           // GREEN: Trial session — reserved exclusively for this now
-          html+=`<div onclick="editLesson(${l.id})" title="Click to edit — ${escapeHtml(l.student)} (Trial) — ${escapeHtml(STATUS_LABELS[l.status]||l.status)}${subTitle}" style="background:#1b5e20;padding:6px;font-size:12px;font-weight:700;text-align:center;color:#a5d6a7;border:1px solid #2e7d32;cursor:pointer;min-height:52px;display:flex;flex-direction:column;align-items:center;justify-content:center">
+          html+=`<div ${dragAttrs} onclick="editLesson(${l.id})" title="Click to edit, or drag to reschedule — ${escapeHtml(l.student)} (Trial) — ${escapeHtml(STATUS_LABELS[l.status]||l.status)}${subTitle}" style="background:#1b5e20;padding:6px;font-size:12px;font-weight:700;text-align:center;color:#a5d6a7;border:1px solid #2e7d32;cursor:grab;min-height:52px;display:flex;flex-direction:column;align-items:center;justify-content:center">
             ${nameBlock}
           </div>`;
         } else if(paid){
           // NO COLOUR: paid student — blends with app background
-          html+=`<div onclick="editLesson(${l.id})" title="Click to edit — ${escapeHtml(l.student)} (Paid) — ${escapeHtml(STATUS_LABELS[l.status]||l.status)}${subTitle}" style="padding:6px;font-size:12px;font-weight:700;text-align:center;color:var(--text-light,#e8e4d8);border:1px solid #333;cursor:pointer;min-height:52px;display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--surface,#1a1916)">
+          html+=`<div ${dragAttrs} onclick="editLesson(${l.id})" title="Click to edit, or drag to reschedule — ${escapeHtml(l.student)} (Paid) — ${escapeHtml(STATUS_LABELS[l.status]||l.status)}${subTitle}" style="padding:6px;font-size:12px;font-weight:700;text-align:center;color:var(--text-light,#e8e4d8);border:1px solid #333;cursor:grab;min-height:52px;display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--surface,#1a1916)">
             ${nameBlock}
           </div>`;
         } else {
           // AMBER: unpaid (non-trial) student — needs attention
-          html+=`<div onclick="editLesson(${l.id})" title="Click to edit — ${escapeHtml(l.student)} (Unpaid) — ${escapeHtml(STATUS_LABELS[l.status]||l.status)}${subTitle}" style="background:#7a5c1f;padding:6px;font-size:12px;font-weight:700;text-align:center;color:#f0d78c;border:1px solid #9c7a2e;cursor:pointer;min-height:52px;display:flex;flex-direction:column;align-items:center;justify-content:center">
+          html+=`<div ${dragAttrs} onclick="editLesson(${l.id})" title="Click to edit, or drag to reschedule — ${escapeHtml(l.student)} (Unpaid) — ${escapeHtml(STATUS_LABELS[l.status]||l.status)}${subTitle}" style="background:#7a5c1f;padding:6px;font-size:12px;font-weight:700;text-align:center;color:#f0d78c;border:1px solid #9c7a2e;cursor:grab;min-height:52px;display:flex;flex-direction:column;align-items:center;justify-content:center">
             ${nameBlock}
           </div>`;
         }
@@ -8448,18 +8607,55 @@ function renderCalendarPage(){
       // (worse) falsely showing the teacher as free here.
       const continuing=continuingLesson(t.name, slot);
       if(continuing){
-        html+=`<div onclick="editLesson(${continuing.id})" title="Click to edit — ${escapeHtml(continuing.student)}'s ${continuing.isDoubleSession?'double session (90 min)':'session'} continues from ${escapeHtml(formatTime12h(continuing.time))} to ${escapeHtml(formatTime12h(addSlotMinutes(continuing.time, lessonDuration(continuing))))}" style="background:#123a24;padding:4px;font-size:11px;font-weight:600;text-align:center;color:#7fb896;border:1px dashed #2e7d32;cursor:pointer;min-height:52px;display:flex;align-items:center;justify-content:center">
-          ↳ ${escapeHtml(continuing.student||'')} continues
-        </div>`;
+        const continuingEndMin=timeToMinutes(continuing.time)+lessonDuration(continuing);
+        const slotEndMin=timeToMinutes(slotEnd);
+        // A genuine trailing window exists when the continuing lesson
+        // actually finishes before this row's nominal end (e.g. a Group
+        // session ending 9:30 PM inside a 9:15–10:00 PM row) — the
+        // remaining time is real, bookable room, not just informational.
+        // Checked against BOTH this teacher's own availability from that
+        // point (they're free the instant their lesson ends, by
+        // definition) and academy-wide room capacity (a different
+        // teacher's booking could still be using the last free room).
+        let trailingStart=null;
+        if(continuingEndMin<slotEndMin){
+          const candidate=String(Math.floor(continuingEndMin/60)).padStart(2,'0')+':'+String(continuingEndMin%60).padStart(2,'0');
+          const stillTeacherBusy=isTeacherBusyDuringRange(t.name, targetDate, candidate, SESSION_DURATION_MINUTES, null);
+          const stillRoomFull=isRoomFullDuringRange(targetDate, candidate, SESSION_DURATION_MINUTES, null);
+          if(!stillTeacherBusy && !stillRoomFull) trailingStart=candidate;
+        }
+        const continuingEndLabel=formatTime12h(String(Math.floor(continuingEndMin/60)).padStart(2,'0')+':'+String(continuingEndMin%60).padStart(2,'0'));
+        if(trailingStart){
+          html+=`<div style="min-height:52px;display:flex;flex-direction:column">
+            <div onclick="editLesson(${continuing.id})" title="Click to edit — ${escapeHtml(continuing.student)}'s ${continuing.isDoubleSession?'double session (90 min)':'session'} continues from ${escapeHtml(formatTime12h(continuing.time))} to ${escapeHtml(continuingEndLabel)}" style="background:#123a24;padding:2px;font-size:10px;font-weight:600;text-align:center;color:#7fb896;border:1px dashed #2e7d32;border-bottom:none;cursor:pointer;flex:1;display:flex;align-items:center;justify-content:center">
+              ↳ ${escapeHtml(continuing.student||'')} until ${continuingEndLabel}
+            </div>
+            <div ondragover="calendarDragOverCell(event)" ondragleave="calendarDragLeaveCell(event)" ondrop="calendarDropOnCell(event,'${escapeAttr(t.name)}','${targetDate}','${trailingStart}')" title="Free from ${escapeHtml(formatTime12h(trailingStart))} — drop a lesson here to book it" style="background:#1b5e20;border:1px solid #2e7d32;flex:1;display:flex;align-items:center;justify-content:center;font-size:9px;color:rgba(165,214,167,0.75);text-align:center;padding:1px">
+              then free · ${escapeHtml(formatTime12h(trailingStart))}
+            </div>
+          </div>`;
+        } else {
+          html+=`<div onclick="editLesson(${continuing.id})" title="Click to edit — ${escapeHtml(continuing.student)}'s ${continuing.isDoubleSession?'double session (90 min)':'session'} continues from ${escapeHtml(formatTime12h(continuing.time))} to ${escapeHtml(continuingEndLabel)}" style="background:#123a24;padding:4px;font-size:11px;font-weight:600;text-align:center;color:#7fb896;border:1px dashed #2e7d32;cursor:pointer;min-height:52px;display:flex;align-items:center;justify-content:center">
+            ↳ ${escapeHtml(continuing.student||'')} continues
+          </div>`;
+        }
         return;
       }
 
       if(!teacherHasSlot){
         // RED: teacher not available at this time, and no real lesson exists here
         html+=`<div style="background:#c62828;border:1px solid #b71c1c;min-height:52px"></div>`;
+      } else if(full && !freesAt){
+        // Fully blocked for this whole slot with nowhere to shift to —
+        // not a valid drop target.
+        html+=`<div style="background:#1b5e20;border:1px solid #2e7d32;min-height:52px;display:flex;align-items:center;justify-content:center;font-size:11px;color:rgba(165,214,167,0.6)">Full</div>`;
       } else {
-        // GREEN: available free slot — same green as Trial sessions
-        html+=`<div style="background:#1b5e20;border:1px solid #2e7d32;min-height:52px;display:flex;align-items:center;justify-content:center;font-size:11px;color:rgba(165,214,167,0.6);text-align:center;padding:2px">${fullLabel}</div>`;
+        // GREEN: available (either the slot's own nominal time, or —
+        // when full but a room genuinely frees partway through — that
+        // shifted time). Either way, a real drop target: dropping a
+        // dragged lesson here books it starting at the time shown.
+        const dropTime=full ? freesAt : slot;
+        html+=`<div ondragover="calendarDragOverCell(event)" ondragleave="calendarDragLeaveCell(event)" ondrop="calendarDropOnCell(event,'${escapeAttr(t.name)}','${targetDate}','${dropTime}')" title="${full?'Free from '+escapeHtml(formatTime12h(freesAt)):'Free'} — drop a lesson here to book it" style="background:#1b5e20;border:1px solid #2e7d32;min-height:52px;display:flex;align-items:center;justify-content:center;font-size:11px;color:rgba(165,214,167,0.6);text-align:center;padding:2px">${fullLabel}</div>`;
       }
     });
 
@@ -9683,7 +9879,44 @@ function downloadTeacherSchedulePhoto(){
 
   if(firstOccupied===-1){ showToast('No booked lessons found for '+teacherName+' on '+dayName); return; }
 
-  const rows=allSlotInfo.slice(firstOccupied, lastOccupied+1);
+  // Safety net: any REAL lesson for this teacher on this date that isn't
+  // represented above gets appended as its own row and the list is
+  // re-sorted by time. This matters because a lesson's real duration can
+  // create a window that overlaps a SEPARATE lesson at an off-grid time
+  // within it (e.g. a 60-minute Group session's span containing another
+  // student's lesson 45 minutes in) — the one-lesson-per-effective-slot
+  // model above can only draw one lesson there, so without this pass the
+  // second one would silently vanish from the photo entirely.
+  const alreadyShown=new Set(allSlotInfo.filter(s=>s.occupied).map(s=>s.time+'|'+s.studentName));
+  const dayLessonsForTeacher=(db.lessons||[]).filter(l=>
+    l.date===targetDate &&
+    l.teacher===teacherName &&
+    (l.status_record||'active')!=='archived' &&
+    l.status!=='absent_excused' && l.status!=='teacher_absent' &&
+    l.time
+  );
+  let recoveredAny=false;
+  dayLessonsForTeacher.forEach(l=>{
+    const key=l.time+'|'+l.student;
+    if(alreadyShown.has(key)) return;
+    recoveredAny=true;
+    const matchedStudent=(db.students||[]).find(s=>String(s.id)===String(l.studentId) || s.name===l.student);
+    const dur=getLessonDurationMinutes(l);
+    allSlotInfo.push({
+      time:l.time,
+      timeEnd:addSlotMinutes(l.time,dur),
+      studentName:l.student,
+      paid:paidSet.has(String(matchedStudent?matchedStudent.id:l.studentId)),
+      isTrial:!!(matchedStudent && matchedStudent.plan==='trial'),
+      isGroup:!!(l.isExtendedDuration || (matchedStudent && isGroupPlan(matchedStudent.plan))),
+      occupied:true
+    });
+  });
+  if(recoveredAny) allSlotInfo.sort((a,b)=>a.time.localeCompare(b.time));
+
+  const firstOccupied2=allSlotInfo.findIndex(s=>s.occupied);
+  const lastOccupied2=allSlotInfo.length-1-[...allSlotInfo].reverse().findIndex(s=>s.occupied);
+  const rows=allSlotInfo.slice(firstOccupied2, lastOccupied2+1);
 
   // Draw as canvas image
   const timeColWidth=110;
