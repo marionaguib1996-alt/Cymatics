@@ -282,7 +282,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.11-2</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.11-5</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-failure-badge" onclick="showSyncFailurePanel()" style="display:none;cursor:pointer;background:#7a1f1f;color:#ffb3b3;border:1px solid #e06c6c;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:700;margin-right:12px">
@@ -1356,6 +1356,18 @@ function currentMonth(){return document.getElementById('global-month').value;}
 // State
 let db = JSON.parse(localStorage.getItem('musicacademy_db')||'{"students":[],"payments":{},"expenses":[],"lessons":[],"lessonLogs":[]}'); db.lessons=db.lessons||[]; db.lessonLogs=db.lessonLogs||[]; db.instruments=db.instruments||[]; db.teacherProfiles=db.teacherProfiles||[]; db.payrollPaid=db.payrollPaid||{}; db.practiceSessions=db.practiceSessions||[]; db.paymentMethods=db.paymentMethods||{}; db.resources=db.resources||[]; db.refunds=db.refunds||[]; db.otherRevenue=db.otherRevenue||[];
 function save(){try{localStorage.setItem('musicacademy_db',JSON.stringify(db));}catch(e){console.error('save() failed:',e);}}
+
+// Updates the "Last Sync" label on the Cloud tab. Previously this was
+// only ever set inside autoLoadFromCloud (a download), so after the
+// initial page-load fetch it never changed again — appearing "stuck to
+// the first time" even as edits were being pushed up all day. Now it's
+// called on successful writes too, so it reflects genuine sync activity
+// in both directions.
+function stampLastSync(label){
+  const el=document.getElementById('last-sync');
+  if(el) el.textContent='Last Sync: '+new Date().toLocaleString()+(label?' ('+label+')':'');
+}
+window.stampLastSync=stampLastSync;
 function normalizeLessonLog(log,lesson){
  if(!log) return log;
  const lessonDate=log.lessonDate || lesson?.date || lesson?.lesson_date || '';
@@ -2674,10 +2686,15 @@ function getLessonTimeOptions(teacherName, dayName, currentTime, date, excludeLe
   if(!slots.length) return null; // truly no slots (e.g. Wednesday/Thursday)
   // Include current time even if it's not in the list (e.g. manually set before slots were configured)
   const all=(currentTime && !slots.includes(currentTime)) ? [currentTime,...slots] : slots;
+  // Validate against the lesson's OWN duration — moving a 90-minute
+  // double session (or a 60-minute Group lesson) must check its full
+  // footprint at the candidate time, not a generic 45 minutes.
+  const editedLesson=excludeLessonId ? (db.lessons||[]).find(l=>l.id===excludeLessonId) : null;
+  const dur=(typeof getLessonDurationMinutes==='function') ? getLessonDurationMinutes(editedLesson) : SESSION_DURATION_MINUTES;
   return all.map(t=>{
     if(t===currentTime) return `<option value="${t}" selected>${formatTime12h(t)}</option>`;
-    const roomFull=date && typeof isRoomFullDuringRange==='function' && isRoomFullDuringRange(date,t,SESSION_DURATION_MINUTES,excludeLessonId);
-    const teacherBusy=date && typeof isTeacherBusyDuringRange==='function' && isTeacherBusyDuringRange(teacherName,date,t,SESSION_DURATION_MINUTES,excludeLessonId);
+    const roomFull=date && typeof isRoomFullDuringRange==='function' && isRoomFullDuringRange(date,t,dur,excludeLessonId);
+    const teacherBusy=date && typeof isTeacherBusyDuringRange==='function' && isTeacherBusyDuringRange(teacherName,date,t,dur,excludeLessonId);
     const blocked=roomFull||teacherBusy;
     const reason=roomFull?' (Rooms Full)':(teacherBusy?' (Teacher Busy)':'');
     return `<option value="${t}" ${blocked?'disabled':''}>${formatTime12h(t)}${reason}</option>`;
@@ -3606,6 +3623,7 @@ async function pushAllDataToCloud(){
   }
 
   save();
+  if(typeof stampLastSync==='function') stampLastSync('pushed to cloud');
   setStatus(summary.failed ? '⚠️ Push completed with '+summary.failed+' failure(s)' : '🟢 All data pushed to cloud');
   alert('Push to Cloud complete:\n\n'+
     'Students: '+summary.students+'\n'+
@@ -4501,8 +4519,7 @@ async function autoLoadFromCloud(){
      (teachers?.length||0)+' teachers · '+
      (lessons?.length||0)+' lessons · '+
      (payments?.length||0)+' payments';
-   if(document.getElementById('last-sync'))
-     document.getElementById('last-sync').textContent='Last Sync: '+new Date().toLocaleString();
+   if(typeof stampLastSync==='function') stampLastSync('loaded from cloud');
    hideSyncIndicator();
  }catch(e){
    console.error('Auto-load failed:', e.message);
@@ -4532,19 +4549,27 @@ window.addEventListener('load',function(){
     if(el) el.textContent='🟡 Showing restored backup (cloud sync paused for this load)';
     return;
   }
-  // Retry every 500ms until supabaseClientV1 is ready, max 8 attempts (~4s)
+  // Retry until supabaseClientV1 is ready. The window is generous (~20s)
+  // because on a freshly-hosted site the Supabase SDK is fetched cold
+  // from its CDN — far slower than the instant load when opening the
+  // file locally, which is why auto-sync appeared to "stop working" only
+  // after hosting. Also actively drives client init each tick rather than
+  // waiting passively, so the moment the SDK arrives, sync begins.
   let attempts=0;
   function tryLoad(){
     attempts++;
+    if(typeof window.initSupabaseClientV1==='function') window.initSupabaseClientV1();
     if(window.supabaseClientV1){
       autoLoadFromCloud();
-    } else if(attempts < 8){
+    } else if(attempts < 40){
       setTimeout(tryLoad, 500);
     } else {
       console.warn('Supabase client not available after retries.');
+      const el=document.getElementById('cloud-status');
+      if(el) el.textContent='🔴 Could not reach the cloud automatically — check your connection, then use "Re-sync From Cloud" on the Cloud tab.';
     }
   }
-  setTimeout(tryLoad, 1500);
+  setTimeout(tryLoad, 800);
 });
 </script>
 
@@ -4615,6 +4640,13 @@ try{
          }
        }catch(parseErr){ /* body wasn't JSON — keep the bare status */ }
        recordSyncFailure(url, options, detail);
+     } else if(!isAuthRequest && response.ok){
+       // A successful data write (not a read, not an auth call) means the
+       // cloud just received an edit — stamp the Last Sync time so it
+       // reflects real ongoing activity, not only the initial page load.
+       const method=(options&&options.method||'GET').toUpperCase();
+       const isTableWrite=/\/rest\/v1\//.test(String(url)) && (method==='POST'||method==='PATCH'||method==='PUT'||method==='DELETE');
+       if(isTableWrite && typeof window.stampLastSync==='function') window.stampLastSync('saved');
      }
      return response;
    }catch(err){
@@ -4622,12 +4654,38 @@ try{
      throw err;
    }
  };
- supabaseClientV1 = window.supabase ? window.supabase./* duplicate disabled: */createClient(
-  'https://qgemnelkdyhwmnxoqmkx.supabase.co',
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFnZW1uZWxrZHlod21ueG9xbWt4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAxNTM3OTEsImV4cCI6MjA5NTcyOTc5MX0.5BsV3antpG5STg1LJiZ9yLQRp_Fzi_4oOaLwVp5cCAE',
-  { global: { fetch: keepaliveFetch } }
- ) : null;
- window.supabaseClientV1 = supabaseClientV1;
+ // Creating the client is wrapped in a function that retries until the
+ // CDN-loaded Supabase SDK is actually present. Previously this ran once,
+ // inline, the moment this script was parsed — fine when opening the file
+ // locally (the SDK is cached and executes instantly), but on a hosted
+ // server (Vercel etc.) the SDK script is fetched over the network with
+ // real latency and a cold cache, so window.supabase was often still
+ // undefined here. That left supabaseClientV1 permanently null, which
+ // silently disabled all automatic cloud sync — the exact "I have to
+ // press Re-sync manually after hosting" symptom. Retrying fixes it.
+ function initSupabaseClientV1(){
+   if(window.supabaseClientV1) return true;
+   if(!window.supabase || !window.supabase.createClient) return false;
+   supabaseClientV1 = window.supabase.createClient(
+    'https://qgemnelkdyhwmnxoqmkx.supabase.co',
+    'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFnZW1uZWxrZHlod21ueG9xbWt4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAxNTM3OTEsImV4cCI6MjA5NTcyOTc5MX0.5BsV3antpG5STg1LJiZ9yLQRp_Fzi_4oOaLwVp5cCAE',
+    { global: { fetch: keepaliveFetch } }
+   );
+   window.supabaseClientV1 = supabaseClientV1;
+   return true;
+ }
+ // Exposed globally because the load-time auto-sync handler lives in a
+ // separate <script> block and needs to drive init as it polls.
+ window.initSupabaseClientV1 = initSupabaseClientV1;
+ if(!initSupabaseClientV1()){
+   // SDK not ready yet — poll briefly until it is (up to ~10s), then the
+   // load-time auto-sync handler picks it up as soon as it exists.
+   let initAttempts=0;
+   const initTimer=setInterval(()=>{
+     initAttempts++;
+     if(initSupabaseClientV1() || initAttempts>50){ clearInterval(initTimer); }
+   }, 200);
+ }
 }catch(e){ console.warn('Supabase (V1) init failed:',e); }
 
 function updateSyncFailureBadge(){
@@ -7820,7 +7878,7 @@ function getLessonsAtSlot(dayName, time, excludeStudentId){
     (l.status_record||'active')!=='archived' &&
     l.status!=='absent_excused' && l.status!=='teacher_absent' &&
     !(excludeStudent && (String(l.studentId)===String(excludeStudent.id) || l.student===excludeStudent.name)) &&
-    (l.time===time || (l.time===prevSlot && (l.isExtendedDuration || isGroupPlan((db.students||[]).find(s=>String(s.id)===String(l.studentId) || s.name===l.student)?.plan))))
+    (l.time===time || (l.time===prevSlot && getLessonDurationMinutes(l)>SESSION_DURATION_MINUTES))
   ).forEach(l=>{
     if(!occupants.has(l.student)) occupants.set(l.student, {name:l.student||'Student'});
   });
@@ -7835,11 +7893,20 @@ function isRoomFull(dayName, time, excludeStudentId){
 // Extend slot dropdowns to mark room-full slots
 function getAvailableSlotsWithCapacity(teacherName, dayName, excludeStudentId, forDoubleSession){
   const effectiveSlots=getEffectiveTeacherDaySlots(teacherName, dayName, excludeStudentId);
+  const targetDate=nextOccurrenceOfWeekday(dayName);
+  const bookingDuration=forDoubleSession ? GROUP_SESSION_DURATION_MINUTES : SESSION_DURATION_MINUTES;
+  const ownLesson=excludeStudentId ? (db.lessons||[]).find(l=>l.date===targetDate && String(l.studentId)===String(excludeStudentId) && (l.status_record||'active')!=='archived') : null;
 
   return effectiveSlots
     .map((slot,i)=>({slot,i}))
     .filter(({slot,i})=>{
       if(slot.occupiedBy) return false;
+      // The grid walk above only sees bookings sitting exactly on the
+      // teacher's cursor positions — an off-grid booking (e.g. a shifted
+      // 5:00 lesson booked earlier) overlaps nominal slots invisibly to
+      // it. The range check catches those, preventing double-booking the
+      // teacher for the overlapping stretch.
+      if(isTeacherBusyDuringRange(teacherName, targetDate, slot.time, bookingDuration, ownLesson?.id||null)) return false;
       if(forDoubleSession){
         // A Group-plan booking here needs the NEXT effective slot (in the
         // current, pre-booking cascade) to also be free — booking Group
@@ -7850,7 +7917,31 @@ function getAvailableSlotsWithCapacity(teacherName, dayName, excludeStudentId, f
       }
       return true;
     })
-    .map(({slot})=>({time:slot.time, full:isRoomFull(dayName, slot.time, excludeStudentId)}));
+    .map(({slot})=>{
+      // Day-based check catches default weekly assignments (which have no
+      // lesson records for the range functions to see); the range check
+      // catches everything the day-based one structurally can't — practice
+      // sessions, off-grid times, and longer bookings overlapping partway
+      // into this slot. Both have to agree the slot is clear.
+      const dayBasedFull=isRoomFull(dayName, slot.time, excludeStudentId);
+      const rangeFull=isRoomFullDuringRange(targetDate, slot.time, bookingDuration, ownLesson?.id||null);
+      const full=dayBasedFull||rangeFull;
+      if(full){
+        // Room-blocked at the nominal start — but a room may genuinely
+        // free partway through the slot (e.g. a practice session ending
+        // 15 minutes in). Offer that shifted start as a real, bookable
+        // option rather than a dead "Rooms Full" entry.
+        const shifted=resolveShiftedBookableTime(targetDate, slot.time, bookingDuration, teacherName, ownLesson?.id||null);
+        if(shifted && !dayBasedFullAt(dayName, shifted, excludeStudentId)) return {time:shifted, full:false, shiftedFrom:slot.time};
+      }
+      return {time:slot.time, full};
+    });
+}
+
+// Day-based fullness at an arbitrary (possibly off-grid) time — used to
+// double-check a shifted offer against default weekly assignments too.
+function dayBasedFullAt(dayName, time, excludeStudentId){
+  return isRoomFull(dayName, time, excludeStudentId);
 }
 
 // Override Add Student time slot dropdown
@@ -7862,8 +7953,8 @@ window.updateStudentTimeSlotOptions=function(){
   if(!timeSel) return;
   const slots=getAvailableSlotsWithCapacity(teacherName, dayName, null, isGroupPlan(plan));
   if(!slots.length){ timeSel.innerHTML='<option value="">No available slots for this day</option>'; return; }
-  timeSel.innerHTML=slots.map(({time,full})=>
-    `<option value="${full?'':time}" ${full?'disabled':''}>${formatTime12h(time)}${full?' (Rooms Full)':''}</option>`
+  timeSel.innerHTML=slots.map(({time,full,shiftedFrom})=>
+    `<option value="${full?'':time}" ${full?'disabled':''}>${formatTime12h(time)}${shiftedFrom?' (room frees then)':''}${full?' (Rooms Full)':''}</option>`
   ).join('');
 };
 
@@ -7876,8 +7967,8 @@ window.onEditStudentDayChange=function(studentId){
   if(!timeSel) return;
   const slots=getAvailableSlotsWithCapacity(teacherName, dayName, studentId, isGroupPlan(plan));
   timeSel.innerHTML=slots.length
-    ? slots.map(({time,full})=>
-        `<option value="${full?'':time}" ${full?'disabled':''}>${escapeHtml(formatTime12h(time))}${full?' (Rooms Full)':''}</option>`
+    ? slots.map(({time,full,shiftedFrom})=>
+        `<option value="${full?'':time}" ${full?'disabled':''}>${escapeHtml(formatTime12h(time))}${shiftedFrom?' (room frees then)':''}${full?' (Rooms Full)':''}</option>`
       ).join('')
     : '<option value="">No available slots</option>';
 };
@@ -7888,7 +7979,9 @@ window.onEditStudentDayChange=function(studentId){
   window.addStudent=function(){
     const dayName=document.getElementById('s-day')?.value||'';
     const time=document.getElementById('s-time')?.value||'';
-    if(dayName && time && isRoomFull(dayName, time, null)){
+    const plan=document.getElementById('s-plan')?.value||'';
+    const dur=isGroupPlan(plan)?GROUP_SESSION_DURATION_MINUTES:SESSION_DURATION_MINUTES;
+    if(dayName && time && (isRoomFull(dayName, time, null) || isRoomFullDuringRange(nextOccurrenceOfWeekday(dayName), time, dur, null))){
       openModal('🚫 Rooms Fully Occupied',`
         <div style="text-align:center;padding:20px 0">
           <div style="font-size:1.1rem;font-weight:600;margin-bottom:8px">All 3 rooms are occupied at ${escapeHtml(formatTime12h(time))} on ${escapeHtml(dayName)}</div>
@@ -7907,7 +8000,13 @@ window.onEditStudentDayChange=function(studentId){
   window.saveEditStudent=async function(id){
     const dayName=document.getElementById('es-day')?.value||'';
     const time=document.getElementById('es-time')?.value||'';
-    if(dayName && time && isRoomFull(dayName, time, id)){
+    const plan=document.getElementById('es-plan')?.value||'';
+    const dur=isGroupPlan(plan)?GROUP_SESSION_DURATION_MINUTES:SESSION_DURATION_MINUTES;
+    const targetDate=dayName?nextOccurrenceOfWeekday(dayName):'';
+    // The student's own lesson this week must not count against them —
+    // re-saving their existing slot isn't a conflict with themselves.
+    const ownLesson=(db.lessons||[]).find(l=>l.date===targetDate && String(l.studentId)===String(id) && (l.status_record||'active')!=='archived');
+    if(dayName && time && (isRoomFull(dayName, time, id) || isRoomFullDuringRange(targetDate, time, dur, ownLesson?.id||null))){
       openModal('🚫 Rooms Fully Occupied',`
         <div style="text-align:center;padding:20px 0">
           <div style="font-size:1.1rem;font-weight:600;margin-bottom:8px">All 3 rooms are occupied at ${escapeHtml(formatTime12h(time))} on ${escapeHtml(dayName)}</div>
@@ -7938,6 +8037,25 @@ function timeToMinutes(timeStr){
 // standard 45-minute slot.
 const GROUP_SESSION_DURATION_MINUTES=60;
 const PRACTICE_SESSION_DURATION_MINUTES=60;
+const DOUBLE_SESSION_DURATION_MINUTES=90; // makeup "double session": two 45-min sessions in one shot
+
+// THE canonical answer to "how long does this lesson actually run" — every
+// capacity, availability, and display computation must use this one
+// function rather than re-deriving it. Previously eight separate places
+// each had their own copy of the derivation, and all of them treated any
+// "extended" lesson as 60 minutes — but a double-session makeup is 90,
+// so its final half hour was invisible to room capacity, teacher-busy
+// checks, and the Calendar, allowing genuine double-bookings there.
+function getLessonDurationMinutes(lesson){
+  if(!lesson) return SESSION_DURATION_MINUTES;
+  // Order matters: a double-session makeup also sets isExtendedDuration,
+  // so the 90-minute case must be recognized before the generic 60.
+  if(lesson.isDoubleSession) return DOUBLE_SESSION_DURATION_MINUTES;
+  if(lesson.isExtendedDuration) return GROUP_SESSION_DURATION_MINUTES;
+  const s=(db.students||[]).find(st=>String(st.id)===String(lesson.studentId) || st.name===lesson.student);
+  if(s && isGroupPlan(s.plan)) return GROUP_SESSION_DURATION_MINUTES;
+  return SESSION_DURATION_MINUTES;
+}
 
 // ── Effective (shifted) slot computation ────────────────────────────────
 // A Group-plan lesson (or, for practice sessions elsewhere, a 1-hour
@@ -8002,8 +8120,7 @@ function getTeacherBookingsByTime(teacherName, dayName, targetDate, excludeStude
       if(l.student) namesWithRealLessonThisWeek.add(l.student);
       if(!l.time) return;
       if(excludeStudent && (String(l.studentId)===String(excludeStudent.id) || l.student===excludeStudent.name)) return;
-      const lessonStudent=(db.students||[]).find(s=>String(s.id)===String(l.studentId) || s.name===l.student);
-      const duration=(l.isExtendedDuration || isGroupPlan(lessonStudent?.plan)) ? GROUP_SESSION_DURATION_MINUTES : SESSION_DURATION_MINUTES;
+      const duration=getLessonDurationMinutes(l);
       bookingsByTime[l.time]={label:l.student||'Booked', durationMinutes:duration};
     });
 
@@ -8059,7 +8176,14 @@ function findTeacherDoubleSessionWindows(teacherName, excludeLessonId){
       // proper interval-overlap check. Room capacity likewise can fill
       // partway through the window, not just at its slot boundaries.
       if(isTeacherBusyDuringRange(teacherName, targetDate, slot.time, 90, excludeLessonId)) return;
-      if(isRoomFullDuringRange(targetDate, slot.time, 90, excludeLessonId)) return;
+      if(isRoomFullDuringRange(targetDate, slot.time, 90, excludeLessonId)){
+        // A room may free partway through this slot (e.g. a practice
+        // session ending mid-slot) — a shifted 90-minute window starting
+        // then is still a genuinely valid double-session option.
+        const shifted=resolveShiftedBookableTime(targetDate, slot.time, 90, teacherName, excludeLessonId);
+        if(shifted) windows.push({date:targetDate, time:shifted, dayName});
+        return;
+      }
       windows.push({date:targetDate, time:slot.time, dayName});
     });
   });
@@ -8196,10 +8320,10 @@ function renderCalendarPage(){
   function lessonsInSlotRange(teacherName, slotStart, slotEndTime){
     return (lessonsByTeacher[teacherName]||[]).filter(l=>l.time>=slotStart && l.time<slotEndTime);
   }
-  // A lesson's OWN real duration — 60 min for Group, 45 otherwise.
+  // A lesson's OWN real duration — routed through the one canonical
+  // function so a 90-minute double session is honored here too.
   function lessonDuration(l){
-    const s=(db.students||[]).find(s=>String(s.id)===String(l.studentId) || s.name===l.student);
-    return (l.isExtendedDuration || isGroupPlan(s?.plan)) ? GROUP_SESSION_DURATION_MINUTES : SESSION_DURATION_MINUTES;
+    return getLessonDurationMinutes(l);
   }
   // A lesson that started in an EARLIER row but is still running into
   // this one — e.g. a Group session at 3:30 (ending 4:30) is still
@@ -8210,6 +8334,41 @@ function renderCalendarPage(){
       const endMin=timeToMinutes(l.time)+lessonDuration(l);
       return endMin>timeToMinutes(slotStart);
     });
+  }
+
+  // Detects a one-week substitution: this lesson (Student B) sits in what
+  // is normally a DIFFERENT student's (Student A's) recurring weekly slot
+  // — same teacher, same weekday, same time — and that other student
+  // isn't the one attending here. Returns Student A's name so the cell
+  // can show "Originally <A>" underneath B's name. Only fires when the
+  // original student genuinely isn't attending this week at this slot
+  // (they have an excused/absent lesson here, or no lesson record at all
+  // — either way the range check already freed the slot for B), so a
+  // normal, unremarkable booking in an empty slot shows nothing extra.
+  function originalSlotHolderName(lesson){
+    if(!lesson || !lesson.time || !lesson.teacher) return null;
+    const attendingId=String(lesson.studentId||'');
+    const attendingName=lesson.student||'';
+    // Find a student whose DEFAULT weekly assignment is exactly this
+    // teacher+day+time, but who is not the one in this lesson.
+    const original=(db.students||[]).find(s=>
+      (s.status||'active')!=='archived' &&
+      s.teacher===lesson.teacher &&
+      s.lesson_day===dayName &&
+      s.lessonTime===lesson.time &&
+      String(s.id)!==attendingId &&
+      s.name!==attendingName
+    );
+    if(!original) return null;
+    // Confirm the original holder isn't themselves attending this slot
+    // this week (guards the odd case of two students sharing a default
+    // slot in the data — only call it a substitution if A really is out).
+    const originalAttendingHere=(lessonsByTeacher[lesson.teacher]||[]).some(l=>
+      l.time===lesson.time &&
+      (String(l.studentId)===String(original.id) || l.student===original.name)
+    );
+    if(originalAttendingHere) return null;
+    return original.name;
   }
 
   const colCount=teachers.length+2; // time col + teacher cols + practice col
@@ -8292,21 +8451,27 @@ function renderCalendarPage(){
         const paid=matchedStudent ? paidSet.has(String(matchedStudent.id)) : paidSet.has(String(l.studentId));
         const isTrial=matchedStudent && matchedStudent.plan==='trial';
         const isGroup=matchedStudent && isGroupPlan(matchedStudent.plan);
-        const groupTag=isGroup ? ' 👥 1hr' : '';
+        const groupTag=l.isDoubleSession ? ' ⏱ 90min' : (isGroup ? ' 👥 1hr' : '');
+        // If this student is attending in what's normally someone else's
+        // recurring slot this week, show that beneath their name.
+        const originalHolder=originalSlotHolderName(l);
+        const nameBlock=`${escapeHtml(l.student||'Student')}${groupTag}`+
+          (originalHolder?`<br><span style="font-size:9px;font-weight:400;opacity:0.75">Originally ${escapeHtml(originalHolder)}</span>`:'');
+        const subTitle=originalHolder?` — in ${escapeHtml(originalHolder)}'s usual slot this week`:'';
         if(isTrial){
           // GREEN: Trial session — reserved exclusively for this now
-          html+=`<div onclick="editLesson(${l.id})" title="Click to edit — ${escapeHtml(l.student)} (Trial) — ${escapeHtml(STATUS_LABELS[l.status]||l.status)}" style="background:#1b5e20;padding:6px;font-size:12px;font-weight:700;text-align:center;color:#a5d6a7;border:1px solid #2e7d32;cursor:pointer;min-height:52px;display:flex;align-items:center;justify-content:center">
-            ${escapeHtml(l.student||'Student')}${groupTag}
+          html+=`<div onclick="editLesson(${l.id})" title="Click to edit — ${escapeHtml(l.student)} (Trial) — ${escapeHtml(STATUS_LABELS[l.status]||l.status)}${subTitle}" style="background:#1b5e20;padding:6px;font-size:12px;font-weight:700;text-align:center;color:#a5d6a7;border:1px solid #2e7d32;cursor:pointer;min-height:52px;display:flex;flex-direction:column;align-items:center;justify-content:center">
+            ${nameBlock}
           </div>`;
         } else if(paid){
           // NO COLOUR: paid student — blends with app background
-          html+=`<div onclick="editLesson(${l.id})" title="Click to edit — ${escapeHtml(l.student)} (Paid) — ${escapeHtml(STATUS_LABELS[l.status]||l.status)}" style="padding:6px;font-size:12px;font-weight:700;text-align:center;color:var(--text-light,#e8e4d8);border:1px solid #333;cursor:pointer;min-height:52px;display:flex;align-items:center;justify-content:center;background:var(--surface,#1a1916)">
-            ${escapeHtml(l.student||'Student')}${groupTag}
+          html+=`<div onclick="editLesson(${l.id})" title="Click to edit — ${escapeHtml(l.student)} (Paid) — ${escapeHtml(STATUS_LABELS[l.status]||l.status)}${subTitle}" style="padding:6px;font-size:12px;font-weight:700;text-align:center;color:var(--text-light,#e8e4d8);border:1px solid #333;cursor:pointer;min-height:52px;display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--surface,#1a1916)">
+            ${nameBlock}
           </div>`;
         } else {
           // AMBER: unpaid (non-trial) student — needs attention
-          html+=`<div onclick="editLesson(${l.id})" title="Click to edit — ${escapeHtml(l.student)} (Unpaid) — ${escapeHtml(STATUS_LABELS[l.status]||l.status)}" style="background:#7a5c1f;padding:6px;font-size:12px;font-weight:700;text-align:center;color:#f0d78c;border:1px solid #9c7a2e;cursor:pointer;min-height:52px;display:flex;align-items:center;justify-content:center">
-            ${escapeHtml(l.student||'Student')}${groupTag}
+          html+=`<div onclick="editLesson(${l.id})" title="Click to edit — ${escapeHtml(l.student)} (Unpaid) — ${escapeHtml(STATUS_LABELS[l.status]||l.status)}${subTitle}" style="background:#7a5c1f;padding:6px;font-size:12px;font-weight:700;text-align:center;color:#f0d78c;border:1px solid #9c7a2e;cursor:pointer;min-height:52px;display:flex;flex-direction:column;align-items:center;justify-content:center">
+            ${nameBlock}
           </div>`;
         }
         return;
@@ -8320,7 +8485,7 @@ function renderCalendarPage(){
       // (worse) falsely showing the teacher as free here.
       const continuing=continuingLesson(t.name, slot);
       if(continuing){
-        html+=`<div onclick="editLesson(${continuing.id})" title="Click to edit — ${escapeHtml(continuing.student)}'s Group session continues from ${escapeHtml(formatTime12h(continuing.time))}" style="background:#123a24;padding:4px;font-size:11px;font-weight:600;text-align:center;color:#7fb896;border:1px dashed #2e7d32;cursor:pointer;min-height:52px;display:flex;align-items:center;justify-content:center">
+        html+=`<div onclick="editLesson(${continuing.id})" title="Click to edit — ${escapeHtml(continuing.student)}'s ${continuing.isDoubleSession?'double session (90 min)':'session'} continues from ${escapeHtml(formatTime12h(continuing.time))} to ${escapeHtml(formatTime12h(addSlotMinutes(continuing.time, lessonDuration(continuing))))}" style="background:#123a24;padding:4px;font-size:11px;font-weight:600;text-align:center;color:#7fb896;border:1px dashed #2e7d32;cursor:pointer;min-height:52px;display:flex;align-items:center;justify-content:center">
           ↳ ${escapeHtml(continuing.student||'')} continues
         </div>`;
         return;
@@ -8610,8 +8775,7 @@ function getLessonsAtDateTime(date, time, excludeLessonId){
     if(l.status==='absent_excused' || l.status==='teacher_absent') return false;
     if(excludeLessonId && l.id===excludeLessonId) return false;
     if(!l.time) return false;
-    const lessonStudent=(db.students||[]).find(s=>String(s.id)===String(l.studentId) || s.name===l.student);
-    const duration=(l.isExtendedDuration || isGroupPlan(lessonStudent?.plan)) ? GROUP_SESSION_DURATION_MINUTES : SESSION_DURATION_MINUTES;
+    const duration=getLessonDurationMinutes(l);
     const startMin=timeToMinutes(l.time);
     return candidateMinutes>=startMin && candidateMinutes<startMin+duration;
   });
@@ -8704,8 +8868,7 @@ function isTeacherBusyDuringRange(teacherName, date, startTime, durationMinutes,
     if(l.status==='absent_excused' || l.status==='teacher_absent') return false;
     if(excludeLessonId && l.id===excludeLessonId) return false;
     if((l.teacher||'').toLowerCase()!==teacherName.toLowerCase()) return false;
-    const lessonStudent=(db.students||[]).find(s=>String(s.id)===String(l.studentId) || s.name===l.student);
-    const duration=(l.isExtendedDuration || isGroupPlan(lessonStudent?.plan)) ? GROUP_SESSION_DURATION_MINUTES : SESSION_DURATION_MINUTES;
+    const duration=getLessonDurationMinutes(l);
     const lStart=timeToMinutes(l.time);
     return lStart<rangeEnd && (lStart+duration)>rangeStart; // standard interval overlap
   });
@@ -8724,8 +8887,7 @@ function nextRoomBookableTime(date, time, durationMinutes){
   (db.lessons||[]).forEach(l=>{
     if(l.date!==date || !l.time || (l.status_record||'active')==='archived') return;
     if(l.status==='absent_excused' || l.status==='teacher_absent') return;
-    const lessonStudent=(db.students||[]).find(s=>String(s.id)===String(l.studentId) || s.name===l.student);
-    const duration=(l.isExtendedDuration || isGroupPlan(lessonStudent?.plan)) ? GROUP_SESSION_DURATION_MINUTES : SESSION_DURATION_MINUTES;
+    const duration=getLessonDurationMinutes(l);
     const end=timeToMinutes(l.time)+duration;
     if(end>startMin) candidates.add(end);
   });
@@ -8740,6 +8902,30 @@ function nextRoomBookableTime(date, time, durationMinutes){
     if(!isRoomFullDuringRange(date, t, durationMinutes, null)) return t;
   }
   return null;
+}
+
+// Universal "book it anyway, just later" resolver: a slot whose nominal
+// start is room-blocked can still be genuinely bookable partway through
+// itself — e.g. a practice session ending at 5:00 frees a room 15
+// minutes into the 4:45 slot, so a lesson CAN happen, starting 5:00.
+// Returns that shifted start time when it exists, or null. Rules:
+// - the shifted start must fall within the nominal slot's own window
+//   (otherwise it belongs to a later slot and would just duplicate it)
+// - a genuine shift only: if the range math thinks the nominal time is
+//   already fine while the caller's own check said blocked (e.g. a
+//   default weekly assignment with no lesson record yet, which the
+//   range functions can't see), the disagreement means we should NOT
+//   quietly un-block it — return null and stay blocked
+// - the room must fit the FULL duration from the shifted start, and the
+//   teacher (when given) must be free for that full range too
+function resolveShiftedBookableTime(date, nominalTime, durationMinutes, teacherName, excludeLessonId){
+  if(!date || !nominalTime) return null;
+  const shifted=nextRoomBookableTime(date, nominalTime, durationMinutes);
+  if(!shifted) return null;
+  if(timeToMinutes(shifted)<=timeToMinutes(nominalTime)) return null; // not a genuine shift
+  if(timeToMinutes(shifted)>=timeToMinutes(nominalTime)+SESSION_DURATION_MINUTES) return null; // outside this slot's own window
+  if(teacherName && isTeacherBusyDuringRange(teacherName, date, shifted, durationMinutes, excludeLessonId)) return null;
+  return shifted;
 }
 
 // --- Cascade: resolving a makeup automatically clears the original missed lesson ---
@@ -8863,8 +9049,15 @@ function updateMakeupSeparateDaySlots(missedLessonId){
   }
 
   timeEl.innerHTML=slots.map(t=>{
-    const roomFull=isRoomFullDuringRange(date,t,SESSION_DURATION_MINUTES,null);
     const teacherBusy=isTeacherBusyDuringRange(teacherName,date,t,SESSION_DURATION_MINUTES,null);
+    const roomFull=!teacherBusy && isRoomFullDuringRange(date,t,SESSION_DURATION_MINUTES,null);
+    if(roomFull){
+      // A room may genuinely free partway through this slot (e.g. a
+      // practice session ending mid-slot) — offer that shifted start as
+      // a real, bookable option instead of a dead "Rooms Full" entry.
+      const shifted=resolveShiftedBookableTime(date, t, SESSION_DURATION_MINUTES, teacherName, null);
+      if(shifted) return `<option value="${shifted}">${formatTime12h(shifted)} (room frees then)</option>`;
+    }
     const blocked=roomFull||teacherBusy;
     const reason=teacherBusy?' (Teacher Busy)':(roomFull?' (Rooms Full)':'');
     return `<option value="${t}" ${blocked?'disabled':''}>${formatTime12h(t)}${reason}</option>`;
@@ -8915,7 +9108,7 @@ function confirmDoubleSessionMakeup(missedLessonId){
     renderOverview();
     if(typeof renderReports==='function') renderReports();
     if(typeof syncLessonUpdateToSupabase==='function') syncLessonUpdateToSupabase(target);
-    showToast('Double session booked (90 min, '+formatTime12h(target.time)+'–'+formatTime12h(addSlotMinutes(target.time,GROUP_SESSION_DURATION_MINUTES))+') — resolves automatically once attended');
+    showToast('Double session booked (90 min, '+formatTime12h(target.time)+'–'+formatTime12h(addSlotMinutes(target.time,DOUBLE_SESSION_DURATION_MINUTES))+') — resolves automatically once attended');
     return;
   }
 
@@ -8952,7 +9145,7 @@ function confirmDoubleSessionMakeup(missedLessonId){
     renderOverview();
     if(typeof renderReports==='function') renderReports();
     if(typeof syncLessonToSupabase==='function') syncLessonToSupabase(newLesson);
-    showToast('Double session booked (90 min, '+formatTime12h(time)+'–'+formatTime12h(addSlotMinutes(time,GROUP_SESSION_DURATION_MINUTES))+' on '+formatLedgerDate(date)+') — resolves automatically once attended');
+    showToast('Double session booked (90 min, '+formatTime12h(time)+'–'+formatTime12h(addSlotMinutes(time,DOUBLE_SESSION_DURATION_MINUTES))+' on '+formatLedgerDate(date)+') — resolves automatically once attended');
     return;
   }
 
@@ -9123,8 +9316,7 @@ function isInstrumentBusyAtDateTime(date, time, instrument, excludeLessonId, exc
     if(l.status==='absent_excused' || l.status==='teacher_absent') return false;
     if(excludeLessonId && l.id===excludeLessonId) return false;
     if(!l.time) return false;
-    const lessonStudent=(db.students||[]).find(s=>String(s.id)===String(l.studentId) || s.name===l.student);
-    const duration=(l.isExtendedDuration || isGroupPlan(lessonStudent?.plan)) ? GROUP_SESSION_DURATION_MINUTES : SESSION_DURATION_MINUTES;
+    const duration=getLessonDurationMinutes(l);
     const startMin=timeToMinutes(l.time);
     return candidateMinutes>=startMin && candidateMinutes<startMin+duration;
   }).length;
@@ -9219,8 +9411,7 @@ function getEffectivePracticeSlotsForInstrument(date, instrument){
 
   const bookings=[];
   (db.lessons||[]).filter(l=>l.date===date && l.instrument===instrument && (l.status_record||'active')!=='archived' && l.time).forEach(l=>{
-    const lessonStudent=(db.students||[]).find(s=>String(s.id)===String(l.studentId) || s.name===l.student);
-    const duration=(l.isExtendedDuration || isGroupPlan(lessonStudent?.plan)) ? GROUP_SESSION_DURATION_MINUTES : SESSION_DURATION_MINUTES;
+    const duration=getLessonDurationMinutes(l);
     bookings.push({start:timeToMinutes(l.time), end:timeToMinutes(l.time)+duration});
   });
   (db.practiceSessions||[]).filter(p=>p.date===date && p.instrument===instrument && (p.status_record||'active')!=='archived' && p.status!=='cancelled' && p.time).forEach(p=>{
@@ -9279,6 +9470,14 @@ function updatePracticeSlotOptions(){
     // Range check over the FULL 60-minute practice session — an instant
     // check at the start misses rooms filling up partway through it.
     const roomFull=isRoomFullDuringRange(date,t,PRACTICE_SESSION_DURATION_MINUTES,null);
+    if(roomFull){
+      // A room may genuinely free partway through this slot — offer the
+      // shifted start if the instrument is also clear for that full hour.
+      const shifted=resolveShiftedBookableTime(date, t, PRACTICE_SESSION_DURATION_MINUTES, null, null);
+      if(shifted && !isInstrumentBusyAtDateTime(date, shifted, instrument, null, null)){
+        return `<option value="${shifted}">${formatTime12h(shifted)} (room frees then)</option>`;
+      }
+    }
     const blocked=roomFull;
     const reason=roomFull?' (Rooms Full)':'';
     return `<option value="${t}" ${blocked?'disabled':''}>${formatTime12h(t)}${reason}</option>`;
