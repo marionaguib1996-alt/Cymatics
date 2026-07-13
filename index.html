@@ -280,7 +280,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-4</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-5</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-failure-badge" onclick="showSyncFailurePanel()" style="display:none;cursor:pointer;background:#7a1f1f;color:#ffb3b3;border:1px solid #e06c6c;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:700;margin-right:12px">
@@ -1466,7 +1466,7 @@ function normalizeLessonLog(log,lesson){
 }
 function createLessonLog(student,lesson){
  db.lessonLogs=db.lessonLogs||[];
- db.lessonLogs.push(normalizeLessonLog({
+ const newLog=normalizeLessonLog({
   id:(crypto.randomUUID?crypto.randomUUID():String(Date.now())),
   lessonId:lesson.id,
   studentId:student.public_id||student.id,
@@ -1493,7 +1493,9 @@ function createLessonLog(student,lesson){
   nextLessonFocus:"",
   status:"completed",
   createdAt:new Date().toISOString()
- },lesson));
+ },lesson);
+ db.lessonLogs.push(newLog);
+ return newLog;
 }
 
 
@@ -1678,6 +1680,30 @@ function login(role,user={}){
     renderTeacherWorkspace();
   } else if(role==='student' && user.studentId && typeof lockStudentPortalToOwnRecord==='function'){
     lockStudentPortalToOwnRecord(user.studentId);
+  }
+
+  // Then pull the latest from the cloud so the view opens with current
+  // data, not just whatever happened to be in local storage. Fire and
+  // forget — the local render above already showed something immediately;
+  // this refreshes it in place the moment the download lands.
+  if(typeof autoLoadFromCloud==='function'){
+    Promise.resolve(autoLoadFromCloud())
+      .then(()=>{
+        // autoLoadFromCloud re-renders admin + teacher workspace itself;
+        // the student portal needs its own re-render since it's driven by
+        // a selected record rather than the global renders.
+        if(role==='student'){
+          if(user.studentId && typeof lockStudentPortalToOwnRecord==='function') lockStudentPortalToOwnRecord(user.studentId);
+          else if(typeof renderStudentPortalHomework==='function'){
+            renderStudentPortalHomework();
+            if(typeof renderStudentScheduleView==='function') renderStudentScheduleView();
+            if(typeof renderStudentPortalPayments==='function') renderStudentPortalPayments();
+            if(typeof renderStudentPortalAttendance==='function') renderStudentPortalAttendance();
+            if(typeof renderStudentPortalResources==='function') renderStudentPortalResources();
+          }
+        }
+      })
+      .catch(err=>console.warn('Cloud refresh on login failed:', err.message));
   }
 }
 
@@ -2214,7 +2240,7 @@ function saveEditStudent(id){
  const last_name=document.getElementById('es-last')?.value.trim()||'';
  if(!first_name){showToast('First name is required'); return;}
 
- const oldDay=s.lesson_day, oldTime=s.lessonTime, oldTeacher=s.teacher;
+ const oldDay=s.lesson_day, oldTime=s.lessonTime, oldTeacher=s.teacher, oldPlan=s.plan;
 
  s.first_name=first_name;
  s.last_name=last_name;
@@ -2232,22 +2258,35 @@ function saveEditStudent(id){
  s.dob=dmyToIso(document.getElementById('es-dob')?.value||'');
  s.joined_date=dmyToIso(document.getElementById('es-joined')?.value||'');
 
+ const now=new Date();
+ const todayKey=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');
+
  // If the recurring day/time/teacher changed, the student's future (not-yet-
  // happened) scheduled lessons still reflect the old slot — reschedule them
  // to match, so the calendar and ledger stay consistent with what was just set.
  const scheduleChanged=(oldDay!==s.lesson_day || oldTime!==s.lessonTime || oldTeacher!==s.teacher);
+ const planChanged=(oldPlan!==s.plan);
  let rescheduledCount=0;
- if(scheduleChanged && s.lesson_day && s.lessonTime){
-   const now=new Date();
-   const todayKey=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');
+ let countAdjustMsg='';
+
+ if((scheduleChanged || planChanged) && s.lesson_day && s.lessonTime){
    const futureScheduled=(db.lessons||[]).filter(l=>
      (String(l.studentId)===String(s.id) || l.student===s.name) &&
      l.status==='scheduled' &&
      (l.status_record||'active')!=='archived' &&
      l.date>=todayKey
    );
-   const count=futureScheduled.length;
-   if(count){
+   const existingCount=futureScheduled.length;
+   // When the plan changed, the target number of future lessons is what
+   // the new plan specifies; otherwise keep whatever count already exists
+   // (just moving them to the new slot).
+   const planTarget=getPlanSessionCount(s.plan);
+   const targetCount=planChanged ? (planTarget||existingCount) : existingCount;
+
+   if(existingCount || targetCount){
+     // Remove all existing future scheduled lessons, then re-create exactly
+     // targetCount of them at the (possibly new) slot — this simultaneously
+     // handles a slot move AND a count change in one consistent pass.
      const idsToRemove=new Set(futureScheduled.map(l=>l.id));
      db.lessons=(db.lessons||[]).filter(l=>!idsToRemove.has(l.id));
      idsToRemove.forEach(lid=>{
@@ -2256,8 +2295,13 @@ function saveEditStudent(id){
            .then(({error})=>{ if(error) console.warn('Old scheduled lesson delete failed:', error.message); });
        }
      });
-     const firstDate=nextWeekdayOnOrAfter(todayKey, s.lesson_day);
-     rescheduledCount=scheduleWeeklyLessonsFrom(s, firstDate, count);
+     if(targetCount>0){
+       const firstDate=nextWeekdayOnOrAfter(todayKey, s.lesson_day);
+       rescheduledCount=scheduleWeeklyLessonsFrom(s, firstDate, targetCount);
+     }
+     if(planChanged && targetCount!==existingCount){
+       countAdjustMsg=' — lessons adjusted from '+existingCount+' to '+rescheduledCount+' for the new plan';
+     }
    }
  }
 
@@ -2266,7 +2310,7 @@ function saveEditStudent(id){
  refresh({students:true,lessons:true,overview:true});
  renderDatabase();
  if(window.syncStudentUpdateToSupabase) syncStudentUpdateToSupabase(s);
- showToast(rescheduledCount ? 'Student updated — '+rescheduledCount+' lesson(s) rescheduled to the new slot' : 'Student updated');
+ showToast(countAdjustMsg ? 'Student updated'+countAdjustMsg : (rescheduledCount ? 'Student updated — '+rescheduledCount+' lesson(s) rescheduled to the new slot' : 'Student updated'));
 }
 
 function convertTrial(id){
@@ -2548,10 +2592,12 @@ function addLesson(studentId){
    month:String(date||'').slice(0,7) || currentMonth()
  });
  const lesson=db.lessons[db.lessons.length-1];
-  createLessonLog(s,lesson);
+  const newLog=createLessonLog(s,lesson);
   save();
  renderLessons();
  renderTeachers();
+ if(typeof syncLessonToSupabase==='function') syncLessonToSupabase(lesson);
+ if(newLog && typeof syncLessonLogToSupabase==='function') syncLessonLogToSupabase(newLog);
  showToast('Lesson logged ✓');
 }
 
@@ -4135,6 +4181,14 @@ addStudent=function(){
    linkedPersonId:linkedPersonId
  });
  save(); renderStudents(); renderOverview(); renderDatabase();
+ // Push the new student record itself to the cloud — previously only
+ // their scheduled lessons synced, leaving the student record local-only
+ // (lost on next cloud download, invisible on other devices).
+ const newStudent=db.students[db.students.length-1];
+ if(newStudent){
+   if(typeof addStudentToSupabase==='function') addStudentToSupabase(newStudent);
+   else if(typeof syncStudentUpdateToSupabase==='function') syncStudentUpdateToSupabase(newStudent);
+ }
  if(typeof cancelAddCourseForm==='function') cancelAddCourseForm();
 
  // Reset the form for the next entry
@@ -7810,9 +7864,15 @@ function scheduleWeeklyLessonsFrom(student, firstDate, count){
   return newLessons.length;
 }
 
+// Single source of truth for how many recurring lessons a plan schedules.
+// group/group-trial map to their base equivalents (4 weekly / 1 trial).
+function getPlanSessionCount(plan){
+  const sessionCounts={'trial':1,'group-trial':1,'monthly-4':4,'monthly-5':5,'weekly':1,'group':4,'lesson-1':1,'lesson-2':2,'lesson-3':3};
+  return sessionCounts[plan]||0;
+}
+
 function scheduleMonthlyLessons(student){
-  const sessionCounts={'trial':1,'monthly-4':4,'monthly-5':5,'weekly':1,'lesson-1':1,'lesson-2':2,'lesson-3':3};
-  const count=sessionCounts[student.plan];
+  const count=getPlanSessionCount(student.plan);
   if(!count || !student.lesson_day) return 0;
   const now=new Date();
   const todayKey=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');
@@ -7914,31 +7974,36 @@ function confirmRenewal(id){
   const lastDate=existingDates.length ? existingDates[existingDates.length-1] : todayKey;
 
   let firstNewDate=nextWeekdayStrictlyAfter(lastDate, lessonDay);
-  // A trial conversion should start the recurring schedule in the NEXT
-  // calendar week — i.e. the occurrence of the chosen lesson day in the
-  // week after the current one. The previous "at least 7 days out" rule
-  // overshot by a full week whenever the chosen day fell later in the
-  // week than today (e.g. converting on a Monday with a Wednesday lesson
-  // day: next week's Wednesday is only 9 days out, but the ≥7 rule was
-  // computed in a way that skipped to the week after). Anchoring to the
-  // start of next week and taking the first matching day from there is
-  // exact. Not applied to a normal renewal.
+  // A trial conversion should start the recurring schedule the week AFTER
+  // the trial — i.e. one week on from the trial lesson, on the chosen
+  // lesson day. Anchoring on the trial lesson's OWN date (lastDate) rather
+  // than on "today" is what makes this correct regardless of when the
+  // conversion is actually performed: converting the trial three days
+  // later, or across a week boundary, must not push the first real lesson
+  // an extra week out. (The previous version anchored on today's week,
+  // which is exactly why a trial on Friday could land its first lesson two
+  // Fridays later instead of the next one.) Not applied to a normal
+  // renewal, where "right after the last lesson" is already correct.
   if(wasTrial){
-    // Start of THIS week (Monday) in UTC, then + 7 days = next Monday.
-    const t=parseDateUTC(todayKey);
-    const dow=t.getUTCDay(); // 0=Sun..6=Sat
-    const daysSinceMonday=(dow+6)%7; // Mon->0, Sun->6
-    const nextWeekMonday=new Date(t);
-    nextWeekMonday.setUTCDate(nextWeekMonday.getUTCDate()-daysSinceMonday+7);
-    const nextWeekMondayKey=nextWeekMonday.toISOString().slice(0,10);
-    // First occurrence of lessonDay on or after next week's Monday.
-    const idx=WEEKDAY_NAMES.indexOf(lessonDay);
-    if(idx>=0){
-      const target=new Date(nextWeekMonday);
-      const md=target.getUTCDay();
-      const fwd=(idx-md+7)%7; // 0..6 forward to the chosen weekday
-      target.setUTCDate(target.getUTCDate()+fwd);
-      firstNewDate=target.toISOString().slice(0,10);
+    const anchor=parseDateUTC(lastDate);
+    if(anchor){
+      // One week on from the trial lesson...
+      const oneWeekOn=new Date(anchor);
+      oneWeekOn.setUTCDate(oneWeekOn.getUTCDate()+7);
+      // ...then snap to the chosen lesson day within that week (forward
+      // from that point, so a different chosen day than the trial's own
+      // still lands in the correct week).
+      const idx=WEEKDAY_NAMES.indexOf(lessonDay);
+      if(idx>=0){
+        const md=oneWeekOn.getUTCDay();
+        // Search within a 7-day window centered so the same weekday maps
+        // to itself (offset 0) rather than jumping a full week ahead.
+        let fwd=(idx-md+7)%7;
+        oneWeekOn.setUTCDate(oneWeekOn.getUTCDate()+fwd);
+        firstNewDate=oneWeekOn.toISOString().slice(0,10);
+      } else {
+        firstNewDate=oneWeekOn.toISOString().slice(0,10);
+      }
     }
   }
 
