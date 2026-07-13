@@ -280,7 +280,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-2</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-4</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-failure-badge" onclick="showSyncFailurePanel()" style="display:none;cursor:pointer;background:#7a1f1f;color:#ffb3b3;border:1px solid #e06c6c;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:700;margin-right:12px">
@@ -971,6 +971,12 @@ input::placeholder{color:var(--text-dim)}
     <div id="teacher-panel-schedule" class="teacher-panel">
       <div class="card">
         <div class="card-title">Schedule</div>
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap">
+          <button class="btn btn-sm" onclick="shiftTeacherScheduleWeek(-1)">← Previous Week</button>
+          <span id="teacher-schedule-week-label" style="font-weight:600;color:var(--gold-light)"></span>
+          <button class="btn btn-sm" onclick="shiftTeacherScheduleWeek(1)">Next Week →</button>
+          <button class="btn btn-sm" onclick="resetTeacherScheduleWeek()">This Week</button>
+        </div>
         <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">
           <input id="teacher-schedule-search" placeholder="Search students..." oninput="renderTeacherWorkspace()" style="max-width:240px">
           <label for="teacher-schedule-day-filter" class="visually-hidden">Filter by day</label>
@@ -5499,8 +5505,33 @@ function saveLessonPlan(lessonId){
   const notes=document.getElementById('plan-notes-'+lessonId)?.value||'';
   l.planNotes=notes;
   save();
+  closeModal();
+  if(typeof renderTeacherWorkspace==='function') renderTeacherWorkspace();
   showToast('Lesson plan saved');
   if(typeof syncLessonUpdateToSupabase==='function') syncLessonUpdateToSupabase(l);
+}
+
+// Opens the lesson plan in a proper editor rather than a small box
+// crammed into the list — more room to write, and a clear, deliberate
+// action (open, write, save) instead of an always-visible textarea
+// competing for space with everything else on the page.
+function openLessonPlanEditor(lessonId){
+  const l=(db.lessons||[]).find(x=>x.id===lessonId);
+  if(!l){ showToast('Lesson not found.'); return; }
+  const studentName=l.student||'Student';
+  const data=(typeof getTeacherWorkspaceData==='function') ? getTeacherWorkspaceData() : {allLogs:[]};
+  const studentLogsForThis=(data.allLogs||[]).filter(log=>(log.studentName||'')===studentName);
+  const suggestedGoal=studentLogsForThis.find(log=>log.nextLessonGoal)?.nextLessonGoal||'';
+  const currentPlan=l.planNotes||'';
+
+  openModal('Lesson Plan — '+escapeHtml(studentName), `
+    <p style="color:var(--text-muted);margin-bottom:14px">
+      ${escapeHtml(formatDateDMY(lessonDateKey(l.date)))} at ${escapeHtml(formatTime12h(l.time||''))} · ${escapeHtml(l.instrument||'')}
+    </p>
+    ${suggestedGoal && !currentPlan.trim() ? `<p style="color:var(--text-muted);font-size:13px;margin-bottom:10px">💡 Suggested from last session: ${escapeHtml(suggestedGoal)}</p>` : ''}
+    <textarea id="plan-notes-${l.id}" placeholder="What to cover, pieces to work on, goals for this session..." style="min-height:220px;width:100%">${escapeHtml(currentPlan)}</textarea>
+    <div style="text-align:right;margin-top:14px"><button class="btn btn-gold" onclick="saveLessonPlan(${l.id})">Save Plan</button></div>
+  `);
 }
 
 async function syncLessonUpdateToSupabase(lesson){
@@ -6476,6 +6507,37 @@ function teacherPlanBadgeText(plan){
   return '';
 }
 
+// Proper styled badge pills (matching the app's existing status-badge
+// look — rounded, colored border/text, dark background) rather than
+// emoji. Group Trial shows both badges together.
+function teacherPlanBadgesHtml(plan){
+  let html='';
+  if(plan==='group' || plan==='group-trial') html+='<span class="badge badge-purple">Group</span> ';
+  if(plan==='trial' || plan==='group-trial') html+='<span class="badge badge-blue">Trial</span>';
+  return html.trim();
+}
+
+// Week navigation for the teacher's own Schedule tab — same
+// Friday-anchored convention as the admin's Attendance Ledger, kept in
+// its own separate variable so navigating one doesn't move the other.
+let teacherScheduleWeekAnchor=null;
+
+function initTeacherScheduleWeek(){
+  if(teacherScheduleWeekAnchor) return;
+  teacherScheduleWeekAnchor=getFridayWeekStart(getLocalTodayKey());
+}
+
+function shiftTeacherScheduleWeek(delta){
+  initTeacherScheduleWeek();
+  teacherScheduleWeekAnchor=addDaysToDateStringLocal(teacherScheduleWeekAnchor, delta*7);
+  renderTeacherWorkspace();
+}
+
+function resetTeacherScheduleWeek(){
+  teacherScheduleWeekAnchor=getFridayWeekStart(getLocalTodayKey());
+  renderTeacherWorkspace();
+}
+
 function isUpcomingLesson(lesson){
   const date=lessonDateKey(lesson.date||lesson.lesson_date);
   // No status exclusion — a teacher's own schedule should show their
@@ -6795,14 +6857,18 @@ function renderTeacherWorkspace(){
       if(aAbsent!==bAbsent) return aAbsent ? 1 : -1;
       return (a.time||'').localeCompare(b.time||'');
     }) : [];
-    const preview=nextDayLessons.map(l=>`
+    const preview=nextDayLessons.map(l=>{
+      const matchedStudent=(db.students||[]).find(s=>String(s.id)===String(l.studentId) || s.name===(l.student_name||l.student));
+      const planBadges=teacherPlanBadgesHtml(matchedStudent?.plan);
+      return `
       <div class="teacher-row">
         <div>
-          <div class="teacher-row-title">${escapeHtml(l.student_name||l.student||'Student')}</div>
+          <div class="teacher-row-title">${escapeHtml(l.student_name||l.student||'Student')}${planBadges?' '+planBadges:''}</div>
           <div class="teacher-row-meta">${l.time?escapeHtml(formatTime12h(l.time))+' · ':''} ${escapeHtml(l.instrument||'')} · ${escapeHtml(l.status||'scheduled')}</div>
         </div>
         <span class="badge badge-blue" style="font-size:10px">${escapeHtml(l.teacher||l.teacherName||'')}</span>
-      </div>`);
+      </div>`;
+    });
     const heading=nextDayDate?`<div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;font-weight:600">${formatLedgerDate(nextDayDate)}</div>`:'';
     schedulePreview.innerHTML=heading+renderTeacherRows(preview,'No upcoming lessons.');
   }
@@ -6828,8 +6894,8 @@ function renderTeacherWorkspace(){
     const rows=filteredStudents.map(s=>`
       <div class="teacher-row">
         <div>
-          <div class="teacher-row-title">${escapeHtml(s.name||((s.first_name||'')+' '+(s.last_name||'')).trim()||'Student')}</div>
-          <div class="teacher-row-meta">${escapeHtml(s.instrument||'No instrument')} - ${escapeHtml(s.lesson_day||'No day set')}${teacherPlanBadgeText(s.plan)?' - '+escapeHtml(teacherPlanBadgeText(s.plan)):''}</div>
+          <div class="teacher-row-title">${escapeHtml(s.name||((s.first_name||'')+' '+(s.last_name||'')).trim()||'Student')}${teacherPlanBadgesHtml(s.plan)?' '+teacherPlanBadgesHtml(s.plan):''}</div>
+          <div class="teacher-row-meta">${escapeHtml(s.instrument||'No instrument')} - ${escapeHtml(s.lesson_day||'No day set')}</div>
         </div>
         <button class="btn btn-sm btn-gold" onclick="openTeacherStudentWorkspace('${jsString(s.id)}')">Open</button>
       </div>`);
@@ -6838,9 +6904,25 @@ function renderTeacherWorkspace(){
 
   const scheduleList=document.getElementById('teacher-schedule-list');
   if(scheduleList){
+    initTeacherScheduleWeek();
+    const weekStart=teacherScheduleWeekAnchor;
+    const weekEnd=addDaysToDateStringLocal(weekStart,6);
+    const weekLabelEl=document.getElementById('teacher-schedule-week-label');
+    if(weekLabelEl){
+      const fmt=(typeof formatLedgerDate==='function') ? formatLedgerDate : (d)=>d;
+      weekLabelEl.textContent=fmt(weekStart)+' – '+fmt(weekEnd);
+    }
+
     const scheduleSearch=(document.getElementById('teacher-schedule-search')||{}).value?.toLowerCase()||'';
     const scheduleDayFilter=document.getElementById('teacher-schedule-day-filter')?.value||'';
-    const filteredSchedule=data.upcomingLessons
+    // Whole week, not just "upcoming" — matches the admin Ledger's own
+    // behavior of letting you navigate to past weeks too, not just what's
+    // still ahead.
+    const filteredSchedule=data.allLessons
+      .filter(l=>{
+        const d=lessonDateKey(l.date||l.lesson_date);
+        return d && d>=weekStart && d<=weekEnd;
+      })
       .filter(l=>!scheduleSearch || (l.student_name||l.student||'').toLowerCase().includes(scheduleSearch))
       .filter(l=>{
         if(!scheduleDayFilter) return true;
@@ -6848,9 +6930,7 @@ function renderTeacherWorkspace(){
         return d && WEEKDAY_NAMES[d.getUTCDay()]===scheduleDayFilter;
       });
 
-    // Group by date, then sort each day's lessons by time — upcomingLessons
-    // is already sorted date-first, but multiple same-day lessons weren't
-    // guaranteed to be in time order.
+    // Group by date, then sort each day's lessons by time.
     const byDate={};
     filteredSchedule.forEach(l=>{
       const dateKey=lessonDateKey(l.date||l.lesson_date);
@@ -6895,12 +6975,14 @@ function renderTeacherWorkspace(){
         const makeupBadge=(l.makeupForLessonId && !l.isDoubleSession) ? ' <span class="badge badge-purple" title="This session is a makeup for a previously missed lesson">🔁 Makeup</span>' : '';
         const doubleBadge=l.isDoubleSession ? ' <span class="badge badge-purple" title="Absorbs a missed lesson as a double session">Double Session</span>' : '';
         const notesBadge=l.notes ? ` <span class="badge badge-purple" title="${escapeAttr(l.notes)}">📝</span>` : '';
+        const matchedStudent=(db.students||[]).find(s=>String(s.id)===String(l.studentId) || s.name===(l.student_name||l.student));
+        const planBadges=teacherPlanBadgesHtml(matchedStudent?.plan);
         return `
         <div class="teacher-row">
           <div style="display:flex;align-items:center;gap:12px">
             <div style="min-width:70px;text-align:center;background:var(--surface2,#242220);border-radius:6px;padding:6px 4px;font-weight:700;font-size:13px;color:var(--gold-light,#e2c47a)">${escapeHtml(formatTime12h(l.time||''))}</div>
             <div>
-              <div class="teacher-row-title">${escapeHtml(l.student_name||l.student||'Student')}</div>
+              <div class="teacher-row-title">${escapeHtml(l.student_name||l.student||'Student')}${planBadges?' '+planBadges:''}</div>
               <div class="teacher-row-meta">${escapeHtml(l.instrument||'')}</div>
             </div>
           </div>
@@ -6920,7 +7002,7 @@ function renderTeacherWorkspace(){
         </div>`;
     });
 
-    scheduleList.innerHTML=dayGroups.length ? dayGroups.join('') : teacherEmpty('No upcoming lessons.');
+    scheduleList.innerHTML=dayGroups.length ? dayGroups.join('') : teacherEmpty('No lessons this week.');
   }
 
   const plansList=document.getElementById('teacher-plans-list');
@@ -6958,28 +7040,23 @@ function renderTeacherWorkspace(){
       }
       const rows=lessons.map(l=>{
         const studentName=l.student_name||l.student||'Student';
-        // Suggested starting point when nothing's planned yet — the last
-        // "next lesson goal" recorded for this student from a prior
-        // session, if one exists. Only used as a placeholder/prefill, not
-        // silently substituted — the teacher can clear it if it's stale.
-        const studentLogsForThis=data.allLogs.filter(log=>(log.studentName||'')===studentName);
-        const suggestedGoal=studentLogsForThis.find(log=>log.nextLessonGoal)?.nextLessonGoal||'';
         const currentPlan=l.planNotes||'';
         const hasPlan=!!currentPlan.trim();
+        // A short, single-line preview of the plan so a teacher can tell
+        // at a glance what's already written without opening it — full
+        // editing happens in the dedicated modal editor.
+        const previewText=hasPlan ? (currentPlan.length>90 ? currentPlan.slice(0,90).trim()+'…' : currentPlan) : 'No plan written yet.';
         return `
-        <div class="teacher-row" style="flex-direction:column;align-items:stretch;gap:8px">
-          <div style="display:flex;justify-content:space-between;align-items:center">
-            <div style="display:flex;align-items:center;gap:12px">
-              <div style="min-width:70px;text-align:center;background:var(--surface2,#242220);border-radius:6px;padding:6px 4px;font-weight:700;font-size:13px;color:var(--gold-light,#e2c47a)">${escapeHtml(formatTime12h(l.time||''))}</div>
-              <div>
-                <div class="teacher-row-title">${escapeHtml(studentName)}</div>
-                <div class="teacher-row-meta">${escapeHtml(l.instrument||'')}</div>
-              </div>
+        <div class="teacher-row">
+          <div style="display:flex;align-items:center;gap:12px;flex:1;min-width:0">
+            <div style="min-width:70px;text-align:center;background:var(--surface2,#242220);border-radius:6px;padding:6px 4px;font-weight:700;font-size:13px;color:var(--gold-light,#e2c47a)">${escapeHtml(formatTime12h(l.time||''))}</div>
+            <div style="min-width:0">
+              <div class="teacher-row-title">${escapeHtml(studentName)} <span class="badge ${hasPlan?'badge-green':'badge-amber'}" style="font-size:10px">${hasPlan?'Planned':'Needs Planning'}</span></div>
+              <div class="teacher-row-meta">${escapeHtml(l.instrument||'')}</div>
+              <div style="color:var(--text-muted);font-size:12px;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(previewText)}</div>
             </div>
-            <span class="badge ${hasPlan?'badge-green':'badge-amber'}">${hasPlan?'Planned':'Needs Planning'}</span>
           </div>
-          <textarea id="plan-notes-${l.id}" placeholder="${currentPlan?'':escapeAttr(suggestedGoal ? 'Suggested from last session: '+suggestedGoal : 'No plan yet — add notes on what to cover, pieces to work on, goals for this session...')}" style="min-height:60px">${escapeHtml(currentPlan)}</textarea>
-          <div style="text-align:right"><button class="btn btn-sm btn-gold" onclick="saveLessonPlan(${l.id})">Save Plan</button></div>
+          <button class="btn btn-sm btn-gold" onclick="openLessonPlanEditor(${l.id})">${hasPlan?'✏️ Edit Plan':'+ Write Plan'}</button>
         </div>`;
       });
       return `
