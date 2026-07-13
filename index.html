@@ -84,6 +84,8 @@ body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;min
 
 /* TABLES */
 .table-wrap{overflow-x:auto}
+#page-reports .table-wrap{max-height:360px;overflow-y:auto}
+#page-reports .table-wrap thead th{position:sticky;top:0;z-index:1;background:var(--surface,#1e1c1a)}
 table{width:100%;border-collapse:collapse;font-size:13px}
 th{text-align:left;padding:10px 12px;font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;border-bottom:1px solid var(--border);white-space:nowrap}
 td{padding:10px 12px;border-bottom:1px solid var(--border);color:var(--text);vertical-align:middle}
@@ -97,6 +99,9 @@ tr:hover td{background:rgba(255,255,255,0.02)}
 .badge-amber{background:var(--amber-bg);color:var(--amber-text);border:1px solid rgba(212,160,23,0.2)}
 .badge-blue{background:var(--blue-bg);color:var(--blue-text);border:1px solid rgba(91,155,213,0.2)}
 .badge-purple{background:rgba(139,92,246,0.15);color:#c4b5fd;border:1px solid rgba(139,92,246,0.25)}
+.free-slot-chip{font-family:'Space Mono',monospace;font-size:13px;padding:6px 12px;border-radius:8px;background:var(--surface2,#242220);border:1px solid var(--border);color:var(--text-light,#e8e4d8);cursor:pointer;transition:all 0.12s}
+.free-slot-chip:hover{border-color:var(--gold-light,#e2c47a)}
+.free-slot-chip.selected{background:var(--gold-light,#e2c47a);color:#1a1815;border-color:var(--gold-light,#e2c47a);font-weight:700}
 
 /* FORM */
 .form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:12px}
@@ -280,7 +285,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-8</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-9</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-failure-badge" onclick="showSyncFailurePanel()" style="display:none;cursor:pointer;background:#7a1f1f;color:#ffb3b3;border:1px solid #e06c6c;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:700;margin-right:12px">
@@ -650,9 +655,9 @@ input::placeholder{color:var(--text-dim)}
   <div class="report-section-header">📅 This Month</div>
 
 <div class="card">
-  <div class="card-title">Absences by Teacher <small style="text-transform:none;letter-spacing:normal;font-weight:400;color:var(--text-muted)">— selected month</small></div>
+  <div class="card-title">Teacher Absences <small style="text-transform:none;letter-spacing:normal;font-weight:400;color:var(--text-muted)">— days the teacher was absent, selected month</small></div>
   <div class="table-wrap"><table>
-    <thead><tr><th>Teacher</th><th>Excused</th><th>Absent &amp; Paid</th><th>Total Absences</th></tr></thead>
+    <thead><tr><th>Teacher</th><th>Days Absent</th></tr></thead>
     <tbody id="report-teacher-absences"></tbody>
   </table></div>
 </div>
@@ -2778,10 +2783,12 @@ if(sum){sum.innerHTML=`<div class="metric"><div class="metric-label">Lessons</di
      const owed=isMakeupOwed(l);
      const linkedMakeup=owed ? findMakeupLessonFor(l.id) : null;
      const attendedUnpaid=l.status==='attended' && l.unpaid;
+     const matchedStudent=(db.students||[]).find(s=>String(s.id)===String(l.studentId) || s.name===l.student);
+     const planBadges=typeof teacherPlanBadgesHtml==='function' ? teacherPlanBadgesHtml(matchedStudent?.plan) : '';
      return `
    <tr>
     <td>${formatLedgerDate(l.date)}${l.time?' <span class="badge badge-blue">'+escapeHtml(formatTime12h(l.time))+'</span>':''}${l.isDoubleSession?' <span class="badge badge-purple" title="Absorbs a missed lesson as a double session">Double Session</span>':''}${(l.makeupForLessonId && !l.isDoubleSession)?' <span class="badge badge-purple" title="This session is a makeup for a previously missed lesson">🔁 Makeup Session</span>':''}</td>
-    <td>${escapeHtml(l.student)}</td>
+    <td>${escapeHtml(l.student)}${planBadges?' '+planBadges:''}</td>
     <td>${escapeHtml(l.instrument)}</td>
     <td>${escapeHtml(l.teacher)}</td>
     <td><span class="badge ${
@@ -3315,22 +3322,26 @@ function renderReports(){
    }).join('') || '<tr><td colspan="6">No makeups owed.</td></tr>';
  }
 
- // ── Absences by Teacher (selected month) ──────────────────────────────
+ // ── Teacher Absences (days the teacher was absent, selected month) ─────
  const rta=document.getElementById('report-teacher-absences');
  if(rta){
    const teacherList=(db.teacherProfiles||[]).filter(p=>(p.status||'active')!=='archived');
    const monthLessons=(db.lessons||[]).filter(l=>l.month===month && (l.status_record||'active')!=='archived');
    const rowsHtml=teacherList.map(p=>{
-     const mine=monthLessons.filter(l=>(l.teacher||'').toLowerCase()===(p.name||'').toLowerCase());
-     const excused=mine.filter(l=>l.status==='absent_excused').length;
-     const absentPaid=mine.filter(l=>l.status==='absent_paid').length;
-     const total=excused+absentPaid;
-     return {name:p.name, excused, absentPaid, total};
-   }).filter(r=>r.total>0)
-     .sort((a,b)=>b.total-a.total)
-     .map(r=>`<tr><td>${escapeHtml(r.name)}</td><td>${r.excused}</td><td>${r.absentPaid}</td><td><strong>${r.total}</strong></td></tr>`)
+     // Count DISTINCT DAYS this teacher was marked absent — if several
+     // lessons on the same day were cancelled because the teacher didn't
+     // show, that's one absent day, not several.
+     const absentDays=new Set(
+       monthLessons
+         .filter(l=>(l.teacher||'').toLowerCase()===(p.name||'').toLowerCase() && l.status==='teacher_absent')
+         .map(l=>l.date)
+     ).size;
+     return {name:p.name, absentDays};
+   }).filter(r=>r.absentDays>0)
+     .sort((a,b)=>b.absentDays-a.absentDays)
+     .map(r=>`<tr><td>${escapeHtml(r.name)}</td><td><strong>${r.absentDays}</strong></td></tr>`)
      .join('');
-   rta.innerHTML=rowsHtml || '<tr><td colspan="4">No absences recorded this month.</td></tr>';
+   rta.innerHTML=rowsHtml || '<tr><td colspan="2">No teacher absences recorded this month.</td></tr>';
  }
 
  // ── Lapsed Trials (trial students who never converted to a plan) ──────
@@ -8879,20 +8890,100 @@ function renderFreeSlotsOverview(){
     return;
   }
 
-  // Build the plain-text block (12h times, one per line, day headers).
+  // Build clickable day/time structure. Each time is an individually
+  // selectable chip so the admin can hand-pick a few slots across different
+  // days and copy just those to send to an applying student.
+  const dayBlocks=daysWithSlots.map(dayName=>{
+    const chips=byDay[dayName].map(t24=>{
+      const key=dayName+'|'+t24;
+      const selected=_freeSlotSelection.has(key);
+      return `<button type="button" class="free-slot-chip${selected?' selected':''}" data-slot-key="${escapeAttr(key)}" onclick="toggleFreeSlot('${escapeAttr(key)}')">${escapeHtml(formatTime12h(t24))}</button>`;
+    }).join('');
+    return `
+      <div style="margin-bottom:14px">
+        <div style="font-weight:700;color:var(--gold-light,#e2c47a);margin-bottom:6px">${escapeHtml(dayName)}</div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px">${chips}</div>
+      </div>`;
+  }).join('');
+
+  // Also keep the plain-text of the WHOLE list for the "Copy All" button.
   const lines=[];
   daysWithSlots.forEach(dayName=>{
     lines.push(dayName);
     byDay[dayName].forEach(t24=>lines.push(formatTime12h(t24)));
-    lines.push(''); // blank line between days for readability
+    lines.push('');
   });
-  const plainText=lines.join('\n').trim();
+  const plainTextAll=lines.join('\n').trim();
 
   host.innerHTML=`
-    <div style="display:flex;justify-content:flex-end;margin-bottom:8px">
-      <button class="btn btn-sm btn-gold" onclick="copyFreeSlotsText(this)">📋 Copy</button>
+    <div id="free-slot-selection-bar" style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+      <span id="free-slot-selection-count" style="color:var(--text-muted);font-size:13px"></span>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-sm" onclick="clearFreeSlotSelection()">Clear</button>
+        <button class="btn btn-sm" onclick="copyFreeSlotsText(this)">📋 Copy All</button>
+        <button class="btn btn-sm btn-gold" onclick="copySelectedFreeSlots(this)">📋 Copy Selected</button>
+      </div>
     </div>
-    <pre id="free-slots-plaintext" style="white-space:pre-wrap;font-family:'Space Mono',monospace;background:var(--surface2,#242220);border:1px solid var(--border);border-radius:8px;padding:14px;margin:0;line-height:1.7;color:var(--text-light,#e8e4d8)">${escapeHtml(plainText)}</pre>`;
+    <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px">Tap the times you want to send — pick a few across different days, then Copy Selected.</div>
+    <div id="free-slots-chips">${dayBlocks}</div>
+    <pre id="free-slots-plaintext" style="display:none">${escapeHtml(plainTextAll)}</pre>`;
+  updateFreeSlotSelectionUI();
+}
+
+// Selection of individually-picked free slots (keys are "Day|HH:MM"),
+// held outside the render so a background re-render doesn't lose an
+// in-progress pick.
+let _freeSlotSelection=new Set();
+
+function toggleFreeSlot(key){
+  if(_freeSlotSelection.has(key)) _freeSlotSelection.delete(key);
+  else _freeSlotSelection.add(key);
+  const btn=[...document.querySelectorAll('.free-slot-chip')].find(b=>b.getAttribute('data-slot-key')===key);
+  if(btn) btn.classList.toggle('selected', _freeSlotSelection.has(key));
+  updateFreeSlotSelectionUI();
+}
+
+function clearFreeSlotSelection(){
+  _freeSlotSelection.clear();
+  document.querySelectorAll('.free-slot-chip.selected').forEach(b=>b.classList.remove('selected'));
+  updateFreeSlotSelectionUI();
+}
+
+function updateFreeSlotSelectionUI(){
+  const countEl=document.getElementById('free-slot-selection-count');
+  if(countEl){
+    const n=_freeSlotSelection.size;
+    countEl.textContent = n ? (n+' slot'+(n===1?'':'s')+' selected') : 'No slots selected yet';
+  }
+}
+
+// Builds the copy text from just the selected slots, grouped by day in the
+// same clean day-header format, days and times in chronological order.
+function buildSelectedFreeSlotsText(){
+  const byDay={};
+  _freeSlotSelection.forEach(key=>{
+    const [day,t24]=key.split('|');
+    (byDay[day]=byDay[day]||[]).push(t24);
+  });
+  const lines=[];
+  WEEKDAY_NAMES.forEach(day=>{
+    if(!byDay[day]) return;
+    lines.push(day);
+    byDay[day].sort().forEach(t24=>lines.push(formatTime12h(t24)));
+    lines.push('');
+  });
+  return lines.join('\n').trim();
+}
+
+function copySelectedFreeSlots(btn){
+  if(!_freeSlotSelection.size){ showToast('Tap a few times first, then Copy Selected.'); return; }
+  const text=buildSelectedFreeSlotsText();
+  const done=()=>{ const o=btn.textContent; btn.textContent='✓ Copied'; setTimeout(()=>{ btn.textContent=o; },1500); };
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(done).catch(()=>fallbackCopyText(text, done));
+  } else {
+    fallbackCopyText(text, done);
+  }
 }
 
 function copyFreeSlotsText(btn){
