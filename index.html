@@ -280,7 +280,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-1</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-2</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-failure-badge" onclick="showSyncFailurePanel()" style="display:none;cursor:pointer;background:#7a1f1f;color:#ffb3b3;border:1px solid #e06c6c;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:700;margin-right:12px">
@@ -920,7 +920,7 @@ input::placeholder{color:var(--text-dim)}
         <div id="teacher-workspace-meta" class="teacher-page-meta">Your teaching day at a glance</div>
       </div>
       <div class="teacher-toolbar">
-        <button class="btn" onclick="renderTeacherWorkspace()">Refresh</button>
+        <button class="btn" onclick="teacherRefreshClick(this)">Refresh</button>
         <button class="btn btn-gold" onclick="logout()">Logout</button>
       </div>
     </div>
@@ -971,7 +971,20 @@ input::placeholder{color:var(--text-dim)}
     <div id="teacher-panel-schedule" class="teacher-panel">
       <div class="card">
         <div class="card-title">Schedule</div>
-        <input id="teacher-schedule-search" placeholder="Search students..." oninput="renderTeacherWorkspace()" style="margin-bottom:10px;max-width:240px">
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+          <input id="teacher-schedule-search" placeholder="Search students..." oninput="renderTeacherWorkspace()" style="max-width:240px">
+          <label for="teacher-schedule-day-filter" class="visually-hidden">Filter by day</label>
+          <select id="teacher-schedule-day-filter" onchange="renderTeacherWorkspace()" style="max-width:150px">
+            <option value="">All days</option>
+            <option value="Sunday">Sunday</option>
+            <option value="Monday">Monday</option>
+            <option value="Tuesday">Tuesday</option>
+            <option value="Wednesday">Wednesday</option>
+            <option value="Thursday">Thursday</option>
+            <option value="Friday">Friday</option>
+            <option value="Saturday">Saturday</option>
+          </select>
+        </div>
         <div id="teacher-schedule-list" class="teacher-list" style="max-height:340px;overflow-y:auto"></div>
       </div>
     </div>
@@ -6442,11 +6455,34 @@ function logMonth(log){
   return log.month || String(log.lessonDate||'').slice(0,7) || null;
 }
 
+// Local-timezone "today", not UTC. new Date().toISOString() is always
+// UTC — for a timezone ahead of UTC (Egypt is UTC+2), any time between
+// midnight and 2 AM local still has the UTC date on the PREVIOUS day,
+// making "today" throughout the teacher workspace appear as yesterday
+// during exactly that window. This is what actually returns the
+// person's own calendar day.
+function getLocalTodayKey(){
+  const n=new Date();
+  return n.getFullYear()+'-'+String(n.getMonth()+1).padStart(2,'0')+'-'+String(n.getDate()).padStart(2,'0');
+}
+
+// A teacher needs to know if a session is Group (different format/pacing)
+// or Trial (first-time approach) — not the underlying billing plan,
+// which is admin's concern. Every other regular plan shows nothing here.
+function teacherPlanBadgeText(plan){
+  if(plan==='group') return 'Group Session';
+  if(plan==='group-trial') return 'Group Trial';
+  if(plan==='trial') return 'Trial';
+  return '';
+}
+
 function isUpcomingLesson(lesson){
-  const blocked=['attended','absent_paid','teacher_absent'];
   const date=lessonDateKey(lesson.date||lesson.lesson_date);
-  const status=String(lesson.status||'').trim().toLowerCase();
-  return date && date>=new Date().toISOString().slice(0,10) && !blocked.includes(status);
+  // No status exclusion — a teacher's own schedule should show their
+  // WHOLE day, including lessons already marked attended/absent, not
+  // just ones still pending. Previously excluding 'attended' meant a
+  // lesson already taught earlier today vanished from view entirely.
+  return date && date>=getLocalTodayKey();
 }
 
 function formatDateDMY(dateStr){
@@ -6683,6 +6719,29 @@ function renderStars(rating){
   return '<span class="teacher-rating">'+('★'.repeat(n)+'☆'.repeat(5-n))+'</span>';
 }
 
+// Actually pulls fresh data from the cloud — the naive version of this
+// button just re-rendered whatever was already sitting in local storage,
+// which isn't what "Refresh" means to someone expecting to see changes
+// made elsewhere (by the admin, or on another device).
+async function teacherRefreshClick(btn){
+  const originalText=btn ? btn.textContent : 'Refresh';
+  if(btn){ btn.disabled=true; btn.textContent='Refreshing...'; }
+  try{
+    if(typeof autoLoadFromCloud==='function'){
+      await autoLoadFromCloud(); // internally re-renders the teacher workspace once done
+    } else {
+      renderTeacherWorkspace();
+    }
+    showToast('Refreshed');
+  }catch(err){
+    console.warn('Teacher refresh failed:', err.message);
+    showToast('Could not refresh — check your connection and try again.');
+    renderTeacherWorkspace(); // at least reflect local state even if the cloud pull failed
+  }finally{
+    if(btn){ btn.disabled=false; btn.textContent=originalText; }
+  }
+}
+
 function renderTeacherWorkspace(){
   const view=document.getElementById('teacher-view');
   if(!view) return;
@@ -6699,7 +6758,7 @@ function renderTeacherWorkspace(){
   }
 
   const data=getTeacherWorkspaceData();
-  const todayKey=new Date().toISOString().slice(0,10);
+  const todayKey=getLocalTodayKey();
   const currentMonthKey=todayKey.slice(0,7);
   // "This week" anchored to the same Friday-start convention used
   // elsewhere in the app (the Attendance Ledger's own week boundary).
@@ -6730,7 +6789,12 @@ function renderTeacherWorkspace(){
   if(schedulePreview){
     // Find the earliest date in upcoming lessons (next teaching day)
     const nextDayDate=data.upcomingLessons.length ? lessonDateKey(data.upcomingLessons[0].date||data.upcomingLessons[0].lesson_date) : null;
-    const nextDayLessons=nextDayDate ? data.upcomingLessons.filter(l=>lessonDateKey(l.date||l.lesson_date)===nextDayDate) : [];
+    const isAbsentStatusPreview=l=>['absent_paid','absent_excused','teacher_absent'].includes(String(l.status||''));
+    const nextDayLessons=nextDayDate ? data.upcomingLessons.filter(l=>lessonDateKey(l.date||l.lesson_date)===nextDayDate).sort((a,b)=>{
+      const aAbsent=isAbsentStatusPreview(a), bAbsent=isAbsentStatusPreview(b);
+      if(aAbsent!==bAbsent) return aAbsent ? 1 : -1;
+      return (a.time||'').localeCompare(b.time||'');
+    }) : [];
     const preview=nextDayLessons.map(l=>`
       <div class="teacher-row">
         <div>
@@ -6765,7 +6829,7 @@ function renderTeacherWorkspace(){
       <div class="teacher-row">
         <div>
           <div class="teacher-row-title">${escapeHtml(s.name||((s.first_name||'')+' '+(s.last_name||'')).trim()||'Student')}</div>
-          <div class="teacher-row-meta">${escapeHtml(s.instrument||'No instrument')} - ${escapeHtml(s.lesson_day||'No day set')} - ${escapeHtml(PLAN_LABELS[s.plan]||s.plan||'No plan')}</div>
+          <div class="teacher-row-meta">${escapeHtml(s.instrument||'No instrument')} - ${escapeHtml(s.lesson_day||'No day set')}${teacherPlanBadgeText(s.plan)?' - '+escapeHtml(teacherPlanBadgeText(s.plan)):''}</div>
         </div>
         <button class="btn btn-sm btn-gold" onclick="openTeacherStudentWorkspace('${jsString(s.id)}')">Open</button>
       </div>`);
@@ -6775,7 +6839,14 @@ function renderTeacherWorkspace(){
   const scheduleList=document.getElementById('teacher-schedule-list');
   if(scheduleList){
     const scheduleSearch=(document.getElementById('teacher-schedule-search')||{}).value?.toLowerCase()||'';
-    const filteredSchedule=data.upcomingLessons.filter(l=>!scheduleSearch || (l.student_name||l.student||'').toLowerCase().includes(scheduleSearch));
+    const scheduleDayFilter=document.getElementById('teacher-schedule-day-filter')?.value||'';
+    const filteredSchedule=data.upcomingLessons
+      .filter(l=>!scheduleSearch || (l.student_name||l.student||'').toLowerCase().includes(scheduleSearch))
+      .filter(l=>{
+        if(!scheduleDayFilter) return true;
+        const d=parseDateUTC(lessonDateKey(l.date||l.lesson_date));
+        return d && WEEKDAY_NAMES[d.getUTCDay()]===scheduleDayFilter;
+      });
 
     // Group by date, then sort each day's lessons by time — upcomingLessons
     // is already sorted date-first, but multiple same-day lessons weren't
@@ -6799,7 +6870,7 @@ function renderTeacherWorkspace(){
       return (a.time||'').localeCompare(b.time||'');
     }));
 
-    const todayKey=new Date().toISOString().slice(0,10);
+    const todayKey=getLocalTodayKey();
     const tomorrowKey=addDaysToDateString(todayKey,1);
 
     const dayGroups=dateKeys.map(dateKey=>{
@@ -6834,7 +6905,6 @@ function renderTeacherWorkspace(){
             </div>
           </div>
           <div style="text-align:right">
-            ${l.status==='scheduled' ? `<button class="btn btn-sm" style="padding:2px 8px;font-size:11px;margin-right:4px" onclick="sendLessonReminder(${l.id})" title="Opens WhatsApp with a quick 'waiting for you' nudge">📱</button>` : ''}
             <span class="badge ${statusClass}">${escapeHtml(statusText)}</span>${makeupBadge}${doubleBadge}${notesBadge}
           </div>
         </div>`;
@@ -6856,30 +6926,73 @@ function renderTeacherWorkspace(){
   const plansList=document.getElementById('teacher-plans-list');
   if(plansList){
     const plansSearch=(document.getElementById('teacher-plans-search')||{}).value?.toLowerCase()||'';
-    const filteredPlans=data.upcomingLessons.filter(l=>!plansSearch || (l.student_name||l.student||'').toLowerCase().includes(plansSearch));
+    // Only genuinely upcoming (not yet happened) lessons — planning notes
+    // for a lesson already taught, excused, or missed doesn't make sense.
+    const filteredPlans=data.upcomingLessons
+      .filter(l=>String(l.status||'scheduled')==='scheduled')
+      .filter(l=>!plansSearch || (l.student_name||l.student||'').toLowerCase().includes(plansSearch));
 
-    const rows=filteredPlans.map(l=>{
-      const studentName=l.student_name||l.student||'Student';
-      // Suggested starting point when nothing's planned yet — the last
-      // "next lesson goal" recorded for this student from a prior
-      // session, if one exists. Only used as a placeholder/prefill, not
-      // silently substituted — the teacher can clear it if it's stale.
-      const studentLogsForThis=data.allLogs.filter(log=>(log.studentName||'')===studentName);
-      const suggestedGoal=studentLogsForThis.find(log=>log.nextLessonGoal)?.nextLessonGoal||'';
-      const currentPlan=l.planNotes||'';
-      return `
-      <div class="teacher-row" style="flex-direction:column;align-items:stretch;gap:8px">
-        <div style="display:flex;justify-content:space-between;align-items:center">
-          <div>
-            <div class="teacher-row-title">${escapeHtml(studentName)}</div>
-            <div class="teacher-row-meta">${escapeHtml(l.instrument||'')} — ${escapeHtml(formatDateDMY(lessonDateKey(l.date||l.lesson_date)))} at ${escapeHtml(formatTime12h(l.time||''))}</div>
-          </div>
-        </div>
-        <textarea id="plan-notes-${l.id}" placeholder="${currentPlan?'':escapeAttr(suggestedGoal ? 'Suggested from last session: '+suggestedGoal : 'No plan yet — add notes on what to cover, pieces to work on, goals for this session...')}" style="min-height:60px">${escapeHtml(currentPlan)}</textarea>
-        <div style="text-align:right"><button class="btn btn-sm btn-gold" onclick="saveLessonPlan(${l.id})">Save Plan</button></div>
-      </div>`;
+    // Grouped by day and sorted by time within each day — matches the
+    // Schedule tab's own visual pattern, so a teacher planning their week
+    // sees it organized the same way they see their actual schedule.
+    const byDate={};
+    filteredPlans.forEach(l=>{
+      const dateKey=lessonDateKey(l.date||l.lesson_date);
+      if(!byDate[dateKey]) byDate[dateKey]=[];
+      byDate[dateKey].push(l);
     });
-    plansList.innerHTML=renderTeacherRows(rows,'No upcoming lessons to plan for.');
+    const dateKeys=Object.keys(byDate).sort();
+    Object.values(byDate).forEach(list=>list.sort((a,b)=>(a.time||'').localeCompare(b.time||'')));
+
+    const planTodayKey=getLocalTodayKey();
+    const planTomorrowKey=addDaysToDateString(planTodayKey,1);
+
+    const dayGroups=dateKeys.map(dateKey=>{
+      const lessons=byDate[dateKey];
+      let dayLabel;
+      if(dateKey===planTodayKey) dayLabel='Today';
+      else if(dateKey===planTomorrowKey) dayLabel='Tomorrow';
+      else {
+        const d=parseDateUTC(dateKey);
+        dayLabel=d ? WEEKDAY_NAMES[d.getUTCDay()] : '';
+      }
+      const rows=lessons.map(l=>{
+        const studentName=l.student_name||l.student||'Student';
+        // Suggested starting point when nothing's planned yet — the last
+        // "next lesson goal" recorded for this student from a prior
+        // session, if one exists. Only used as a placeholder/prefill, not
+        // silently substituted — the teacher can clear it if it's stale.
+        const studentLogsForThis=data.allLogs.filter(log=>(log.studentName||'')===studentName);
+        const suggestedGoal=studentLogsForThis.find(log=>log.nextLessonGoal)?.nextLessonGoal||'';
+        const currentPlan=l.planNotes||'';
+        const hasPlan=!!currentPlan.trim();
+        return `
+        <div class="teacher-row" style="flex-direction:column;align-items:stretch;gap:8px">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <div style="display:flex;align-items:center;gap:12px">
+              <div style="min-width:70px;text-align:center;background:var(--surface2,#242220);border-radius:6px;padding:6px 4px;font-weight:700;font-size:13px;color:var(--gold-light,#e2c47a)">${escapeHtml(formatTime12h(l.time||''))}</div>
+              <div>
+                <div class="teacher-row-title">${escapeHtml(studentName)}</div>
+                <div class="teacher-row-meta">${escapeHtml(l.instrument||'')}</div>
+              </div>
+            </div>
+            <span class="badge ${hasPlan?'badge-green':'badge-amber'}">${hasPlan?'Planned':'Needs Planning'}</span>
+          </div>
+          <textarea id="plan-notes-${l.id}" placeholder="${currentPlan?'':escapeAttr(suggestedGoal ? 'Suggested from last session: '+suggestedGoal : 'No plan yet — add notes on what to cover, pieces to work on, goals for this session...')}" style="min-height:60px">${escapeHtml(currentPlan)}</textarea>
+          <div style="text-align:right"><button class="btn btn-sm btn-gold" onclick="saveLessonPlan(${l.id})">Save Plan</button></div>
+        </div>`;
+      });
+      return `
+        <div style="margin-bottom:16px">
+          <div style="font-size:12px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;color:var(--text-muted);padding:6px 2px;border-bottom:1px solid var(--border);margin-bottom:6px">
+            ${escapeHtml(dayLabel)}${dayLabel!=='Today' && dayLabel!=='Tomorrow' ? ', '+escapeHtml(formatDateDMY(dateKey)) : ' — '+escapeHtml(formatDateDMY(dateKey))}
+            <span style="font-weight:400;color:var(--text-muted);float:right">${lessons.length} lesson${lessons.length===1?'':'s'}</span>
+          </div>
+          ${rows.join('')}
+        </div>`;
+    });
+
+    plansList.innerHTML=dayGroups.length ? dayGroups.join('') : teacherEmpty('No upcoming lessons to plan for.');
   }
 
   const logsList=document.getElementById('teacher-lesson-logs-list');
@@ -7046,6 +7159,21 @@ function saveTeacherLessonLog(logId){
   save();
   closeModal();
   renderTeacherWorkspace();
+  // If this log's student's drill-down is the one currently open, refresh
+  // it too — renderTeacherWorkspace() only re-renders the top-level list,
+  // not this separate, independently-populated panel.
+  const detailHost=document.getElementById('teacher-logs-student-detail');
+  if(detailHost && log.studentName && detailHost.innerHTML.includes(escapeHtml(log.studentName)+' — Session Logs')){
+    openTeacherLogsForStudent(log.studentName);
+  }
+  // The My Students drill-down shows lesson-log-derived stats too
+  // (Attended count, homework history, performance timeline) — refresh
+  // it as well if it's open for this same student.
+  const studentHost=document.getElementById('teacher-student-workspace');
+  const openStudentId=studentHost?.getAttribute('data-open-student-id');
+  if(openStudentId && (openStudentId===String(log.studentId) || (db.students||[]).find(s=>String(s.id)===openStudentId)?.name===log.studentName)){
+    openTeacherStudentWorkspace(openStudentId);
+  }
    syncLessonLogToSupabase(log);
   showToast('Lesson log saved');
 }
@@ -7084,6 +7212,7 @@ function openTeacherStudentWorkspace(studentId){
   const teacherAbsent=studentLogs.filter(l=>l.attendance==='teacher_absent').length;
   const homeworkHistory=studentLogs.filter(l=>l.homework);
   const currentGoal=studentLogs.find(l=>l.nextLessonGoal)?.nextLessonGoal || 'No current goal set.';
+  host.setAttribute('data-open-student-id', String(student.id));
   host.innerHTML=`
     <div class="card">
       <div class="teacher-student-header">
