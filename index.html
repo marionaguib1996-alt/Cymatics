@@ -280,7 +280,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-6</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-8</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-failure-badge" onclick="showSyncFailurePanel()" style="display:none;cursor:pointer;background:#7a1f1f;color:#ffb3b3;border:1px solid #e06c6c;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:700;margin-right:12px">
@@ -650,6 +650,27 @@ input::placeholder{color:var(--text-dim)}
   <div class="report-section-header">📅 This Month</div>
 
 <div class="card">
+  <div class="card-title">Absences by Teacher <small style="text-transform:none;letter-spacing:normal;font-weight:400;color:var(--text-muted)">— selected month</small></div>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Teacher</th><th>Excused</th><th>Absent &amp; Paid</th><th>Total Absences</th></tr></thead>
+    <tbody id="report-teacher-absences"></tbody>
+  </table></div>
+</div>
+
+<div class="card">
+  <div class="card-title">Lapsed Trials <small style="text-transform:none;letter-spacing:normal;font-weight:400;color:var(--text-muted)">— trial students who didn't continue with a plan</small></div>
+  <div id="lapsed-trials-summary" style="margin-bottom:12px;color:var(--text-muted)"></div>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Student</th><th>Instrument</th><th>Teacher</th><th>Trial Date</th></tr></thead>
+    <tbody id="report-lapsed-trials"></tbody>
+  </table></div>
+  <div style="margin-top:16px">
+    <div style="font-size:12px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;color:var(--text-muted);margin-bottom:8px">Top 3 Teachers by Lapsed Trials</div>
+    <div id="report-lapsed-trial-teachers"></div>
+  </div>
+</div>
+
+<div class="card">
   <div class="card-title">Attendance Analytics</div>
   <div id="attendance-analytics" class="metric-grid"></div>
 </div>
@@ -928,8 +949,8 @@ input::placeholder{color:var(--text-dim)}
     <div id="teacher-panel-dashboard" class="teacher-panel active">
       <div id="teacher-dashboard">
         <div class="teacher-grid">
-          <div class="metric"><div class="metric-label">Sessions This Week</div><div id="teacher-sessions-week" class="metric-value">0</div></div>
-          <div class="metric green"><div class="metric-label">Sessions This Month</div><div id="teacher-sessions-month" class="metric-value green">0</div></div>
+          <div class="metric"><div class="metric-label">Taught This Week</div><div id="teacher-sessions-week" class="metric-value">0</div></div>
+          <div class="metric green"><div class="metric-label">Taught This Month</div><div id="teacher-sessions-month" class="metric-value green">0</div></div>
           <div class="metric amber"><div class="metric-label">Excused Absences</div><div id="teacher-excused-count" class="metric-value amber">0</div></div>
           <div class="metric red"><div class="metric-label">Makeups Owed</div><div id="teacher-makeups-count" class="metric-value red">0</div></div>
         </div>
@@ -1340,15 +1361,35 @@ function sendPaymentReminder(studentId){
     const dayNumbers=getWeekdayDatesInMonth(month, student.lesson_day);
     const lessonCount=dayNumbers.length;
     const dateList=joinDatesNaturally(dayNumbers.map(ordinalDay));
-    const price=getStudentPlanAmount(student);
+    // Price the ACTUAL number of lessons this month, not the plan's flat
+    // nominal figure — otherwise a month where the student's weekday falls
+    // 5 times (instead of the usual 4) would state "5 lessons" but bill the
+    // 4-lesson price. Derive the per-lesson rate from the plan (its monthly
+    // amount / its standard lesson count) and multiply by the real count.
+    // A custom per-student amount overrides as the flat monthly figure.
+    let price;
+    if(student && student.customAmount!=null && student.customAmount!==''){
+      price=Number(student.customAmount)||0;
+    } else {
+      const planCount=(typeof getPlanSessionCount==='function') ? getPlanSessionCount(student.plan) : 0;
+      const planAmount=PLAN_AMOUNTS[student?.plan]||0;
+      if(planCount>0 && lessonCount>0){
+        price=Math.round((planAmount/planCount)*lessonCount);
+      } else {
+        price=planAmount; // non-count-based plan (e.g. flat group rate)
+      }
+    }
     const firstName=student.first_name||(student.name||'').split(' ')[0]||student.name;
 
+    // Emojis built at runtime from code points — the source stays pure
+    // ASCII so no file-encoding or hosting step can corrupt them.
+    const ePiano=String.fromCodePoint(0x1F3B9), eMic=String.fromCodePoint(0x1F3A4), eSparkle=String.fromCodePoint(0x1F4AB);
     const message='Hello '+firstName+' ! \n'+
-      'Hope you\u2019re having a blast at Cymatics!\n'+
-      'Just a little reminder that your payment for '+monthName+' sessions ('+lessonCount+' lessons on the '+dateList+') is due Today \u{1F3B9}\u{1F3A4}\n'+
-      'It\u2019s '+Math.round(price)+' EGP for the month \u2014 keeping things up to date means you won\u2019t miss a single beat of the fun! \n'+
+      'Hope you\'re having a blast at Cymatics!\n'+
+      'Just a little reminder that your payment for '+monthName+' sessions ('+lessonCount+' lessons on the '+dateList+') is due Today '+ePiano+eMic+'\n'+
+      'It\'s '+Math.round(price)+' EGP for the month - keeping things up to date means you won\'t miss a single beat of the fun! \n'+
       'Instapay : 01277336092 - Mario Naguib\n'+
-      'Can\u2019t wait to see you at the next session! \u{1F4AB}';
+      'Can\'t wait to see you at the next session! '+eSparkle;
 
     const win=window.open('https://wa.me/'+phone+'?text='+encodeURIComponent(message), '_blank');
     if(!win){
@@ -3273,6 +3314,77 @@ function renderReports(){
        <td>${daysRemainingHtml}</td><td>${actionsHtml}</td></tr>`;
    }).join('') || '<tr><td colspan="6">No makeups owed.</td></tr>';
  }
+
+ // ── Absences by Teacher (selected month) ──────────────────────────────
+ const rta=document.getElementById('report-teacher-absences');
+ if(rta){
+   const teacherList=(db.teacherProfiles||[]).filter(p=>(p.status||'active')!=='archived');
+   const monthLessons=(db.lessons||[]).filter(l=>l.month===month && (l.status_record||'active')!=='archived');
+   const rowsHtml=teacherList.map(p=>{
+     const mine=monthLessons.filter(l=>(l.teacher||'').toLowerCase()===(p.name||'').toLowerCase());
+     const excused=mine.filter(l=>l.status==='absent_excused').length;
+     const absentPaid=mine.filter(l=>l.status==='absent_paid').length;
+     const total=excused+absentPaid;
+     return {name:p.name, excused, absentPaid, total};
+   }).filter(r=>r.total>0)
+     .sort((a,b)=>b.total-a.total)
+     .map(r=>`<tr><td>${escapeHtml(r.name)}</td><td>${r.excused}</td><td>${r.absentPaid}</td><td><strong>${r.total}</strong></td></tr>`)
+     .join('');
+   rta.innerHTML=rowsHtml || '<tr><td colspan="4">No absences recorded this month.</td></tr>';
+ }
+
+ // ── Lapsed Trials (trial students who never converted to a plan) ──────
+ // A lapsed trial = a student whose plan is STILL a trial plan (never
+ // converted) AND whose trial lesson has already passed. Converting a
+ // trial changes the plan to a real one, so anyone left on a trial plan
+ // after their trial date didn't continue.
+ const rlt=document.getElementById('report-lapsed-trials');
+ const rltSummary=document.getElementById('lapsed-trials-summary');
+ const rltTeachers=document.getElementById('report-lapsed-trial-teachers');
+ if(rlt){
+   const todayKey=new Date().toISOString().slice(0,10);
+   const lapsed=(db.students||[]).filter(s=>{
+     if((s.status||'active')==='archived') return false;
+     if(s.plan!=='trial' && s.plan!=='group-trial') return false;
+     // Their trial lesson must have already happened.
+     const trialLessons=(db.lessons||[]).filter(l=>
+       (String(l.studentId)===String(s.id) || l.student===s.name) &&
+       (l.status_record||'active')!=='archived' &&
+       (l.date||'')<=todayKey
+     );
+     return trialLessons.length>0;
+   }).map(s=>{
+     const trialLessons=(db.lessons||[]).filter(l=>
+       (String(l.studentId)===String(s.id) || l.student===s.name) &&
+       (l.status_record||'active')!=='archived'
+     ).sort((a,b)=>String(a.date).localeCompare(String(b.date)));
+     return {s, trialDate:trialLessons[0]?.date||''};
+   });
+
+   rlt.innerHTML=lapsed.map(({s,trialDate})=>
+     `<tr><td>${escapeHtml(s.name)}</td><td>${escapeHtml(s.instrument||'')}</td><td>${escapeHtml(s.teacher||'')}</td><td>${trialDate?escapeHtml(formatLedgerDate(trialDate)):'—'}</td></tr>`
+   ).join('') || '<tr><td colspan="4">No lapsed trials — every trial student converted. 🎉</td></tr>';
+
+   if(rltSummary){
+     rltSummary.textContent=lapsed.length
+       ? lapsed.length+' trial student'+(lapsed.length===1?'':'s')+' didn\'t continue with a plan.'
+       : '';
+   }
+
+   if(rltTeachers){
+     const byTeacher={};
+     lapsed.forEach(({s})=>{
+       const t=s.teacher||'(no teacher)';
+       byTeacher[t]=(byTeacher[t]||0)+1;
+     });
+     const top3=Object.entries(byTeacher).sort((a,b)=>b[1]-a[1]).slice(0,3);
+     rltTeachers.innerHTML=top3.length
+       ? top3.map(([name,count],i)=>
+           `<div class="summary-row"><span class="s-label">${['🥇','🥈','🥉'][i]||''} ${escapeHtml(name)}</span><span class="s-val">${count} lapsed trial${count===1?'':'s'}</span></div>`
+         ).join('')
+       : '<div style="color:var(--text-muted)">None.</div>';
+   }
+ }
 }
 
 function downloadCSV(name, rows){
@@ -4315,7 +4427,16 @@ function switchPage(page, btn){
   if(page==='students'){renderStudents();populateTeacherDropdowns(); if(typeof setDefaultJoinedDate==='function') setDefaultJoinedDate();}
   if(page==='teachers')renderTeachers();
   if(page==='lessons')renderLessons();
-  if(page==='calendar' && typeof renderCalendarPage==='function')renderCalendarPage();
+  if(page==='calendar' && typeof renderCalendarPage==='function'){
+    // Default the day selector to today's weekday when opening the tab, so
+    // the admin lands on today's schedule rather than always Sunday.
+    const calDayEl=document.getElementById('cal-day');
+    if(calDayEl){
+      const todayWeekday=WEEKDAY_NAMES[new Date().getDay()];
+      calDayEl.value=todayWeekday;
+    }
+    renderCalendarPage();
+  }
   if(page==='practice' && typeof renderPracticeSessionsPage==='function')renderPracticeSessionsPage();
   if(page==='expenses'){renderExpenses(); if(typeof renderOtherRevenue==='function') renderOtherRevenue();}
   if(page==='reports')renderReports();
@@ -4579,9 +4700,14 @@ async function _autoLoadFromCloudImpl(){
      db.payrollPaid=newPayrollPaid;
    }
 
-   // Lesson logs (homework, performance, teacher notes, next-lesson-goal)
-   if(lessonUpdates && lessonUpdates.length){
-     db.lessonLogs = lessonUpdates.map(row=>({
+   // Lesson logs (homework, performance, teacher notes, next-lesson-goal).
+   // MERGED with local, never wholesale-replaced: a straight replace would
+   // destroy any log saved locally but not yet uploaded (still in the
+   // offline outbox, or a transient sync failure) — the exact cause of a
+   // teacher assigning progress to several students and finding only the
+   // already-synced ones survived after reopening.
+   if(lessonUpdates){
+     const cloudLogs=lessonUpdates.map(row=>({
        id: row.id,
        lessonId: row.lesson_id,
        studentId: row.student_id||'',
@@ -4597,6 +4723,41 @@ async function _autoLoadFromCloudImpl(){
        homeworkStatus: row.homework_status||'',
        homeworkDueDate: row.homework_due_date||''
      }));
+     const cloudById=new Map(cloudLogs.map(l=>[String(l.id), l]));
+     const localLogs=db.lessonLogs||[];
+     const localById=new Map(localLogs.map(l=>[String(l.id), l]));
+
+     // A log "has content" if a teacher actually entered something into it —
+     // used to decide whether a local copy is worth preserving over an
+     // emptier cloud copy that may have synced before editing finished.
+     const hasContent=l=>!!(l && (l.topicCovered || l.teacherNotes || l.lessonNotes || l.nextLessonGoal || l.homework || l.performanceRating));
+
+     const merged=[];
+     const pendingReupload=[];
+     // Start from the union of ids so nothing is dropped from either side.
+     const allIds=new Set([...cloudById.keys(), ...localById.keys()]);
+     allIds.forEach(id=>{
+       const cloud=cloudById.get(id);
+       const local=localById.get(id);
+       if(cloud && !local){ merged.push(cloud); return; }
+       if(local && !cloud){
+         // Present locally, absent from cloud → never synced. Keep it and
+         // re-queue it so it reaches the cloud.
+         merged.push(local);
+         if(hasContent(local)) pendingReupload.push(local);
+         return;
+       }
+       // Present in both: prefer the local copy when it carries content the
+       // cloud copy is missing (local edit that hadn't fully propagated),
+       // otherwise trust the cloud copy as canonical.
+       if(hasContent(local) && !hasContent(cloud)){ merged.push(local); pendingReupload.push(local); }
+       else merged.push(cloud);
+     });
+     db.lessonLogs=merged;
+     // Re-queue any preserved local logs for upload (fire-and-forget).
+     if(pendingReupload.length && typeof syncLessonLogToSupabase==='function'){
+       pendingReupload.forEach(l=>{ try{ syncLessonLogToSupabase(l); }catch(e){} });
+     }
    }
 
    if(teachers && teachers.length){
@@ -4916,6 +5077,22 @@ try{
    // Periodic safety-net flush — catches anything queued from a transient
    // failure without waiting for an 'online' event or a page reload.
    setInterval(()=>{ if(window.supabaseClientV1) flushOutbox(); }, 20000);
+
+   // Periodic background DOWNLOAD for the teacher and student views, so a
+   // change made elsewhere (e.g. the admin marking a lesson attended)
+   // appears on its own without the person hitting refresh. autoLoadFromCloud
+   // re-renders both the teacher workspace and the student portal when it
+   // finishes, so no extra render wiring is needed here.
+   setInterval(()=>{
+     if(!window.supabaseClientV1) return;
+     if(typeof session==='undefined' || !session || !session.loggedIn) return;
+     if(session.role!=='teacher' && session.role!=='student') return; // admin makes the changes; no need to poll
+     if(document.hidden) return; // don't poll a backgrounded tab
+     // Don't yank data out from under someone mid-edit.
+     const modal=document.getElementById('app-modal');
+     if(modal && modal.style.display==='flex') return;
+     if(typeof autoLoadFromCloud==='function') autoLoadFromCloud();
+   }, 20000);
  }
 
  const keepaliveFetch=async(...args)=>{
@@ -6837,6 +7014,18 @@ function switchTeacherPage(page, btn){
   const metaEl=document.getElementById('teacher-workspace-meta');
   if(titleEl) titleEl.textContent=meta.title||page;
   if(metaEl) metaEl.textContent=meta.meta||'';
+
+  // Default the day filter to today's weekday when opening a tab that has
+  // one, so the teacher lands on the current day first rather than an
+  // all-days list they'd have to scroll or filter. Only on open — a manual
+  // change while the tab stays open is preserved.
+  const todayWeekday=(typeof WEEKDAY_NAMES!=='undefined') ? WEEKDAY_NAMES[new Date().getDay()] : '';
+  const dayFilterId={logs:'teacher-logs-day-filter', schedule:'teacher-schedule-day-filter', students:'teacher-students-day-filter'}[page];
+  if(dayFilterId && todayWeekday){
+    const dayEl=document.getElementById(dayFilterId);
+    if(dayEl) dayEl.value=todayWeekday;
+  }
+  if(typeof renderTeacherWorkspace==='function') renderTeacherWorkspace();
 }
 
 function renderStars(rating){
@@ -6892,9 +7081,11 @@ function renderTeacherWorkspace(){
 
   const sessionsThisWeek=data.allLessons.filter(l=>{
     const d=lessonDateKey(l.date||l.lesson_date);
-    return d>=weekStart && d<weekEnd;
+    return d>=weekStart && d<weekEnd && String(l.status||'')==='attended';
   }).length;
-  const sessionsThisMonth=data.allLessons.filter(l=>lessonDateKey(l.date||l.lesson_date).slice(0,7)===currentMonthKey).length;
+  const sessionsThisMonth=data.allLessons.filter(l=>
+    lessonDateKey(l.date||l.lesson_date).slice(0,7)===currentMonthKey && String(l.status||'')==='attended'
+  ).length;
   const excusedCount=data.allLogs.filter(l=>l.attendance==='absent_excused').length;
   const makeupsOwedCount=data.allLogs.filter(l=>{
     const lesson=(db.lessons||[]).find(x=>x.id==l.lessonId);
@@ -6939,8 +7130,8 @@ function renderTeacherWorkspace(){
   const summary=document.getElementById('teacher-dashboard-summary');
   if(summary){
     summary.innerHTML=`
-      <div class="summary-row"><span class="s-label">Sessions this week</span><span class="s-val">${sessionsThisWeek}</span></div>
-      <div class="summary-row"><span class="s-label">Sessions this month</span><span class="s-val green">${sessionsThisMonth}</span></div>
+      <div class="summary-row"><span class="s-label">Taught this week</span><span class="s-val">${sessionsThisWeek}</span></div>
+      <div class="summary-row"><span class="s-label">Taught this month</span><span class="s-val green">${sessionsThisMonth}</span></div>
       <div class="summary-row"><span class="s-label">Excused absences</span><span class="s-val amber">${excusedCount}</span></div>
       <div class="summary-row total"><span class="s-label">Makeups owed</span><span class="s-val red">${makeupsOwedCount}</span></div>`;
   }
@@ -7027,14 +7218,15 @@ function renderTeacherWorkspace(){
       }
       const rows=lessons.map(l=>{
         const status=String(l.status||'scheduled');
+        // Teachers don't need payment status — an attended lesson is just
+        // "Attended", never "Attended (Unpaid)", and no amber unpaid styling.
         const statusClass=
-          l.unpaid?'badge-amber':
           status==='attended'?'badge-green':
           status==='absent_paid'?'badge-red':
           status==='absent_excused'?'badge-amber':
           status==='teacher_absent'?'badge-red':
           status==='scheduled'?'badge-blue':'badge-red';
-        const statusText=l.unpaid?'Attended (Unpaid)':(STATUS_LABELS[status]||status);
+        const statusText=STATUS_LABELS[status]||status;
         const makeupBadge=(l.makeupForLessonId && !l.isDoubleSession) ? ' <span class="badge badge-purple" title="This session is a makeup for a previously missed lesson">🔁 Makeup</span>' : '';
         const doubleBadge=l.isDoubleSession ? ' <span class="badge badge-purple" title="Absorbs a missed lesson as a double session">Double Session</span>' : '';
         const notesBadge=l.notes ? ` <span class="badge badge-purple" title="${escapeAttr(l.notes)}">📝</span>` : '';
@@ -7258,13 +7450,38 @@ function openTeacherLogsForStudent(studentName){
       <button class="btn btn-sm" onclick="openTeacherLessonLogEditor('${jsString(log.id)}')">Edit</button>
     </div>`);
 
+  // The next upcoming (not-yet-happened) scheduled lesson for this student,
+  // shown after the attended history so the teacher can see and prep for
+  // what's next. Only genuinely upcoming, still-scheduled lessons qualify.
+  const todayKey=getLocalTodayKey();
+  const nextLesson=data.allLessons
+    .filter(l=>(l.student_name||l.student||'Student')===studentName)
+    .filter(l=>String(l.status||'')==='scheduled' && lessonDateKey(l.date||l.lesson_date)>=todayKey)
+    .sort((a,b)=>lessonDateKey(a.date||a.lesson_date).localeCompare(lessonDateKey(b.date||b.lesson_date)))[0];
+
+  let nextLessonRow='';
+  if(nextLesson){
+    const planNote=nextLesson.planNotes||'';
+    nextLessonRow=`
+      <div class="teacher-row" style="border-top:2px solid var(--border);margin-top:6px;padding-top:12px">
+        <div>
+          <div class="teacher-row-title">${escapeHtml(formatTeacherLessonDate(nextLesson.date||nextLesson.lesson_date))} <span class="badge badge-blue" style="font-size:10px">Upcoming</span></div>
+          <div class="teacher-row-meta">
+            ${nextLesson.time?escapeHtml(formatTime12h(nextLesson.time))+' · ':''}${escapeHtml(nextLesson.instrument||'')}
+            ${planNote?'<br>Plan: '+escapeHtml(planNote):'<br><span style="color:var(--text-muted)">No plan written yet</span>'}
+          </div>
+        </div>
+        <button class="btn btn-sm btn-gold" onclick="openLessonPlanEditor(${nextLesson.id})">${planNote?'Edit Plan':'Write Plan'}</button>
+      </div>`;
+  }
+
   host.innerHTML=`
     <div class="card">
       <div class="teacher-student-header">
         <div class="card-title">${escapeHtml(studentName)} — Session Logs</div>
         <button class="btn btn-sm" onclick="document.getElementById('teacher-logs-student-detail').innerHTML=''">Close</button>
       </div>
-      <div class="teacher-list">${renderTeacherRows(rows,'No session logs found.')}</div>
+      <div class="teacher-list">${rows.length?rows.join(''):renderTeacherRows([],'No attended sessions yet.')}${nextLessonRow}</div>
     </div>`;
   if(host.scrollIntoView) host.scrollIntoView({behavior:'smooth',block:'start'});
 }
@@ -7350,6 +7567,14 @@ function openTeacherStudentWorkspace(studentId){
   const absentPaid=studentLogs.filter(l=>l.attendance==='absent_paid').length;
   const excused=studentLogs.filter(l=>l.attendance==='absent_excused').length;
   const teacherAbsent=studentLogs.filter(l=>l.attendance==='teacher_absent').length;
+  // "Absent" for the teacher = every absence, however classified (the
+  // payment distinction is admin's concern). Make-ups owed = this student's
+  // lessons still owed a makeup.
+  const absentTotal=absentPaid+excused+teacherAbsent;
+  const makeupsOwed=(db.lessons||[]).filter(l=>
+    (String(l.studentId)===String(student.id) || l.student===student.name) &&
+    (l.status_record||'active')!=='archived' && isMakeupOwed(l)
+  ).length;
   const homeworkHistory=studentLogs.filter(l=>l.homework);
   const currentGoal=studentLogs.find(l=>l.nextLessonGoal)?.nextLessonGoal || 'No current goal set.';
   host.setAttribute('data-open-student-id', String(student.id));
@@ -7371,14 +7596,12 @@ function openTeacherStudentWorkspace(studentId){
       <div class="teacher-section-grid">
         <div>
           <div class="card-title">Student Information</div>
-          <div class="summary-row"><span class="s-label">Teacher</span><span class="s-val">${escapeHtml(student.teacher||'--')}</span></div>
           <div class="summary-row"><span class="s-label">Phone</span><span class="s-val">${escapeHtml(student.phone1||'--')}</span></div>
           <div class="summary-row"><span class="s-label">Email</span><span class="s-val">${escapeHtml(student.email||'--')}</span></div>
           <div class="card-title" style="margin-top:18px">Attendance Summary</div>
           <div class="summary-row"><span class="s-label">Attended</span><span class="s-val green">${attended}</span></div>
-          <div class="summary-row"><span class="s-label">Absent &amp; Paid</span><span class="s-val red">${absentPaid}</span></div>
-          <div class="summary-row"><span class="s-label">Excused</span><span class="s-val amber">${excused}</span></div>
-          <div class="summary-row"><span class="s-label">Teacher Absent</span><span class="s-val red">${teacherAbsent}</span></div>
+          <div class="summary-row"><span class="s-label">Absent</span><span class="s-val red">${absentTotal}</span></div>
+          <div class="summary-row"><span class="s-label">Make-ups Owed</span><span class="s-val amber">${makeupsOwed}</span></div>
           <div class="card-title" style="margin-top:18px">Current Goal</div>
           <div class="teacher-empty" style="text-align:left">${escapeHtml(currentGoal)}</div>
           <div class="card-title" style="margin-top:18px">Skill Level</div>
@@ -8220,60 +8443,6 @@ function getAvailableTimeSlots(teacherName, dayName, excludeStudentId){
 // permanently shadowed by the final definition further below and only
 // risked confusing future debugging, same as happened while investigating
 // the slot-availability bug this replaced.)
-
-// 72-hour auto-archive for unpaid students
-function runAutoArchiveUnpaidStudents(){
-  const now=Date.now();
-  const MS_72H=72*60*60*1000;
-  const month=currentMonth();
-  const todayKey=new Date().toISOString().slice(0,10);
-  let archived=0;
-  (db.students||[]).forEach(s=>{
-    if((s.status||'active')==='archived') return;
-    const paid=!!db.payments[s.id+'_'+month];
-    if(paid) return;
-
-    // Per academy policy: the 72-hour clock starts from the student's LAST SESSION
-    // (their most recent session that has already occurred), not from registration.
-    const pastLessons=(db.lessons||[]).filter(l=>
-      (String(l.studentId)===String(s.id) || l.student===s.name) &&
-      (l.status_record||'active')!=='archived' &&
-      (l.date||'')<=todayKey
-    ).sort((a,b)=>String(b.date).localeCompare(String(a.date)));
-
-    let referenceTime=null;
-    if(pastLessons.length){
-      // Anchor to the end of that session's day, not midnight, to avoid archiving mid-day
-      referenceTime=new Date(pastLessons[0].date+'T23:59:59').getTime();
-    } else if(s.created_at){
-      // No sessions have happened yet (brand-new signup) — fall back to registration time
-      referenceTime=new Date(s.created_at).getTime();
-    }
-    if(referenceTime===null) return;
-
-    const age=now-referenceTime;
-    if(age>MS_72H){
-      s.status='archived';
-      (db.lessons||[]).forEach(l=>{
-        if((String(l.studentId)===String(s.id) || l.student===s.name) && (l.status_record||'active')!=='archived'){
-          l.status_record='archived';
-          l.archivedWithStudent=true;
-        }
-      });
-      archived++;
-    }
-  });
-  if(archived){
-    save();
-    renderStudents(); renderLessons(); renderOverview(); renderDatabase();
-    if(typeof syncStudentUpdateToSupabase==='function'){
-      (db.students||[]).filter(s=>s.status==='archived').forEach(s=>syncStudentUpdateToSupabase(s));
-    }
-    showToast(archived+' student(s) auto-archived for non-payment (72 hours since last session)');
-  }
-}
-
-window.addEventListener('load',()=>{ setTimeout(runAutoArchiveUnpaidStudents, 2500); });
 </script>
 
 <script>
@@ -8339,50 +8508,55 @@ function isRoomFull(dayName, time, excludeStudentId){
 function getAvailableSlotsWithCapacity(teacherName, dayName, excludeStudentId, forDoubleSession){
   const effectiveSlots=getEffectiveTeacherDaySlots(teacherName, dayName, excludeStudentId);
   const targetDate=nextOccurrenceOfWeekday(dayName);
-  const bookingDuration=forDoubleSession ? GROUP_SESSION_DURATION_MINUTES : SESSION_DURATION_MINUTES;
+  // The `forDoubleSession` flag is passed by the student booking dropdowns
+  // as isGroupPlan(plan) — i.e. it really means "this is an extended
+  // (group) booking that prefers a full hour". A group session prefers 60
+  // but can run in a lone 45-minute slot, so its minimum is 45. (A genuine
+  // 90-minute double-session makeup is booked through the separate makeup
+  // flow, not this student-slot path, so it isn't the concern here.)
+  const isExtendedBooking=!!forDoubleSession;
+  const preferredDuration=isExtendedBooking ? GROUP_SESSION_DURATION_MINUTES : SESSION_DURATION_MINUTES;
+  const minDuration=isExtendedBooking ? GROUP_SESSION_MIN_MINUTES : SESSION_DURATION_MINUTES;
   const ownLesson=excludeStudentId ? (db.lessons||[]).find(l=>l.date===targetDate && String(l.studentId)===String(excludeStudentId) && (l.status_record||'active')!=='archived') : null;
+  const exId=ownLesson?.id||null;
 
-  return effectiveSlots
-    .map((slot,i)=>({slot,i}))
-    .filter(({slot})=>{
-      if(slot.occupiedBy) return false;
-      // The grid walk above only sees bookings sitting exactly on the
-      // teacher's cursor positions — an off-grid booking (e.g. a shifted
-      // 5:00 lesson booked earlier) overlaps nominal slots invisibly to
-      // it. The range check catches those, preventing double-booking the
-      // teacher for the overlapping stretch. This ALSO correctly covers
-      // the full 60/90-minute footprint of a Group or double session on
-      // its own — no separate "is the next nominal slot also free" check
-      // is needed: that check is mathematically redundant with this one
-      // (when this slot isn't occupied, "the next nominal slot" is
-      // always exactly slot.time+45, which is exactly what this range
-      // check already tests) — and being redundant, it was also
-      // needlessly excluding the very last slot of the day from Group
-      // availability, since a genuinely last slot has no "next" entry to
-      // check at all, regardless of whether extending past it would
-      // actually be fine.
-      if(isTeacherBusyDuringRange(teacherName, targetDate, slot.time, bookingDuration, ownLesson?.id||null)) return false;
-      return true;
-    })
-    .map(({slot})=>{
-      // Day-based check catches default weekly assignments (which have no
-      // lesson records for the range functions to see); the range check
-      // catches everything the day-based one structurally can't — practice
-      // sessions, off-grid times, and longer bookings overlapping partway
-      // into this slot. Both have to agree the slot is clear.
-      const dayBasedFull=isRoomFull(dayName, slot.time, excludeStudentId);
-      const rangeFull=isRoomFullDuringRange(targetDate, slot.time, bookingDuration, ownLesson?.id||null);
-      const full=dayBasedFull||rangeFull;
-      if(full){
-        // Room-blocked at the nominal start — but a room may genuinely
-        // free partway through the slot (e.g. a practice session ending
-        // 15 minutes in). Offer that shifted start as a real, bookable
-        // option rather than a dead "Rooms Full" entry.
-        const shifted=resolveShiftedBookableTime(targetDate, slot.time, bookingDuration, teacherName, ownLesson?.id||null);
-        if(shifted && !dayBasedFullAt(dayName, shifted, excludeStudentId)) return {time:shifted, full:false, shiftedFrom:slot.time};
-      }
-      return {time:slot.time, full};
-    });
+  // Does a booking of `dur` fit fully (teacher free AND room free) starting
+  // exactly at `t`? Used to test both the preferred and the minimum length.
+  const fitsAt=(t,dur)=> !isTeacherBusyDuringRange(teacherName, targetDate, t, dur, exId)
+    && !isRoomFullDuringRange(targetDate, t, dur, exId)
+    && !dayBasedFullAt(dayName, t, excludeStudentId);
+
+  const results=[];
+  effectiveSlots.forEach(slot=>{
+    if(slot.occupiedBy) return;
+    const nominal=slot.time;
+
+    // 1) Full preferred duration fits at the nominal start — the normal,
+    //    best case.
+    if(!isTeacherBusyDuringRange(teacherName, targetDate, nominal, preferredDuration, exId)){
+      const dayBasedFull=isRoomFull(dayName, nominal, excludeStudentId);
+      const rangeFull=isRoomFullDuringRange(targetDate, nominal, preferredDuration, exId);
+      if(!dayBasedFull && !rangeFull){ results.push({time:nominal, full:false}); return; }
+      // Room blocked at the nominal start but may free partway through —
+      // offer the shifted start if the FULL duration fits from there.
+      const shifted=resolveShiftedBookableTime(targetDate, nominal, preferredDuration, teacherName, exId);
+      if(shifted && !dayBasedFullAt(dayName, shifted, excludeStudentId)){ results.push({time:nominal, full:false, shiftedFrom:nominal, actualStart:shifted}); return; }
+    }
+
+    // 2) Preferred didn't fit, but this booking can shrink to its minimum.
+    //    Offer the slot if at least the minimum fits — either right at the
+    //    nominal time (a 45-min gap before the next lesson), or shifted so
+    //    it ends exactly when the next lesson starts.
+    if(minDuration<preferredDuration){
+      if(fitsAt(nominal, minDuration)){ results.push({time:nominal, full:false, shortWindow:true}); return; }
+      const shiftedMin=resolveShiftedBookableTime(targetDate, nominal, minDuration, teacherName, exId);
+      if(shiftedMin && !dayBasedFullAt(dayName, shiftedMin, excludeStudentId)){ results.push({time:nominal, full:false, shiftedFrom:nominal, actualStart:shiftedMin, shortWindow:true}); return; }
+    }
+
+    // 3) Nothing fits here — show as full/disabled.
+    results.push({time:nominal, full:true});
+  });
+  return results;
 }
 
 // Day-based fullness at an arbitrary (possibly off-grid) time — used to
@@ -8400,9 +8574,14 @@ window.updateStudentTimeSlotOptions=function(){
   if(!timeSel) return;
   const slots=getAvailableSlotsWithCapacity(teacherName, dayName, null, isGroupPlan(plan));
   if(!slots.length){ timeSel.innerHTML='<option value="">No available slots for this day</option>'; return; }
-  timeSel.innerHTML=slots.map(({time,full,shiftedFrom})=>
-    `<option value="${full?'':time}" ${full?'disabled':''}>${formatTime12h(time)}${shiftedFrom?' (room frees then)':''}${full?' (Rooms Full)':''}</option>`
-  ).join('');
+  timeSel.innerHTML=slots.map(({time,full,shiftedFrom,actualStart,shortWindow})=>{
+    const bookValue=full ? '' : (actualStart||time);
+    let label=formatTime12h(actualStart||time);
+    if(actualStart && actualStart!==time) label+=' (room frees then)';
+    else if(shortWindow) label+=' (45 min)';
+    if(full) label+=' (Rooms Full)';
+    return `<option value="${bookValue}" ${full?'disabled':''}>${escapeHtml(label)}</option>`;
+  }).join('');
 };
 
 // Override Edit Student time slot dropdown
@@ -8414,9 +8593,14 @@ window.onEditStudentDayChange=function(studentId){
   if(!timeSel) return;
   const slots=getAvailableSlotsWithCapacity(teacherName, dayName, studentId, isGroupPlan(plan));
   timeSel.innerHTML=slots.length
-    ? slots.map(({time,full,shiftedFrom})=>
-        `<option value="${full?'':time}" ${full?'disabled':''}>${escapeHtml(formatTime12h(time))}${shiftedFrom?' (room frees then)':''}${full?' (Rooms Full)':''}</option>`
-      ).join('')
+    ? slots.map(({time,full,shiftedFrom,actualStart,shortWindow})=>{
+        const bookValue=full ? '' : (actualStart||time);
+        let label=formatTime12h(actualStart||time);
+        if(actualStart && actualStart!==time) label+=' (room frees then)';
+        else if(shortWindow) label+=' (45 min)';
+        if(full) label+=' (Rooms Full)';
+        return `<option value="${bookValue}" ${full?'disabled':''}>${escapeHtml(label)}</option>`;
+      }).join('')
     : '<option value="">No available slots</option>';
 };
 
@@ -8485,6 +8669,14 @@ function timeToMinutes(timeStr){
 const GROUP_SESSION_DURATION_MINUTES=60;
 const PRACTICE_SESSION_DURATION_MINUTES=60;
 const DOUBLE_SESSION_DURATION_MINUTES=90; // makeup "double session": two 45-min sessions in one shot
+
+// A group (or practice) session PREFERS its full hour, but can still run
+// in as little as one standard 45-minute slot when that's all that's free
+// before the next lesson. Offering these shorter windows as bookable is
+// what lets a 45-minute gap — or a slot that ends exactly when the next
+// lesson starts — be selected for a group/practice session, instead of
+// being hidden just because the full hour didn't fit.
+const GROUP_SESSION_MIN_MINUTES=45;
 
 // THE canonical answer to "how long does this lesson actually run" — every
 // capacity, availability, and display computation must use this one
@@ -8661,29 +8853,68 @@ function renderFreeSlotsOverview(){
     return;
   }
 
-  const rows=[];
+  // Aggregate free times per day across all teachers of this instrument,
+  // deduplicated and sorted, into a copy-ready plain-text block:
+  //   Monday
+  //   5:30 PM
+  //   7:00 PM
+  //   Friday
+  //   3:30 PM
+  const byDay={};
   WEEKDAY_NAMES.forEach(dayName=>{
+    const times=new Set();
     teachers.forEach(t=>{
       const hasConfiguredDay=((t.timeSlots||{})[dayName]||[]).length>0;
-      if(!hasConfiguredDay) return; // this teacher simply doesn't work this day at all
-      const freeSlots=getEffectiveTeacherDaySlots(t.name, dayName, null).filter(s=>!s.occupiedBy);
-      if(freeSlots.length){
-        rows.push({dayName, teacher:t.name, times:freeSlots.map(s=>formatTime12h(s.time))});
-      }
+      if(!hasConfiguredDay) return;
+      getEffectiveTeacherDaySlots(t.name, dayName, null)
+        .filter(s=>!s.occupiedBy)
+        .forEach(s=>times.add(s.time)); // store 24h for correct sorting
     });
+    if(times.size) byDay[dayName]=[...times].sort();
   });
 
-  if(!rows.length){
+  const daysWithSlots=WEEKDAY_NAMES.filter(d=>byDay[d]);
+  if(!daysWithSlots.length){
     host.innerHTML='<p style="color:var(--text-muted)">No free slots found for '+escapeHtml(instrument)+' this week — fully booked.</p>';
     return;
   }
 
-  host.innerHTML=`<div class="table-wrap"><table>
-    <thead><tr><th>Day</th><th>Teacher</th><th>Free Time Slots</th></tr></thead>
-    <tbody>
-      ${rows.map(r=>`<tr><td>${escapeHtml(r.dayName)}</td><td>${escapeHtml(r.teacher)}</td><td>${r.times.map(t=>`<span class="badge badge-green" style="margin:2px">${escapeHtml(t)}</span>`).join('')}</td></tr>`).join('')}
-    </tbody>
-  </table></div>`;
+  // Build the plain-text block (12h times, one per line, day headers).
+  const lines=[];
+  daysWithSlots.forEach(dayName=>{
+    lines.push(dayName);
+    byDay[dayName].forEach(t24=>lines.push(formatTime12h(t24)));
+    lines.push(''); // blank line between days for readability
+  });
+  const plainText=lines.join('\n').trim();
+
+  host.innerHTML=`
+    <div style="display:flex;justify-content:flex-end;margin-bottom:8px">
+      <button class="btn btn-sm btn-gold" onclick="copyFreeSlotsText(this)">📋 Copy</button>
+    </div>
+    <pre id="free-slots-plaintext" style="white-space:pre-wrap;font-family:'Space Mono',monospace;background:var(--surface2,#242220);border:1px solid var(--border);border-radius:8px;padding:14px;margin:0;line-height:1.7;color:var(--text-light,#e8e4d8)">${escapeHtml(plainText)}</pre>`;
+}
+
+function copyFreeSlotsText(btn){
+  const pre=document.getElementById('free-slots-plaintext');
+  if(!pre) return;
+  const text=pre.textContent;
+  const done=()=>{ const o=btn.textContent; btn.textContent='✓ Copied'; setTimeout(()=>{ btn.textContent=o; },1500); };
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(done).catch(()=>fallbackCopyText(text, done));
+  } else {
+    fallbackCopyText(text, done);
+  }
+}
+function fallbackCopyText(text, done){
+  try{
+    const ta=document.createElement('textarea');
+    ta.value=text; ta.style.position='fixed'; ta.style.opacity='0';
+    document.body.appendChild(ta); ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    done && done();
+  }catch(e){ showToast('Could not copy automatically — select the text and copy manually.'); }
 }
 
 // ── Calendar drag-and-drop: move a single lesson to a different time ──────
