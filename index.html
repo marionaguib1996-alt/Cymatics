@@ -280,7 +280,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-5</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-6</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-failure-badge" onclick="showSyncFailurePanel()" style="display:none;cursor:pointer;background:#7a1f1f;color:#ffb3b3;border:1px solid #e06c6c;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:700;margin-right:12px">
@@ -1344,11 +1344,11 @@ function sendPaymentReminder(studentId){
     const firstName=student.first_name||(student.name||'').split(' ')[0]||student.name;
 
     const message='Hello '+firstName+' ! \n'+
-      'Hope you\'re having a blast at Cymatics!\n'+
-      'Just a little reminder that your payment for '+monthName+' sessions ('+lessonCount+' lessons on the '+dateList+') is due Today 🎹🎤\n'+
-      'It\'s '+Math.round(price)+' EGP for the month — keeping things up to date means you won\'t miss a single beat of the fun! \n'+
+      'Hope you\u2019re having a blast at Cymatics!\n'+
+      'Just a little reminder that your payment for '+monthName+' sessions ('+lessonCount+' lessons on the '+dateList+') is due Today \u{1F3B9}\u{1F3A4}\n'+
+      'It\u2019s '+Math.round(price)+' EGP for the month \u2014 keeping things up to date means you won\u2019t miss a single beat of the fun! \n'+
       'Instapay : 01277336092 - Mario Naguib\n'+
-      'Can\'t wait to see you at the next session! 💫';
+      'Can\u2019t wait to see you at the next session! \u{1F4AB}';
 
     const win=window.open('https://wa.me/'+phone+'?text='+encodeURIComponent(message), '_blank');
     if(!win){
@@ -6672,7 +6672,16 @@ function openDatePicker(inputId){
 function closeDatePickerOnOutsideClick(e){
   const pop=document.getElementById('date-picker-popover');
   const input=_datePickerTargetId ? document.getElementById(_datePickerTargetId) : null;
-  if(pop && !pop.contains(e.target) && e.target!==input && !(input && input.nextElementSibling===e.target)){
+  if(!pop) return;
+  // Geometric fallback: a click whose coordinates fall within the
+  // popover's visible box counts as "inside" even if e.target was just
+  // detached by an innerHTML re-render (e.g. the month arrows rebuild the
+  // popover, destroying the very button that was clicked — without this,
+  // pop.contains(e.target) would be false and the picker would wrongly
+  // close on every month change).
+  const rect=pop.getBoundingClientRect();
+  const insideBox = e.clientX>=rect.left && e.clientX<=rect.right && e.clientY>=rect.top && e.clientY<=rect.bottom;
+  if(!pop.contains(e.target) && !insideBox && e.target!==input && !(input && input.nextElementSibling===e.target)){
     pop.style.display='none';
     document.removeEventListener('click', closeDatePickerOnOutsideClick);
   }
@@ -6697,9 +6706,9 @@ function renderDatePickerCalendar(year, month){
 
   pop.innerHTML=`
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-      <button type="button" class="btn btn-sm" onclick="changeDatePickerMonth(${year},${month},-1)">‹</button>
+      <button type="button" class="btn btn-sm" onclick="event.stopPropagation();changeDatePickerMonth(${year},${month},-1)">‹</button>
       <strong style="font-size:13px">${monthNames[month]} ${year}</strong>
-      <button type="button" class="btn btn-sm" onclick="changeDatePickerMonth(${year},${month},1)">›</button>
+      <button type="button" class="btn btn-sm" onclick="event.stopPropagation();changeDatePickerMonth(${year},${month},1)">›</button>
     </div>
     <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px;font-size:11px;color:var(--text-muted);text-align:center;margin-bottom:4px">
       <div>Su</div><div>Mo</div><div>Tu</div><div>We</div><div>Th</div><div>Fr</div><div>Sa</div>
