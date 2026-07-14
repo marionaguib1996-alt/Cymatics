@@ -285,9 +285,13 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-9</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-10</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
+    <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
+      <span id="sync-health-dot" style="width:8px;height:8px;border-radius:50%;background:#4caf7d;display:inline-block"></span>
+      <span id="sync-health-text">Synced</span>
+    </div>
     <div id="sync-failure-badge" onclick="showSyncFailurePanel()" style="display:none;cursor:pointer;background:#7a1f1f;color:#ffb3b3;border:1px solid #e06c6c;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:700;margin-right:12px">
       ⚠ <span id="sync-failure-count">0</span> sync issue<span id="sync-failure-plural">s</span>
     </div>
@@ -2144,6 +2148,59 @@ function countUniquePeople(students){
   return count;
 }
 
+// Early-warning health signals for a student — turns the roster into an
+// at-a-glance watchlist. Returns {level:'ok'|'watch'|'risk', reasons:[...]}.
+// 'risk' (red) = needs attention now; 'watch' (amber) = keep an eye on;
+// 'ok' (no dot) = nothing flagged.
+function getStudentHealthFlags(student){
+  const reasons=[];
+  let risk=false;
+  const month=currentMonth();
+  const todayKey=new Date().toISOString().slice(0,10);
+
+  // Frozen students are intentionally paused — don't flag them.
+  if(student.frozen) return {level:'ok', reasons:[]};
+
+  // 1) Payment overdue this month (only meaningful once the student has had
+  //    a lesson this month — a brand-new mid-month signup isn't "overdue").
+  const paid=!!db.payments[student.id+'_'+month];
+  const hadLessonThisMonth=(db.lessons||[]).some(l=>
+    (String(l.studentId)===String(student.id) || l.student===student.name) &&
+    (l.month===month) && (l.date||'')<=todayKey && (l.status_record||'active')!=='archived'
+  );
+  if(!paid && hadLessonThisMonth){ reasons.push('Payment overdue this month'); risk=true; }
+
+  // 2) Make-ups piling up (owed but not yet booked).
+  const makeupsOwed=(db.lessons||[]).filter(l=>
+    (String(l.studentId)===String(student.id) || l.student===student.name) &&
+    (l.status_record||'active')!=='archived' && isMakeupOwed(l)
+  ).length;
+  if(makeupsOwed>=2){ reasons.push(makeupsOwed+' make-ups owed'); risk=true; }
+  else if(makeupsOwed===1){ reasons.push('1 make-up owed'); }
+
+  // 3) Recent absence streak — of this student's last 3 lessons that have
+  //    already happened, 2+ were absences (any kind). A sign of disengagement.
+  const pastLessons=(db.lessons||[]).filter(l=>
+    (String(l.studentId)===String(student.id) || l.student===student.name) &&
+    (l.status_record||'active')!=='archived' && (l.date||'')<=todayKey &&
+    ['attended','absent_paid','absent_excused','teacher_absent'].includes(l.status)
+  ).sort((a,b)=>String(b.date).localeCompare(String(a.date))).slice(0,3);
+  const recentAbsences=pastLessons.filter(l=>l.status==='absent_paid'||l.status==='absent_excused').length;
+  if(pastLessons.length>=3 && recentAbsences>=2){ reasons.push('Absent in '+recentAbsences+' of last 3 lessons'); risk=true; }
+
+  // 4) Stalled trial — still on a trial plan after the trial lesson passed.
+  if((student.plan==='trial'||student.plan==='group-trial')){
+    const trialPassed=(db.lessons||[]).some(l=>
+      (String(l.studentId)===String(student.id) || l.student===student.name) &&
+      (l.date||'')<todayKey && (l.status_record||'active')!=='archived'
+    );
+    if(trialPassed){ reasons.push('Trial ended — not yet converted'); risk=true; }
+  }
+
+  if(!reasons.length) return {level:'ok', reasons:[]};
+  return {level: risk?'risk':'watch', reasons};
+}
+
 function renderStudents(){
   const tb=document.getElementById('students-tbody');
   const month=currentMonth();
@@ -2185,10 +2242,12 @@ function renderStudents(){
     const unpaid=activeStudents.length-paid;
     const weekly=activeStudents.filter(s=>s.plan==='weekly'||s.plan==='trial').length;
     const monthly=activeStudents.length-weekly;
+    const flagged=activeStudents.filter(s=>getStudentHealthFlags(s).level!=='ok').length;
     sum.innerHTML=`<div class="metric"><div class="metric-label">Students</div><div class="metric-value">${countUniquePeople(activeStudents)}</div></div>
     <div class="metric green"><div class="metric-label">Paid</div><div class="metric-value green">${paid}</div></div>
     <div class="metric red"><div class="metric-label">Unpaid</div><div class="metric-value red">${unpaid}</div></div>
-    <div class="metric"><div class="metric-label">Monthly / Weekly</div><div class="metric-value">${monthly}/${weekly}</div></div>`;
+    <div class="metric"><div class="metric-label">Monthly / Weekly</div><div class="metric-value">${monthly}/${weekly}</div></div>
+    <div class="metric amber" title="Students with a health flag — a red or amber dot next to their name. Red = needs attention now (overdue payment, absence streak, make-ups piling up, stalled trial); amber = keep an eye on."><div class="metric-label">Needs Attention</div><div class="metric-value amber">${flagged}</div></div>`;
   }
   if(!students.length){tb.innerHTML='<tr><td colspan="7"><div class="empty"><div class="empty-icon">🎓</div><div class="empty-text">No students yet. Add your first student above.</div></div></td></tr>';return;}
   tb.innerHTML=students.map(s=>{
@@ -2199,8 +2258,11 @@ function renderStudents(){
     const linkedCourses=getLinkedCourses(s);
     const linkedBadge=linkedCourses.length ? ` <span class="badge badge-purple" style="cursor:help" title="Also enrolled in: ${escapeAttr(linkedCourses.map(c=>c.instrument+' with '+c.teacher).join(', '))}">🔗 +${linkedCourses.length}</span>` : '';
     const frozenBadge=s.frozen ? ` <span class="badge badge-blue" style="cursor:help" title="${escapeAttr('Frozen since '+(s.frozenSince?formatDateDMY(s.frozenSince):'—')+(s.frozenReason?': '+s.frozenReason:''))}">❄️ Frozen</span>` : '';
+    const health=getStudentHealthFlags(s);
+    const healthDot=health.level==='ok' ? '' :
+      `<span title="${escapeAttr(health.reasons.join(' · '))}" style="display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:7px;vertical-align:middle;background:${health.level==='risk'?'#e05c5c':'#d4a017'}"></span>`;
     return `<tr>
-      <td><strong>${escapeHtml(s.name)}</strong>${linkedBadge}${frozenBadge}</td>
+      <td>${healthDot}<strong>${escapeHtml(s.name)}</strong>${linkedBadge}${frozenBadge}</td>
       <td>${escapeHtml(s.instrument)||'—'}</td>
       <td>${escapeHtml(s.teacher)||'—'}</td>
       <td>${PLAN_LABELS[s.plan]}</td>
@@ -5084,10 +5146,15 @@ try{
  }
  window.flushOutbox=flushOutbox;
  if(typeof window!=='undefined'){
-   window.addEventListener('online', ()=>{ flushOutbox(); });
+   window.addEventListener('online', ()=>{ flushOutbox(); updateSyncHealthBadge(); });
+   window.addEventListener('offline', ()=>{ updateSyncHealthBadge(); });
    // Periodic safety-net flush — catches anything queued from a transient
    // failure without waiting for an 'online' event or a page reload.
    setInterval(()=>{ if(window.supabaseClientV1) flushOutbox(); }, 20000);
+
+   // Keep the header sync-health badge current. Cheap (reads a localStorage
+   // count and navigator.onLine), so a short interval keeps it feeling live.
+   setInterval(updateSyncHealthBadge, 3000);
 
    // Periodic background DOWNLOAD for the teacher and student views, so a
    // change made elsewhere (e.g. the admin marking a lesson attended)
@@ -5105,6 +5172,43 @@ try{
      if(typeof autoLoadFromCloud==='function') autoLoadFromCloud();
    }, 20000);
  }
+
+// Header sync-health badge: at-a-glance confidence that data is safe.
+// Three states — Offline (no connection), N pending (writes queued and
+// waiting to upload), or Synced (nothing pending, online).
+function updateSyncHealthBadge(){
+  const badge=document.getElementById('sync-health-badge');
+  const dot=document.getElementById('sync-health-dot');
+  const text=document.getElementById('sync-health-text');
+  if(!badge||!dot||!text) return;
+  const online=(typeof navigator==='undefined') || navigator.onLine!==false;
+  let pending=0;
+  try{ pending=(typeof window.getOutboxCount==='function') ? window.getOutboxCount() : 0; }catch(e){ pending=0; }
+
+  if(!online){
+    dot.style.background='#8a8680';
+    text.textContent='Offline';
+    badge.title='No connection — changes are saved locally and will upload when you\'re back online';
+  } else if(pending>0){
+    dot.style.background='#d4a017';
+    text.textContent=pending+' pending';
+    badge.title=pending+' change'+(pending===1?'':'s')+' waiting to upload — click to sync now';
+  } else {
+    dot.style.background='#4caf7d';
+    text.textContent='Synced';
+    badge.title='All changes saved to the cloud — click to refresh from cloud';
+  }
+}
+
+// Clicking the badge forces an immediate flush of pending writes and a
+// fresh download, then refreshes the badge.
+function syncHealthClick(){
+  if(typeof window.flushOutbox==='function') Promise.resolve(window.flushOutbox()).then(()=>{
+    if(typeof autoLoadFromCloud==='function') return autoLoadFromCloud();
+  }).finally(updateSyncHealthBadge);
+  else if(typeof autoLoadFromCloud==='function') Promise.resolve(autoLoadFromCloud()).finally(updateSyncHealthBadge);
+  updateSyncHealthBadge();
+}
 
  const keepaliveFetch=async(...args)=>{
    const [url,options={}]=args;
@@ -6742,13 +6846,6 @@ function getLocalTodayKey(){
 // A teacher needs to know if a session is Group (different format/pacing)
 // or Trial (first-time approach) — not the underlying billing plan,
 // which is admin's concern. Every other regular plan shows nothing here.
-function teacherPlanBadgeText(plan){
-  if(plan==='group') return 'Group Session';
-  if(plan==='group-trial') return 'Group Trial';
-  if(plan==='trial') return 'Trial';
-  return '';
-}
-
 // Proper styled badge pills (matching the app's existing status-badge
 // look — rounded, colored border/text, dark background) rather than
 // emoji. Group Trial shows both badges together.
@@ -6942,12 +7039,6 @@ function teacherEmpty(text){
 function renderTeacherRows(items,emptyText){
   if(!items.length) return teacherEmpty(emptyText);
   return items.join('');
-}
-
-function teacherArray(value){
-  if(Array.isArray(value)) return value;
-  if(!value) return [];
-  return String(value).split(',').map(x=>x.trim()).filter(Boolean);
 }
 
 // Phase 17.1 - Professional Teacher Workspace
@@ -9642,26 +9733,6 @@ function getLessonsAtDateTime(date, time, excludeLessonId){
     const startMin=timeToMinutes(l.time);
     return candidateMinutes>=startMin && candidateMinutes<startMin+duration;
   });
-}
-
-function isTeacherBusyAtDateTime(teacherName, date, time, excludeLessonId){
-  if(!teacherName || !date || !time) return false;
-  return getLessonsAtDateTime(date, time, excludeLessonId).some(l=>
-    (l.teacher||'').toLowerCase()===teacherName.toLowerCase()
-  );
-}
-
-function isRoomFullOnDateTime(date, time, excludeLessonId){
-  if(!date || !time) return false;
-  const candidateMinutes=timeToMinutes(time);
-  const lessonCount=getLessonsAtDateTime(date, time, excludeLessonId).length;
-  const practiceCount=(db.practiceSessions||[]).filter(p=>{
-    if(p.date!==date || (p.status_record||'active')==='archived' || p.status==='cancelled') return false;
-    if(!p.time) return false;
-    const startMin=timeToMinutes(p.time);
-    return candidateMinutes>=startMin && candidateMinutes<startMin+PRACTICE_SESSION_DURATION_MINUTES;
-  }).length;
-  return (lessonCount+practiceCount) >= MAX_SIMULTANEOUS_LESSONS;
 }
 
 // ── Range-aware capacity checking ───────────────────────────────────────
