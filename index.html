@@ -285,7 +285,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-13</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-16</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1121,6 +1121,45 @@ function getStudentPlanAmount(student){
   return PLAN_AMOUNTS[student?.plan]||0;
 }
 
+// Per-lesson rate for WhatsApp message pricing. Group plans bill 750/lesson,
+// everything else 500/lesson. Named plan totals fall out of this rule
+// (monthly-4 x4 = 2000, monthly-5 x5 = 2500, group x4 = 3000, group-trial = 750).
+function whatsAppPerLessonRate(plan){
+  return (plan==='group' || plan==='group-trial') ? 750 : 500;
+}
+
+// Single source of truth for the price shown in WhatsApp messages, based on
+// the REMAINING lesson days in the CURRENT month (the student's regular
+// weekday from today onward) times the per-lesson rate. A custom per-student
+// amount overrides as a flat figure. `planForRate` lets the trial follow-up
+// price at the plan the student would convert to, rather than the trial rate.
+// Returns {price, lessonCount, dateList, monthName, remainingDays}.
+function getWhatsAppLessonPricing(student, planForRate){
+  const plan=planForRate||student?.plan;
+  const rate=whatsAppPerLessonRate(plan);
+  const now=new Date();
+  const month=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
+  const todayDay=now.getDate();
+  let remaining=[];
+  if(student && student.lesson_day){
+    remaining=getWeekdayDatesInMonth(month, student.lesson_day).filter(d=>d>=todayDay);
+  }
+  const lessonCount=remaining.length;
+  let price;
+  if(student && student.customAmount!=null && student.customAmount!==''){
+    price=Number(student.customAmount)||0; // flat custom rate
+  } else {
+    price=lessonCount>0 ? lessonCount*rate : rate; // fall back to one lesson if none remain
+  }
+  return {
+    price: Math.round(price),
+    lessonCount,
+    remainingDays: remaining,
+    dateList: joinDatesNaturally(remaining.map(ordinalDay)),
+    monthName: formatMonthName(month)
+  };
+}
+
 function egp(n){return Number(Math.round(n)).toLocaleString('en-EG')+' EGP';}
 function showToast(msg){const t=document.createElement('div');t.className='toast';t.textContent=msg;document.body.appendChild(t);setTimeout(()=>t.remove(),2600);}
 
@@ -1351,6 +1390,75 @@ async function confirmRefund(studentId){
   }
 }
 
+// Formats the REMAINING sessions in the current month for a student, in the
+// format: "July sessions (3 lessons on the 14th, 21st and 28th)". Only counts
+// the student's regular weekday occurrences from today onward. Returns '' if
+// there's no lesson day or nothing left this month.
+function formatRemainingSessionsThisMonth(student){
+  if(!student || !student.lesson_day) return '';
+  const now=new Date();
+  const month=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
+  const todayDay=now.getDate();
+  const allDays=getWeekdayDatesInMonth(month, student.lesson_day);
+  const remaining=allDays.filter(d=>d>=todayDay);
+  if(!remaining.length) return '';
+  const dateList=joinDatesNaturally(remaining.map(ordinalDay));
+  return formatMonthName(month)+' sessions ('+remaining.length+' lesson'+(remaining.length===1?'':'s')+' on the '+dateList+')';
+}
+
+// Trial follow-up: a friendly WhatsApp nudge for a student still on a trial
+// plan, inviting them to pay and lock in their spot. The amount shown is the
+// price of the plan they'd convert to (trial -> monthly-4, group-trial ->
+// group), priced by the actual sessions in the upcoming month when a regular
+// lesson day is set, else the plan's standard price. A custom per-student
+// amount overrides.
+function sendTrialConversionMessage(studentId){
+  try{
+    const student=(db.students||[]).find(s=>s.id===studentId);
+    if(!student){ showToast('Student not found.'); return; }
+    if(student.plan!=='trial' && student.plan!=='group-trial'){
+      showToast('This is only for students still on a trial plan.'); return;
+    }
+
+    const phone=toWhatsAppNumber(student.phone1||student.phone2);
+    if(!phone){
+      showToast('No phone number on file for '+(student.name||'this student')+' — opening Edit Student so you can add one.');
+      if(typeof editStudent==='function') editStudent(studentId);
+      return;
+    }
+
+    // Price = remaining lesson days this month (the rest of their weekday)
+    // times the per-lesson rate of the plan they'd convert to: group-trial
+    // -> group (750/lesson), trial -> standard (500/lesson). A custom
+    // per-student amount overrides.
+    const conversionPlan = student.plan==='group-trial' ? 'group' : 'monthly-4';
+    const pricing=getWhatsAppLessonPricing(student, conversionPlan);
+    const price=pricing.price;
+
+    const firstName=student.first_name||(student.name||'').split(' ')[0]||student.name;
+
+    // Emojis from code points so the source stays pure ASCII (immune to any
+    // file-encoding/hosting corruption).
+    const eSmile=String.fromCodePoint(0x1F60A), eNotes=String.fromCodePoint(0x1F3B6);
+    const eGuitar=String.fromCodePoint(0x1F3B8), eSparkles=String.fromCodePoint(0x2728);
+    const eMusicNote=String.fromCodePoint(0x1F3B5), eRaisedHands=String.fromCodePoint(0x1F64C);
+    const eFire=String.fromCodePoint(0x1F525), eMultiNotes=String.fromCodePoint(0x1F3B6);
+
+    const message='Hey '+firstName+'! '+eSmile+eMultiNotes+' We hope you had an awesome first session at Cymatics and enjoyed the vibes! '+eGuitar+eSparkles+'  '+
+      'If you\'d like to keep the music going at your agreed time, just send over the payment of '+Math.round(price)+' EGP by tonight to lock in your spot '+eMusicNote+'  '+
+      'You can use InstaPay on 01277336092 (Mario Naguib), and don\'t forget to send us a quick screenshot to confirm '+eRaisedHands+'  '+
+      'Can\'t wait to have you back for the next session! '+eMultiNotes+eFire;
+
+    const win=window.open('https://wa.me/'+phone+'?text='+encodeURIComponent(message), '_blank');
+    if(!win){
+      showToast('Your browser blocked the WhatsApp popup — allow popups for this site, then try again.');
+    }
+  }catch(err){
+    console.error('sendTrialConversionMessage failed:', err);
+    showToast('Could not open the message — '+(err.message||'unexpected error')+'. Check the browser console for details.');
+  }
+}
+
 function sendPaymentReminder(studentId){
   try{
     const student=(db.students||[]).find(s=>s.id===studentId);
@@ -1379,23 +1487,15 @@ function sendPaymentReminder(studentId){
     const dayNumbers=getWeekdayDatesInMonth(month, student.lesson_day);
     const lessonCount=dayNumbers.length;
     const dateList=joinDatesNaturally(dayNumbers.map(ordinalDay));
-    // Price the ACTUAL number of lessons this month, not the plan's flat
-    // nominal figure — otherwise a month where the student's weekday falls
-    // 5 times (instead of the usual 4) would state "5 lessons" but bill the
-    // 4-lesson price. Derive the per-lesson rate from the plan (its monthly
-    // amount / its standard lesson count) and multiply by the real count.
-    // A custom per-student amount overrides as the flat monthly figure.
+    // Price = lessons in this month x the per-lesson rate (500 standard,
+    // 750 group). Since the reminder covers next month in full, every
+    // weekday occurrence is a lesson. A custom per-student amount overrides.
     let price;
     if(student && student.customAmount!=null && student.customAmount!==''){
       price=Number(student.customAmount)||0;
     } else {
-      const planCount=(typeof getPlanSessionCount==='function') ? getPlanSessionCount(student.plan) : 0;
-      const planAmount=PLAN_AMOUNTS[student?.plan]||0;
-      if(planCount>0 && lessonCount>0){
-        price=Math.round((planAmount/planCount)*lessonCount);
-      } else {
-        price=planAmount; // non-count-based plan (e.g. flat group rate)
-      }
+      const rate=whatsAppPerLessonRate(student.plan);
+      price = lessonCount>0 ? lessonCount*rate : rate;
     }
     const firstName=student.first_name||(student.name||'').split(' ')[0]||student.name;
 
@@ -1422,37 +1522,7 @@ function sendPaymentReminder(studentId){
 // Short, immediate nudge for a specific lesson — "your teacher is waiting" —
 // distinct from the payment reminder above (that one's about the upcoming
 // month; this one's about right now, for a single lesson).
-function sendLessonReminder(lessonId){
-  try{
-    const lesson=(db.lessons||[]).find(l=>l.id===lessonId);
-    if(!lesson){ showToast('Lesson not found.'); return; }
-
-    const student=(db.students||[]).find(s=>String(s.id)===String(lesson.studentId) || s.name===lesson.student);
-    if(!student){ showToast('Could not find this lesson\'s student record.'); return; }
-
-    const phone=toWhatsAppNumber(student.phone1||student.phone2);
-    if(!phone){
-      showToast('No phone number on file for '+(student.name||'this student')+' — opening Edit Student so you can add one.');
-      if(typeof editStudent==='function') editStudent(student.id);
-      return;
-    }
-
-    const teacherProfile=(db.teacherProfiles||[]).find(t=>t.name===lesson.teacher);
-    const title=teacherProfile?.title||'Mr';
-    const teacherFirstName=(lesson.teacher||'').split(' ')[0]||lesson.teacher||'';
-    const studentFirstName=student.first_name||(student.name||'').split(' ')[0]||student.name;
-
-    const message='Hi '+studentFirstName+', '+title+' '+teacherFirstName+' is waiting for you';
-
-    const win=window.open('https://wa.me/'+phone+'?text='+encodeURIComponent(message), '_blank');
-    if(!win){
-      showToast('Your browser blocked the WhatsApp popup — allow popups for this site, then try again.');
-    }
-  }catch(err){
-    console.error('sendLessonReminder failed:', err);
-    showToast('Could not open the reminder — '+(err.message||'unexpected error')+'. Check the browser console for details.');
-  }
-}
+function sendLessonReminder_REMOVED(){}
 
 // Generate month range (±12 months from today = 25 options)
 function genMonths(){
@@ -2090,21 +2160,36 @@ function syncPaymentToggleToSupabase(id, month, paid, method){
   // reverts on the next reload) but was actually a guaranteed failure.
   // Checking existence manually first works regardless of that constraint.
   //
-  // Look up the existing row by student_id OR the (stable) student_name for
-  // the same month — a payment written under this student's earlier
-  // temporary id would otherwise be missed, producing a DUPLICATE payment
-  // row instead of updating the existing one, which is one of the ways
-  // "mark paid" appeared not to stick after a reload.
+  // Look up existing rows by student_id OR the (stable) student_name for the
+  // same month. There should be at most one, but earlier id-churn could have
+  // created duplicates — which is exactly what produced the 409 errors: the
+  // old code tried to UPDATE every match to the same student_id+month, and
+  // the second update collided with the unique constraint on
+  // (student_id, month). So: update ONE row and DELETE the rest.
   let query=window.supabaseClientV1.from('payments').select('id,student_id,student_name').eq('month', month);
   query.then(({data,error})=>{
       if(error){ console.warn('Payment lookup failed:', error.message); return; }
       const rows=(data||[]).filter(r=>String(r.student_id)===String(id) || (studentName && r.student_name===studentName));
       if(rows.length){
-        // Update the first match; if id-churn created duplicates, converge
-        // them all to the same state so the next download is unambiguous.
-        return Promise.all(rows.map(r=>window.supabaseClientV1.from('payments').update(payload).eq('id', r.id)));
+        const keep=rows[0];
+        const dupes=rows.slice(1);
+        // Delete duplicates FIRST (sequentially), so that by the time we
+        // update the row we're keeping, it's the only row for this
+        // student+month and the update can't collide with the unique
+        // constraint. Doing these concurrently risked the update landing
+        // before a duplicate was gone — the original 409.
+        let chain=Promise.resolve();
+        dupes.forEach(d=>{ chain=chain.then(()=>window.supabaseClientV1.from('payments').delete().eq('id', d.id)); });
+        return chain.then(()=>window.supabaseClientV1.from('payments').update(payload).eq('id', keep.id));
       } else {
-        return window.supabaseClientV1.from('payments').insert([payload]);
+        // No existing row — insert. If a row races in and the insert 409s on
+        // the unique constraint, fall back to updating the existing row.
+        return window.supabaseClientV1.from('payments').insert([payload]).then(res=>{
+          if(res && res.error){
+            return window.supabaseClientV1.from('payments').update(payload).eq('student_id', id).eq('month', month);
+          }
+          return res;
+        });
       }
     })
     .then(res=>{ if(res && res.error) console.warn('Payment sync failed:', res.error.message); })
@@ -2291,8 +2376,9 @@ function renderStudents(){
       <td><button class='btn btn-sm' onclick='showHistory(${s.id})'>History</button></td><td><div class="actions">
         <button class="btn btn-sm" onclick="togglePayment(${s.id})">${paid?'Mark unpaid':'Mark paid'}</button>
         <button class="btn btn-sm" onclick="sendPaymentReminder(${s.id})" title="Opens WhatsApp with a pre-filled reminder for next month's payment">📱 Remind</button>
-        ${s.plan==='trial' ? `<button class="btn btn-sm btn-gold" onclick="convertTrial(${s.id})">Convert</button>` : ''}
-        ${s.plan!=='trial' ? `<button class="btn btn-sm btn-gold" onclick="renewStudentSubscription(${s.id})">Renew</button>` : ''}
+        ${(s.plan==='trial'||s.plan==='group-trial') ? `<button class="btn btn-sm" onclick="sendTrialConversionMessage(${s.id})" title="Opens WhatsApp with a friendly 'lock in your spot' follow-up for a trial student">🎶 Trial Follow-up</button>` : ''}
+        ${(s.plan==='trial'||s.plan==='group-trial') ? `<button class="btn btn-sm btn-gold" onclick="convertTrial(${s.id})">Convert</button>` : ''}
+        ${(s.plan!=='trial'&&s.plan!=='group-trial') ? `<button class="btn btn-sm btn-gold" onclick="renewStudentSubscription(${s.id})">Renew</button>` : ''}
         <button class="btn btn-sm" onclick="editStudent(${s.id})">Edit</button>
         <button class="btn btn-sm btn-gold" onclick="openAdminStudentProfile('${jsString(s.id)}','${jsString(s.name)}')">Profile</button>
         <button class="btn btn-sm" onclick="toggleStudentMoreMenu(event, ${s.id})" title="More actions">⋯</button>
@@ -2489,7 +2575,7 @@ function renderTeachers(){
  tb.innerHTML=profiles.map(p=>{
    const month=currentMonth();
    const eligibleLessons=(db.lessons||[]).filter(l=>
-      l.month===month &&
+      isLessonInPayrollPeriod(l, month) &&
       (l.teacher||'').toLowerCase()===(p.name||'').toLowerCase() &&
       isPayrollEligibleLesson(l)
    );
@@ -2642,11 +2728,11 @@ function renderOverview(){
   });
   const teacherMonth=(db.teacherProfiles||[]).filter(p=>(p.status||'active')!=='archived');
   const totalTeacher=teacherMonth.reduce((a,t)=>{
-      const eligible=db.lessons.filter(l=>l.month===month && (l.teacher||'').toLowerCase()===(t.name||'').toLowerCase() && isPayrollEligibleLesson(l));
+      const eligible=db.lessons.filter(l=>isLessonInPayrollPeriod(l, month) && (l.teacher||'').toLowerCase()===(t.name||'').toLowerCase() && isPayrollEligibleLesson(l));
       return a + calculatePayrollAmount(eligible, t.rate);
     },0);
   const pendingTeacher=teacherMonth.filter(t=>!db.payrollPaid[t.name+'_'+month]).reduce((a,t)=>{
-      const eligible=db.lessons.filter(l=>l.month===month && (l.teacher||'').toLowerCase()===(t.name||'').toLowerCase() && isPayrollEligibleLesson(l));
+      const eligible=db.lessons.filter(l=>isLessonInPayrollPeriod(l, month) && (l.teacher||'').toLowerCase()===(t.name||'').toLowerCase() && isPayrollEligibleLesson(l));
       return a + calculatePayrollAmount(eligible, t.rate);
     },0);
   const monthExp=db.expenses.filter(e=>e.month===month && (e.status_record||'active')!=='archived');
@@ -2888,7 +2974,6 @@ if(sum){sum.innerHTML=`<div class="metric"><div class="metric-label">Lessons</di
       ${(l.status!=='attended' && l.status!=='teacher_absent' && l.status!=='absent_excused') ? `<button class="btn btn-sm btn-gold" onclick="markLessonAttended(${l.id})">Attended</button>` : ''}
       ${attendedUnpaid ? `<button class="btn btn-sm btn-gold" onclick="markLessonAttended(${l.id})">Mark Paid</button>` : ''}
       ${owed && !linkedMakeup ? `<button class="btn btn-sm btn-gold" onclick="openScheduleMakeup(${l.id})">Schedule Makeup</button>` : ''}
-      ${l.status==='scheduled' ? `<button class="btn btn-sm" onclick="sendLessonReminder(${l.id})" title="Opens WhatsApp with a quick 'your teacher is waiting' nudge">📱 Remind</button>` : ''}
       <button class="btn btn-sm" onclick="editLesson(${l.id})">Edit</button>
       ${(l.status_record||'active')==='archived'
     ? `<button class="btn btn-sm btn-gold" onclick="restoreLesson(${l.id})">Restore</button>`
@@ -3426,7 +3511,7 @@ function renderReports(){
  if(rt){
    const list=(db.teacherProfiles||[]).filter(p=>(p.status||'active')!=='archived');
    rt.innerHTML=list.map(p=>{
-      const eligible=db.lessons.filter(l=>l.month===month && (l.teacher||'').toLowerCase()===(p.name||'').toLowerCase() && isPayrollEligibleLesson(l));
+      const eligible=db.lessons.filter(l=>isLessonInPayrollPeriod(l, month) && (l.teacher||'').toLowerCase()===(p.name||'').toLowerCase() && isPayrollEligibleLesson(l));
       const payable=payableSessionCount(eligible);
       return `<tr><td>${escapeHtml(p.name)}</td><td>${payable}</td><td>${egp(calculatePayrollAmount(eligible, p.rate))}</td></tr>`;
    }).join('') || '<tr><td colspan="3">No teacher records.</td></tr>';
@@ -3497,20 +3582,27 @@ function renderReports(){
  const rltTeachers=document.getElementById('report-lapsed-trial-teachers');
  if(rlt){
    const todayKey=new Date().toISOString().slice(0,10);
+   // Grace window: a trial only counts as lapsed once the attended session
+   // is more than a day old, so a student who trialed today or yesterday
+   // still has a fair chance to pay/convert before being flagged.
+   const yesterday=new Date(); yesterday.setDate(yesterday.getDate()-1);
+   const cutoffKey=yesterday.toISOString().slice(0,10); // trial date must be < this
    const lapsed=(db.students||[]).filter(s=>{
      if((s.status||'active')==='archived') return false;
      if(s.plan!=='trial' && s.plan!=='group-trial') return false;
-     // Their trial lesson must have already happened.
-     const trialLessons=(db.lessons||[]).filter(l=>
+     // Their trial session must have been ATTENDED and be more than a day old.
+     const attendedTrials=(db.lessons||[]).filter(l=>
        (String(l.studentId)===String(s.id) || l.student===s.name) &&
        (l.status_record||'active')!=='archived' &&
-       (l.date||'')<=todayKey
+       l.status==='attended' &&
+       (l.date||'')<cutoffKey
      );
-     return trialLessons.length>0;
+     return attendedTrials.length>0;
    }).map(s=>{
      const trialLessons=(db.lessons||[]).filter(l=>
        (String(l.studentId)===String(s.id) || l.student===s.name) &&
-       (l.status_record||'active')!=='archived'
+       (l.status_record||'active')!=='archived' &&
+       l.status==='attended'
      ).sort((a,b)=>String(a.date).localeCompare(String(b.date)));
      return {s, trialDate:trialLessons[0]?.date||''};
    });
@@ -3560,7 +3652,7 @@ function exportPayrollCSV(){
  const rows=[['Teacher','Month','Payable Lessons','Amount Due']];
  const month=currentMonth();
  (db.teacherProfiles||[]).filter(p=>(p.status||'active')!=='archived').forEach(p=>{
-   const eligible=db.lessons.filter(l=>l.month===month && (l.teacher||'').toLowerCase()===(p.name||'').toLowerCase() && isPayrollEligibleLesson(l));
+   const eligible=db.lessons.filter(l=>isLessonInPayrollPeriod(l, month) && (l.teacher||'').toLowerCase()===(p.name||'').toLowerCase() && isPayrollEligibleLesson(l));
    const payable=payableSessionCount(eligible);
    rows.push([p.name,month,payable,calculatePayrollAmount(eligible, p.rate)]);
  });
@@ -4635,6 +4727,26 @@ function formatTime12h(timeStr){
   const period=h>=12?'PM':'AM';
   h=h%12; if(h===0) h=12;
   return h+':'+m+' '+period;
+}
+
+// Payroll runs on a 26th-to-25th cycle, not a calendar month. The payroll
+// period for a given "YYYY-MM" is the 26th of the PREVIOUS month through the
+// 25th of that month, inclusive. Example: July payroll covers Jun 26 → Jul 25;
+// a session taught Jul 26–31 belongs to August's period instead. This is the
+// single boundary test used everywhere payroll payable-lessons/amounts are
+// computed, replacing the old plain calendar-month (l.month===month) check.
+function isLessonInPayrollPeriod(lesson, monthStr){
+  const dateKey=String(lesson.date||lesson.lesson_date||'').slice(0,10);
+  if(!dateKey || !monthStr) return false;
+  const [y,m]=monthStr.split('-').map(Number);
+  if(!y || !m) return false;
+  // End of window: the 25th of the selected month.
+  const endKey=monthStr+'-25';
+  // Start of window: the 26th of the previous month.
+  let py=y, pm=m-1;
+  if(pm<1){ pm=12; py-=1; }
+  const startKey=py+'-'+String(pm).padStart(2,'0')+'-26';
+  return dateKey>=startKey && dateKey<=endKey;
 }
 
 // Payable lesson count for payroll: a double-session makeup is worth 2 (the teacher
@@ -6586,7 +6698,7 @@ window.addEventListener('load', function(){
    const month=currentMonth();
 
    const payableLessons=payableSessionCount((db.lessons||[]).filter(l=>
-      l.month===month &&
+      isLessonInPayrollPeriod(l, month) &&
       isPayrollEligibleLesson(l)
    ));
 
@@ -6597,7 +6709,7 @@ window.addEventListener('load', function(){
       .forEach(t=>{
          const eligible=(db.lessons||[]).filter(l=>
             (l.teacher||'').toLowerCase()===(t.name||'').toLowerCase() &&
-            l.month===month &&
+            isLessonInPayrollPeriod(l, month) &&
             isPayrollEligibleLesson(l)
          );
          totalPayroll += calculatePayrollAmount(eligible, t.rate);
@@ -6611,7 +6723,7 @@ window.addEventListener('load', function(){
          if(!db.payrollPaid[t.name+'_'+month]){
             const eligible=(db.lessons||[]).filter(l=>
                (l.teacher||'').toLowerCase()===(t.name||'').toLowerCase() &&
-               l.month===month &&
+               isLessonInPayrollPeriod(l, month) &&
                isPayrollEligibleLesson(l)
             );
             payrollDue += calculatePayrollAmount(eligible, t.rate);
@@ -6698,7 +6810,7 @@ window.addEventListener('load', function(){
    let payrollDue=0;
    (db.teacherProfiles||[]).forEach(t=>{
      if((t.status||'active')==='archived' || db.payrollPaid[t.name+'_'+month]) return;
-     const eligible=(db.lessons||[]).filter(l=>l.month===month && (l.teacher||'').toLowerCase()===(t.name||'').toLowerCase() && isPayrollEligibleLesson(l));
+     const eligible=(db.lessons||[]).filter(l=>isLessonInPayrollPeriod(l, month) && (l.teacher||'').toLowerCase()===(t.name||'').toLowerCase() && isPayrollEligibleLesson(l));
      payrollDue += calculatePayrollAmount(eligible, t.rate);
    });
 
@@ -6798,7 +6910,7 @@ window.addEventListener('load', function(){
 
    (db.teacherProfiles||[]).forEach(t=>{
       const eligible=(db.lessons||[]).filter(l=>
-        l.month===month &&
+        isLessonInPayrollPeriod(l, month) &&
         (l.teacher||'').toLowerCase()===(t.name||'').toLowerCase() &&
         isPayrollEligibleLesson(l)
       );
