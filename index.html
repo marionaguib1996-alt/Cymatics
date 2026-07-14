@@ -285,7 +285,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-16</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-17</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -314,7 +314,6 @@ input::placeholder{color:var(--text-dim)}
   <button class="nav-btn" onclick="switchPage('expenses',this)">🧾 Finances</button>
   <button class="nav-btn" onclick="switchPage('reports',this)">📈 Reports</button>
   <button class="nav-btn" onclick="switchPage('database',this)">🗄️ Database</button>
-  <button class="nav-btn" onclick="switchPage('resources',this)">📁 Resources</button>
   <button class="nav-btn" onclick="switchPage('notes',this)">🗒️ Notes</button>
   <button class="nav-btn" onclick="switchPage('cloud',this)">☁️ Cloud</button>
 </nav>
@@ -841,35 +840,6 @@ input::placeholder{color:var(--text-dim)}
 <table>
 <thead><tr><th>ID</th><th>First Name</th><th>Last Name</th><th>Email</th><th>Attended</th><th>Absent Paid</th><th>Teacher Absent</th><th>Makeups Owed</th><th>Age</th><th>DOB</th><th>Starting Date</th><th>Phone</th><th>Parent Phone</th><th>Teacher</th><th>Instrument</th><th>Day</th><th>Time</th><th>Actions</th></tr></thead>
 <tbody id="database-body"></tbody>
-</table>
-</div>
-</div>
-</div>
-
-<div id="page-resources" class="page">
-<div class="card">
-<div class="card-title">Share a Resource</div>
-<div class="teacher-row-meta" style="margin-bottom:12px">Sheet music, practice materials, or any file to share with students — either a specific student, or everyone at once.</div>
-<div class="form-grid">
-  <input id="res-title" placeholder="Title (e.g. 'C Major Scale Sheet')">
-  <select id="res-target" onchange="onResourceTargetChange()">
-    <option value="all">All Students</option>
-    <option value="student">A Specific Student</option>
-  </select>
-  <select id="res-student" style="display:none"></select>
-</div>
-<input id="res-file" type="file" style="margin-top:10px">
-<div id="res-upload-status" style="margin-top:8px;color:var(--text-muted)"></div>
-<button class="btn btn-gold" style="margin-top:10px" onclick="uploadResource()">📤 Upload</button>
-</div>
-
-<div class="card">
-<div class="card-title">Shared Resources</div>
-<input id="res-search" placeholder="Search by title..." oninput="renderResourcesPage()" style="margin-bottom:12px;max-width:280px">
-<div class="table-wrap">
-<table>
-<thead><tr><th>Title</th><th>File</th><th>Shared With</th><th>Uploaded</th><th>Actions</th></tr></thead>
-<tbody id="resources-body"></tbody>
 </table>
 </div>
 </div>
@@ -4701,7 +4671,6 @@ function switchPage(page, btn){
   if(page==='profiles'){refreshInstrumentSelectors(); renderProfiles(); renderInstrumentPage(); if(typeof renderAddProfileTimeSlots==='function') renderAddProfileTimeSlots();}
   if(page==='instruments')renderInstrumentPage();
   if(page==='database')renderDatabase(); if(page==='cloud'){}
-  if(page==='resources' && typeof renderResourcesPage==='function')renderResourcesPage();
   if(page==='notes' && typeof renderNotesPage==='function')renderNotesPage();
 }
 function onMonthChange(){renderOverview();renderStudents();renderTeachers();renderLessons();renderExpenses();if(typeof renderOtherRevenue==='function')renderOtherRevenue();renderReports(); if(typeof renderTeacherWorkspace==='function')renderTeacherWorkspace();}
@@ -8565,7 +8534,13 @@ function confirmRenewal(id){
 
   if(!lessonDay){ showToast('Please choose a lesson day'); return; }
   if(!lessonTime){ showToast('Please choose a time slot'); return; }
-  if(isRoomFull(lessonDay, lessonTime, id)){ showToast('That slot is at the 3-room limit — pick another.'); return; }
+  // Physical room capacity only — consistent with the calendar, the slot
+  // dropdown, and the Add/Edit Student guards. The student's own lesson
+  // this week isn't a conflict with themselves.
+  const rnTargetDate=nextOccurrenceOfWeekday(lessonDay);
+  const rnOwnLesson=(db.lessons||[]).find(l=>l.date===rnTargetDate && String(l.studentId)===String(id) && (l.status_record||'active')!=='archived');
+  const rnDur=isGroupPlan(plan)?GROUP_SESSION_DURATION_MINUTES:SESSION_DURATION_MINUTES;
+  if(isRoomFullDuringRange(rnTargetDate, lessonTime, rnDur, rnOwnLesson?.id||null)){ showToast('That slot is at the 3-room limit — pick another.'); return; }
 
   const sessionCounts={'trial':1,'monthly-4':4,'monthly-5':5,'weekly':1,'lesson-1':1,'lesson-2':2,'lesson-3':3,'group':4,'group-trial':1};
   const count=sessionCounts[plan];
@@ -8706,12 +8681,23 @@ function confirmRenewal(id){
     const statusInput=document.getElementById('lesson_status_'+studentId);
     const date=dmyToIso(dateInput?.value||'');
     const status=statusInput?.value;
-    const existing=(db.lessons||[]).find(l=>
+    // Take over the student's existing SCHEDULED lesson on this date rather
+    // than creating a second one — but ONLY when an actual attendance status
+    // is being logged. That's the normal path (mark a scheduled lesson
+    // attended/absent) and is what keeps it from producing duplicates.
+    //
+    // Logging "Scheduled" onto an already-scheduled lesson has nothing to
+    // update (scheduled -> scheduled is a no-op), so it can only mean an
+    // ADDITIONAL lesson is wanted that day — previously this silently did
+    // nothing while still reporting "Lesson logged ✓". Fall through and book
+    // a new one instead.
+    const isAttendanceStatus = status && String(status).trim().toLowerCase()!=='scheduled';
+    const existing = isAttendanceStatus ? (db.lessons||[]).find(l=>
       String(l.studentId)===String(s.id) &&
       l.date===date &&
       String(l.status||'').trim().toLowerCase()==='scheduled' &&
       (l.status_record||'active')!=='archived'
-    );
+    ) : null;
     if(existing){
       existing.status=status;
       existing.teacher=s.teacher||existing.teacher;
@@ -8903,11 +8889,11 @@ function getAvailableSlotsWithCapacity(teacherName, dayName, excludeStudentId, f
   const ownLesson=excludeStudentId ? (db.lessons||[]).find(l=>l.date===targetDate && String(l.studentId)===String(excludeStudentId) && (l.status_record||'active')!=='archived') : null;
   const exId=ownLesson?.id||null;
 
-  // Does a booking of `dur` fit fully (teacher free AND room free) starting
-  // exactly at `t`? Used to test both the preferred and the minimum length.
+  // Does a booking of `dur` fit fully (teacher free AND room physically
+  // free) starting exactly at `t`? Room capacity uses the physical range
+  // check only, matching the calendar and case (1) above.
   const fitsAt=(t,dur)=> !isTeacherBusyDuringRange(teacherName, targetDate, t, dur, exId)
-    && !isRoomFullDuringRange(targetDate, t, dur, exId)
-    && !dayBasedFullAt(dayName, t, excludeStudentId);
+    && !isRoomFullDuringRange(targetDate, t, dur, exId);
 
   const results=[];
   effectiveSlots.forEach(slot=>{
@@ -8915,15 +8901,18 @@ function getAvailableSlotsWithCapacity(teacherName, dayName, excludeStudentId, f
     const nominal=slot.time;
 
     // 1) Full preferred duration fits at the nominal start — the normal,
-    //    best case.
+    //    best case. Room capacity is judged by ACTUAL physical bookings
+    //    (isRoomFullDuringRange), the same basis the calendar uses — NOT by
+    //    day-based default weekly assignments, which previously made a slot
+    //    that's physically free (and shown green on the calendar) appear
+    //    "Rooms Full" and unselectable here.
     if(!isTeacherBusyDuringRange(teacherName, targetDate, nominal, preferredDuration, exId)){
-      const dayBasedFull=isRoomFull(dayName, nominal, excludeStudentId);
       const rangeFull=isRoomFullDuringRange(targetDate, nominal, preferredDuration, exId);
-      if(!dayBasedFull && !rangeFull){ results.push({time:nominal, full:false}); return; }
-      // Room blocked at the nominal start but may free partway through —
-      // offer the shifted start if the FULL duration fits from there.
+      if(!rangeFull){ results.push({time:nominal, full:false}); return; }
+      // Room physically blocked at the nominal start but may free partway
+      // through — offer the shifted start if the FULL duration fits from there.
       const shifted=resolveShiftedBookableTime(targetDate, nominal, preferredDuration, teacherName, exId);
-      if(shifted && !dayBasedFullAt(dayName, shifted, excludeStudentId)){ results.push({time:nominal, full:false, shiftedFrom:nominal, actualStart:shifted}); return; }
+      if(shifted){ results.push({time:nominal, full:false, shiftedFrom:nominal, actualStart:shifted}); return; }
     }
 
     // 2) Preferred didn't fit, but this booking can shrink to its minimum.
@@ -8933,7 +8922,7 @@ function getAvailableSlotsWithCapacity(teacherName, dayName, excludeStudentId, f
     if(minDuration<preferredDuration){
       if(fitsAt(nominal, minDuration)){ results.push({time:nominal, full:false, shortWindow:true}); return; }
       const shiftedMin=resolveShiftedBookableTime(targetDate, nominal, minDuration, teacherName, exId);
-      if(shiftedMin && !dayBasedFullAt(dayName, shiftedMin, excludeStudentId)){ results.push({time:nominal, full:false, shiftedFrom:nominal, actualStart:shiftedMin, shortWindow:true}); return; }
+      if(shiftedMin){ results.push({time:nominal, full:false, shiftedFrom:nominal, actualStart:shiftedMin, shortWindow:true}); return; }
     }
 
     // 3) Nothing fits here — show as full/disabled.
@@ -8942,11 +8931,6 @@ function getAvailableSlotsWithCapacity(teacherName, dayName, excludeStudentId, f
   return results;
 }
 
-// Day-based fullness at an arbitrary (possibly off-grid) time — used to
-// double-check a shifted offer against default weekly assignments too.
-function dayBasedFullAt(dayName, time, excludeStudentId){
-  return isRoomFull(dayName, time, excludeStudentId);
-}
 
 // Override Add Student time slot dropdown
 window.updateStudentTimeSlotOptions=function(){
@@ -8995,7 +8979,12 @@ window.onEditStudentDayChange=function(studentId){
     const time=document.getElementById('s-time')?.value||'';
     const plan=document.getElementById('s-plan')?.value||'';
     const dur=isGroupPlan(plan)?GROUP_SESSION_DURATION_MINUTES:SESSION_DURATION_MINUTES;
-    if(dayName && time && (isRoomFull(dayName, time, null) || isRoomFullDuringRange(nextOccurrenceOfWeekday(dayName), time, dur, null))){
+    // Room capacity judged by ACTUAL physical bookings only — the same basis
+    // the calendar and the slot dropdown use. Including the day-based
+    // isRoomFull here previously rejected slots the dropdown had just
+    // offered as free (default weekly assignments with no lesson booked),
+    // so a genuinely free slot was selectable but wouldn't save.
+    if(dayName && time && isRoomFullDuringRange(nextOccurrenceOfWeekday(dayName), time, dur, null)){
       openModal('🚫 Rooms Fully Occupied',`
         <div style="text-align:center;padding:20px 0">
           <div style="font-size:1.1rem;font-weight:600;margin-bottom:8px">All 3 rooms are occupied at ${escapeHtml(formatTime12h(time))} on ${escapeHtml(dayName)}</div>
@@ -9020,7 +9009,8 @@ window.onEditStudentDayChange=function(studentId){
     // The student's own lesson this week must not count against them —
     // re-saving their existing slot isn't a conflict with themselves.
     const ownLesson=(db.lessons||[]).find(l=>l.date===targetDate && String(l.studentId)===String(id) && (l.status_record||'active')!=='archived');
-    if(dayName && time && (isRoomFull(dayName, time, id) || isRoomFullDuringRange(targetDate, time, dur, ownLesson?.id||null))){
+    // Physical bookings only — consistent with the dropdown and calendar.
+    if(dayName && time && isRoomFullDuringRange(targetDate, time, dur, ownLesson?.id||null)){
       openModal('🚫 Rooms Fully Occupied',`
         <div style="text-align:center;padding:20px 0">
           <div style="font-size:1.1rem;font-weight:600;margin-bottom:8px">All 3 rooms are occupied at ${escapeHtml(formatTime12h(time))} on ${escapeHtml(dayName)}</div>
@@ -9644,13 +9634,14 @@ function renderCalendarPage(){
         const l=booked[0];
         const matchedStudent=(db.students||[]).find(s=>String(s.id)===String(l.studentId) || s.name===l.student);
         const paid=matchedStudent ? paidSet.has(String(matchedStudent.id)) : paidSet.has(String(l.studentId));
-        const isTrial=matchedStudent && matchedStudent.plan==='trial';
+        const isTrial=matchedStudent && (matchedStudent.plan==='trial' || matchedStudent.plan==='group-trial');
         const isGroup=matchedStudent && isGroupPlan(matchedStudent.plan);
+        const trialTag=isTrial ? ' 🎓' : '';
         const groupTag=l.isDoubleSession ? ' ⏱ 90min' : (isGroup ? ' 👥 1hr' : '');
         // If this student is attending in what's normally someone else's
         // recurring slot this week, show that beneath their name.
         const originalHolder=originalSlotHolderName(l);
-        const nameBlock=`${escapeHtml(l.student||'Student')}${groupTag}`+
+        const nameBlock=`${escapeHtml(l.student||'Student')}${trialTag}${groupTag}`+
           (originalHolder?`<br><span style="font-size:9px;font-weight:400;opacity:0.75">Originally ${escapeHtml(originalHolder)}</span>`:'');
         const subTitle=originalHolder?` — in ${escapeHtml(originalHolder)}'s usual slot this week`:'';
         // Draggable so the admin can drop this lesson onto a free/frees-at
@@ -9750,7 +9741,7 @@ function renderCalendarPage(){
 
   if(statusEl){
     const totalBooked=(db.lessons||[]).filter(l=>l.date===targetDate && (l.status_record||'active')!=='archived').length;
-    statusEl.innerHTML=`${totalBooked} lesson(s) on ${escapeHtml(formatLedgerDate(targetDate))} &nbsp;·&nbsp; <span style="color:#c62828">■</span> Teacher unavailable &nbsp;·&nbsp; <span style="color:#1b5e20">■</span> Free / Trial session &nbsp;·&nbsp; <span style="color:#7a5c1f">■</span> Unpaid &nbsp;·&nbsp; <span style="color:#555">■</span> Paid (no colour) &nbsp;·&nbsp; <span style="color:#4a2f6b">■</span> Practice booked &nbsp;·&nbsp; 👥 Group session`;
+    statusEl.innerHTML=`${totalBooked} lesson(s) on ${escapeHtml(formatLedgerDate(targetDate))} &nbsp;·&nbsp; <span style="color:#c62828">■</span> Teacher unavailable &nbsp;·&nbsp; <span style="color:#1b5e20">■</span> Free / Trial session &nbsp;·&nbsp; <span style="color:#7a5c1f">■</span> Unpaid &nbsp;·&nbsp; <span style="color:#555">■</span> Paid (no colour) &nbsp;·&nbsp; <span style="color:#4a2f6b">■</span> Practice booked &nbsp;·&nbsp; 🎓 Trial &nbsp;·&nbsp; 👥 Group session`;
   }
 }
 
