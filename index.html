@@ -285,7 +285,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-12</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-13</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -566,6 +566,15 @@ input::placeholder{color:var(--text-dim)}
 <tbody id="lesson-ledger"></tbody>
 </table>
 </div>
+</div>
+
+<div class="card" style="border:1px solid rgba(224,92,92,0.35)">
+  <div class="card-title" style="color:#e05c5c">⚠ Clean Up Archived Lessons</div>
+  <div style="color:var(--text-muted);margin-bottom:12px;font-size:14px">
+    Permanently delete lessons you've already archived — from both this device and the cloud (Supabase), along with their session logs and homework. Active lessons are never touched. This cannot be undone.
+  </div>
+  <div id="purge-archived-summary" style="margin-bottom:12px;font-weight:600"></div>
+  <button class="btn btn-danger btn-sm" onclick="confirmPurgeArchivedLessons()">🗑 Delete All Archived Lessons</button>
 </div>
 </div>
 
@@ -2888,6 +2897,15 @@ if(sum){sum.innerHTML=`<div class="metric"><div class="metric-label">Lessons</di
    </tr>`;
    }).join('') || '<tr><td colspan="6">No lessons logged.</td></tr>';
  }
+
+ // Keep the archived-cleanup summary current.
+ const purgeSummary=document.getElementById('purge-archived-summary');
+ if(purgeSummary){
+   const archivedCount=(db.lessons||[]).filter(l=>(l.status_record||'active')==='archived').length;
+   purgeSummary.textContent = archivedCount
+     ? archivedCount+' archived lesson'+(archivedCount===1?'':'s')+' can be permanently deleted.'
+     : 'No archived lessons to clean up.';
+ }
 }
 
 function deleteLesson(id){
@@ -2914,6 +2932,48 @@ function deleteLesson(id){
      .then(({error})=>{ if(error) console.warn('Lesson-log delete sync failed:', error.message); });
  }
  showToast('Lesson deleted');
+}
+
+function confirmPurgeArchivedLessons(){
+  const archived=(db.lessons||[]).filter(l=>(l.status_record||'active')==='archived');
+  if(!archived.length){ showToast('There are no archived lessons to delete.'); return; }
+  const logCount=(db.lessonLogs||[]).filter(log=>archived.some(l=>l.id===log.lessonId)).length;
+  const msg='Permanently delete '+archived.length+' archived lesson'+(archived.length===1?'':'s')+
+    (logCount?(' and '+logCount+' related session log'+(logCount===1?'':'s')):'')+
+    ' from this device AND the cloud?\n\nThis only affects lessons you have already archived. Active lessons are not touched. This cannot be undone.';
+  if(!confirm(msg)) return;
+  purgeArchivedLessons();
+}
+
+function purgeArchivedLessons(){
+  const archived=(db.lessons||[]).filter(l=>(l.status_record||'active')==='archived');
+  if(!archived.length) return;
+  const archivedIds=archived.map(l=>l.id);
+  const archivedIdSet=new Set(archivedIds.map(String));
+
+  // Remove the lessons and their logs from the cloud first (chunked, so a
+  // large purge is a few calls rather than one per lesson). Uses the same
+  // tables/columns as single-lesson delete; the fetch wrapper routes these
+  // to the offline outbox if a call fails, so a purge started offline still
+  // completes when connectivity returns.
+  if(window.supabaseClientV1){
+    const chunk=(arr,n)=>{ const out=[]; for(let i=0;i<arr.length;i+=n) out.push(arr.slice(i,i+n)); return out; };
+    chunk(archivedIds, 100).forEach(ids=>{
+      window.supabaseClientV1.from('lessons').delete().in('id', ids)
+        .then(({error})=>{ if(error) console.warn('Bulk lesson delete failed:', error.message); });
+      window.supabaseClientV1.from('lesson_updates').delete().in('lesson_id', ids)
+        .then(({error})=>{ if(error) console.warn('Bulk lesson-log delete failed:', error.message); });
+    });
+  }
+
+  // Then drop them locally.
+  const removedCount=archived.length;
+  db.lessons=(db.lessons||[]).filter(l=>!archivedIdSet.has(String(l.id)));
+  db.lessonLogs=(db.lessonLogs||[]).filter(log=>!archivedIdSet.has(String(log.lessonId)));
+  save();
+  renderLessons(); renderTeachers(); renderOverview();
+  if(typeof renderTeacherWorkspace==='function') renderTeacherWorkspace();
+  showToast(removedCount+' archived lesson'+(removedCount===1?'':'s')+' permanently deleted.');
 }
 
 function getLessonTimeOptions(teacherName, dayName, currentTime, date, excludeLessonId){
