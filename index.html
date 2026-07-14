@@ -285,7 +285,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-10</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-12</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -2065,9 +2065,10 @@ function confirmMarkPaid(id, method){
 function syncPaymentToggleToSupabase(id, month, paid, method){
   if(!window.supabaseClientV1) return;
   const student=db.students.find(s=>s.id===id);
+  const studentName=student?.name||'';
   const payload={
     student_id: id,
-    student_name: student?.name||'',
+    student_name: studentName,
     month: month,
     paid: paid,
     payment_method: method,
@@ -2079,11 +2080,20 @@ function syncPaymentToggleToSupabase(id, month, paid, method){
   // rare race condition from the outside (toggle appears to work, then
   // reverts on the next reload) but was actually a guaranteed failure.
   // Checking existence manually first works regardless of that constraint.
-  window.supabaseClientV1.from('payments').select('id').eq('student_id', id).eq('month', month)
-    .then(({data,error})=>{
+  //
+  // Look up the existing row by student_id OR the (stable) student_name for
+  // the same month — a payment written under this student's earlier
+  // temporary id would otherwise be missed, producing a DUPLICATE payment
+  // row instead of updating the existing one, which is one of the ways
+  // "mark paid" appeared not to stick after a reload.
+  let query=window.supabaseClientV1.from('payments').select('id,student_id,student_name').eq('month', month);
+  query.then(({data,error})=>{
       if(error){ console.warn('Payment lookup failed:', error.message); return; }
-      if(data && data.length){
-        return window.supabaseClientV1.from('payments').update(payload).eq('id', data[0].id);
+      const rows=(data||[]).filter(r=>String(r.student_id)===String(id) || (studentName && r.student_name===studentName));
+      if(rows.length){
+        // Update the first match; if id-churn created duplicates, converge
+        // them all to the same state so the next download is unambiguous.
+        return Promise.all(rows.map(r=>window.supabaseClientV1.from('payments').update(payload).eq('id', r.id)));
       } else {
         return window.supabaseClientV1.from('payments').insert([payload]);
       }
@@ -2096,6 +2106,7 @@ function archiveStudent(id){
   if(!s) return;
   if(!confirm('Archive this student? Their lessons will be archived too.')) return;
   s.status='archived';
+  s._localModifiedAt=Date.now();
   let lessonsArchived=0;
   const archivedLessonIds=[];
   (db.lessons||[]).forEach(l=>{
@@ -2884,14 +2895,23 @@ function deleteLesson(id){
  const l=db.lessons.find(x=>x.id===id);
  if(!l) return;
  const lessonId=l.id;
+ // Capture the log ids tied to this lesson before we drop them locally, so
+ // we can remove them from the cloud too.
+ const removedLogIds=(db.lessonLogs||[]).filter(log=>log.lessonId===lessonId).map(log=>log.id);
  db.lessons=db.lessons.filter(x=>x.id!==id);
  db.lessonLogs=(db.lessonLogs||[]).filter(log=>log.lessonId!==lessonId);
  save();
  renderLessons(); renderTeachers(); renderOverview();
  if(typeof renderTeacherWorkspace==='function') renderTeacherWorkspace();
  if(window.supabaseClientV1){
+   // Delete the lesson itself...
    window.supabaseClientV1.from('lessons').delete().eq('id', lessonId)
      .then(({error})=>{ if(error) console.warn('Lesson delete sync failed:', error.message); });
+   // ...and its progress log(s) from the cloud, so nothing orphaned lingers
+   // (lesson logs merge-preserve on download, so a stale cloud log could
+   // otherwise reappear).
+   window.supabaseClientV1.from('lesson_updates').delete().eq('lesson_id', lessonId)
+     .then(({error})=>{ if(error) console.warn('Lesson-log delete sync failed:', error.message); });
  }
  showToast('Lesson deleted');
 }
@@ -3313,6 +3333,7 @@ function restoreStudent(id){
   const s=db.students.find(x=>x.id===id);
   if(!s) return;
   s.status='active';
+  s._localModifiedAt=Date.now(); // guards against a stale download re-archiving it
   let lessonsRestored=0;
   const restoredLessonIds=[];
   (db.lessons||[]).forEach(l=>{
@@ -4499,7 +4520,19 @@ function switchPage(page, btn){
   if(page==='overview')renderOverview();
   if(page==='students'){renderStudents();populateTeacherDropdowns(); if(typeof setDefaultJoinedDate==='function') setDefaultJoinedDate();}
   if(page==='teachers')renderTeachers();
-  if(page==='lessons')renderLessons();
+  if(page==='lessons'){
+    // On first landing this session, default the day filter to today's
+    // weekday (like the calendar), so the admin sees today's lessons first.
+    // One-time so a later manual choice isn't clobbered on re-render.
+    if(!window._lessonsDayDefaulted){
+      const dayEl=document.getElementById('filter-day');
+      if(dayEl && typeof WEEKDAY_NAMES!=='undefined'){
+        dayEl.value=WEEKDAY_NAMES[new Date().getDay()];
+      }
+      window._lessonsDayDefaulted=true;
+    }
+    renderLessons();
+  }
   if(page==='calendar' && typeof renderCalendarPage==='function'){
     // Default the day selector to today's weekday when opening the tab, so
     // the admin lands on today's schedule rather than always Sunday.
@@ -4711,8 +4744,8 @@ async function _autoLoadFromCloudImpl(){
    if(e6) console.warn('Lesson logs load failed:', e6.message);
    if(e4) console.warn('Payments load failed:', e4.message);
 
-   if(students && students.length){
-     db.students = students.map((s,i)=>({
+   if(students){
+     const mapCloudStudent=(s,i)=>({
        id: s.id || Date.now()+i,
        public_id: s.public_id || '',
        student_code: s.student_code || '',
@@ -4739,7 +4772,64 @@ async function _autoLoadFromCloudImpl(){
        frozen: !!s.frozen,
        frozenSince: s.frozen_since||'',
        frozenReason: s.frozen_reason||''
-     }));
+     });
+     const cloudStudents=students.map(mapCloudStudent);
+     // Stable key: student_code (CYM-XXXX), assigned locally at creation and
+     // preserved through the temp-id → serial-id transition. Falls back to
+     // public_id, then name, for older records that predate student_code.
+     const keyOf=s=>String(s.student_code||s.public_id||('name:'+(s.name||'')));
+     const cloudByKey=new Map(cloudStudents.map(s=>[keyOf(s), s]));
+     const localStudents=db.students||[];
+
+     const merged=[];
+     const seen=new Set();
+     const localByKey=new Map(localStudents.map(s=>[keyOf(s), s]));
+     const RECENT_LOCAL_MS=60000; // a local change this fresh may still be uploading
+     // Cloud is canonical for everything it knows about — UNLESS the local
+     // copy of that same student was just modified (restore/archive/edit)
+     // and hasn't necessarily finished syncing, in which case the local
+     // copy wins so a stale download can't undo the change.
+     cloudStudents.forEach(cs=>{
+       const k=keyOf(cs); if(seen.has(k)) return; seen.add(k);
+       const local=localByKey.get(k);
+       if(local && local._localModifiedAt && (Date.now()-local._localModifiedAt)<RECENT_LOCAL_MS){
+         merged.push(local); // keep the fresh local change; re-queue below
+       } else {
+         merged.push(cs);
+       }
+     });
+     // Preserve any LOCAL student the cloud doesn't have yet (just added, or a
+     // local restore that hasn't uploaded) and re-queue it for upload so it
+     // reaches the cloud — never silently drop it.
+     const pendingReupload=[];
+     localStudents.forEach(ls=>{
+       const k=keyOf(ls);
+       if(cloudByKey.has(k) || seen.has(k)) return; // already represented by the cloud copy
+       seen.add(k);
+       merged.push(ls);
+       pendingReupload.push(ls);
+     });
+     db.students=merged;
+     // Push any locally-won recent changes up so the cloud converges, and
+     // let the marker expire once it's outside the guard window.
+     const now=Date.now();
+     merged.forEach(s=>{
+       if(s._localModifiedAt){
+         if((now-s._localModifiedAt)<RECENT_LOCAL_MS){
+           if(s.public_id && typeof syncStudentUpdateToSupabase==='function'){ try{ syncStudentUpdateToSupabase(s); }catch(e){} }
+         } else {
+           delete s._localModifiedAt; // guard window passed; stop treating as dirty
+         }
+       }
+     });
+     if(pendingReupload.length){
+       pendingReupload.forEach(s=>{
+         try{
+           if(s.public_id && typeof syncStudentUpdateToSupabase==='function') syncStudentUpdateToSupabase(s);
+           else if(typeof addStudentToSupabase==='function') addStudentToSupabase(s);
+         }catch(e){}
+       });
+     }
    }
 
    // Payments are matched by student_name (stable) rather than the Supabase student_id
@@ -5365,10 +5455,19 @@ async function addStudentToSupabase(student){
       .select();
 
     if(error) throw error;
-    if(data && data[0] && data[0].public_id){
-      student.public_id = data[0].public_id;
+    if(data && data[0]){
+      // Reconcile the local record to the permanent Supabase-assigned id.
+      // Leaving student.id as its temporary Date.now() value is a direct
+      // cause of duplication: the next cloud download produces a record
+      // with the real serial id, and without this the temp-id copy can
+      // linger alongside it. (The student_code-based merge also guards
+      // this, but aligning the id removes the mismatch at the source.)
+      if(data[0].id!=null) student.id=data[0].id;
+      if(data[0].public_id) student.public_id=data[0].public_id;
       save();
       if(typeof renderDatabase==='function') renderDatabase();
+    }
+    if(data && data[0] && data[0].public_id){
       // Only the root enrollment gets its own login — a linked
       // (non-root) enrollment is meant to be reachable through the
       // root's single login instead, not get a second separate one.
@@ -7082,6 +7181,10 @@ function getTeacherWorkspaceData(){
     const lesson=db.lessons.find(l=>l.id==log.lessonId);
     return normalizeLessonLog(log,lesson);
   }).filter(log=>{
+    // Drop logs whose lesson has been archived or deleted — they shouldn't
+    // show to teachers any more than the lessons themselves do.
+    const lesson=db.lessons.find(l=>l.id==log.lessonId);
+    if(!lesson || (lesson.status_record||'active')==='archived') return false;
     if(session.teacherId && log.teacherId) return log.teacherId===session.teacherId;
     if(scopeName) return String(log.teacherName||'').toLowerCase()===scopeName;
     return isDemoMode;
@@ -8026,7 +8129,13 @@ function renderStudentPortalHomework(){
   const student=(db.students||[]).find(s=>String(s.id)===String(studentId));
   const logs=(db.lessonLogs||[])
     .map(log=>normalizeLessonLog(log, db.lessons.find(l=>l.id==log.lessonId)))
-    .filter(log=>log.homework && (String(log.studentId)===String(studentId) || log.studentName===student?.name))
+    .filter(log=>{
+      // Exclude homework tied to a lesson that's been archived or deleted —
+      // a log whose lesson is gone or archived shouldn't surface to students.
+      const lesson=db.lessons.find(l=>l.id==log.lessonId);
+      if(!lesson || (lesson.status_record||'active')==='archived') return false;
+      return log.homework && (String(log.studentId)===String(studentId) || log.studentName===student?.name);
+    })
     .sort((a,b)=>String(b.homeworkDueDate||b.lessonDate||'').localeCompare(String(a.homeworkDueDate||a.lessonDate||'')));
   list.innerHTML=renderTeacherRows(logs.map(log=>`
     <div class="teacher-row">
