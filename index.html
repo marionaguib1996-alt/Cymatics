@@ -285,7 +285,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-20</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-21</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -2423,6 +2423,8 @@ function saveEditStudent(id){
  const first_name=document.getElementById('es-first')?.value.trim()||'';
  const last_name=document.getElementById('es-last')?.value.trim()||'';
  if(!first_name){showToast('First name is required'); return;}
+ const teacherVal=document.getElementById('es-teacher')?.value||'';
+ if(!teacherVal){showToast('Please select a teacher'); return;}
 
  const oldDay=s.lesson_day, oldTime=s.lessonTime, oldTeacher=s.teacher, oldPlan=s.plan;
 
@@ -4465,6 +4467,15 @@ addStudent=function(){
  const first=document.getElementById('s-first')?.value.trim()||'';
  const last=document.getElementById('s-last')?.value.trim()||'';
  if(!first){alert('Please enter first name');return;}
+ // The Teacher dropdown is deliberately reset to blank after every
+ // successful add (below), so the next entry starts with a clean slate.
+ // Without this check, forgetting to reselect a teacher silently creates
+ // a student (and their scheduled lesson) with no teacher, no instrument,
+ // and no time slot — and a lesson with no teacher never matches any
+ // column on the Calendar, so it's simply invisible with no warning at
+ // the time it happens. Catch it here instead, same as the name check.
+ const teacherVal=document.getElementById('s-teacher')?.value||'';
+ if(!teacherVal){alert('Please select a teacher'); return;}
  const phone1=document.getElementById('s-phone1')?.value.trim()||'';
  const fullName=(first+' '+last).trim().toLowerCase();
 
