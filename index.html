@@ -285,7 +285,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-17</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-19</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -7005,12 +7005,16 @@ window.addEventListener('load', function(){
          reasons.push('Never attended a lesson');
        }
 
-       // Recent absences (excused, unexcused, or teacher-side) in the last 30 days
-       const recentAbsences=studentLessons.filter(l=>
-         (l.date||'')>=thirtyDaysAgo &&
-         (l.status==='absent_paid' || l.status==='absent_excused' || l.status==='teacher_absent')
-       ).length;
-       if(recentAbsences>=2) reasons.push(recentAbsences+' absences in the last 30 days');
+       // Recent absences (excused, unexcused, or teacher-side) in the last 30
+       // days — counted by DISTINCT DAY, not by lesson. A dual-program
+       // student (e.g. guitar + piano) can have 2 lessons on the same date;
+       // if both are absent that's one bad day, not two separate absences.
+       const recentAbsences=new Set(
+         studentLessons
+           .filter(l=>(l.date||'')>=thirtyDaysAgo && (l.status==='absent_paid' || l.status==='absent_excused' || l.status==='teacher_absent'))
+           .map(l=>l.date)
+       ).size;
+       if(recentAbsences>=2) reasons.push(recentAbsences+' absence'+(recentAbsences===1?'':'s')+' in the last 30 days');
 
        return {s, reasons, lastAttended, recentAbsences};
      }).filter(r=>r.reasons.length>0);
@@ -8897,7 +8901,13 @@ function getAvailableSlotsWithCapacity(teacherName, dayName, excludeStudentId, f
 
   const results=[];
   effectiveSlots.forEach(slot=>{
-    if(slot.occupiedBy) return;
+    // Previously this slot was silently dropped from the list when the
+    // teacher already had a lesson running through it (e.g. an earlier
+    // Group session that hasn't ended yet). That made a legitimately
+    // unavailable time just vanish with no explanation — looked like a
+    // bug rather than "teacher's still with another student." Show it
+    // as a disabled option with a reason instead, same as Rooms Full.
+    if(slot.occupiedBy){ results.push({time:slot.time, full:true, busyWith:slot.occupiedBy}); return; }
     const nominal=slot.time;
 
     // 1) Full preferred duration fits at the nominal start — the normal,
@@ -8941,12 +8951,13 @@ window.updateStudentTimeSlotOptions=function(){
   if(!timeSel) return;
   const slots=getAvailableSlotsWithCapacity(teacherName, dayName, null, isGroupPlan(plan));
   if(!slots.length){ timeSel.innerHTML='<option value="">No available slots for this day</option>'; return; }
-  timeSel.innerHTML=slots.map(({time,full,shiftedFrom,actualStart,shortWindow})=>{
+  timeSel.innerHTML=slots.map(({time,full,shiftedFrom,actualStart,shortWindow,busyWith})=>{
     const bookValue=full ? '' : (actualStart||time);
     let label=formatTime12h(actualStart||time);
     if(actualStart && actualStart!==time) label+=' (room frees then)';
     else if(shortWindow) label+=' (45 min)';
-    if(full) label+=' (Rooms Full)';
+    if(busyWith) label+=' (Teacher Busy — with '+busyWith+')';
+    else if(full) label+=' (Rooms Full)';
     return `<option value="${bookValue}" ${full?'disabled':''}>${escapeHtml(label)}</option>`;
   }).join('');
 };
@@ -8960,12 +8971,13 @@ window.onEditStudentDayChange=function(studentId){
   if(!timeSel) return;
   const slots=getAvailableSlotsWithCapacity(teacherName, dayName, studentId, isGroupPlan(plan));
   timeSel.innerHTML=slots.length
-    ? slots.map(({time,full,shiftedFrom,actualStart,shortWindow})=>{
+    ? slots.map(({time,full,shiftedFrom,actualStart,shortWindow,busyWith})=>{
         const bookValue=full ? '' : (actualStart||time);
         let label=formatTime12h(actualStart||time);
         if(actualStart && actualStart!==time) label+=' (room frees then)';
         else if(shortWindow) label+=' (45 min)';
-        if(full) label+=' (Rooms Full)';
+        if(busyWith) label+=' (Teacher Busy — with '+busyWith+')';
+        else if(full) label+=' (Rooms Full)';
         return `<option value="${bookValue}" ${full?'disabled':''}>${escapeHtml(label)}</option>`;
       }).join('')
     : '<option value="">No available slots</option>';
