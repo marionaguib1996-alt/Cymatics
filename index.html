@@ -285,7 +285,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-23</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-24</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -6043,21 +6043,14 @@ async function syncLessonToSupabase(lesson){
  }
 }
 
-(function(){
- const oldAddLesson = window.addLesson;
- if(oldAddLesson){
-   window.addLesson = async function(studentId){
-      const before = (db.lessons||[]).length;
-      await oldAddLesson(studentId);
-      const after = (db.lessons||[]).length;
-
-      if(after > before){
-         const lesson = db.lessons[db.lessons.length-1];
-         await syncLessonToSupabase(lesson);
-      }
-   }
- }
-})();
+// NOTE: a redundant wrapper used to live here that called
+// syncLessonToSupabase(lesson) a second time on every newly-created
+// lesson -- base addLesson() above already syncs the lesson itself.
+// Since syncLessonToSupabase() always performs a raw INSERT with no
+// check for "has this lesson already been synced", the duplicate call
+// created a genuine second row in Supabase for every single lesson
+// logged through the Quick Logger. Removed rather than fixed in place,
+// since it served no purpose beyond that redundant sync.
 </script>
 
 
