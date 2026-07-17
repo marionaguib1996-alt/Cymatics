@@ -285,7 +285,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-24</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-25</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -9193,11 +9193,21 @@ function getTeacherBookingsByTime(teacherName, dayName, targetDate, excludeStude
 
   const studentsWithRealLessonThisWeek=new Set();
   const namesWithRealLessonThisWeek=new Set();
-  (db.lessons||[]).filter(l=>l.date===targetDate && l.teacher===teacherName && (l.status_record||'active')!=='archived' && l.status!=='absent_excused' && l.status!=='teacher_absent')
+  // Two different lesson sets are needed here, deliberately kept separate:
+  //  - "has a decided real lesson this week" must include EVERY status
+  //    (including teacher_absent/absent_excused) — once there's a real
+  //    lesson record for this date, this student's fate for that date is
+  //    already settled, so the default weekly-assignment fallback below
+  //    must never re-project them onto it, whatever the outcome was.
+  //  - "physically occupies the slot" must still exclude teacher_absent/
+  //    absent_excused — those two statuses mean the lesson genuinely
+  //    will not happen at that time, so the slot should read as free.
+  (db.lessons||[]).filter(l=>l.date===targetDate && l.teacher===teacherName && (l.status_record||'active')!=='archived')
     .forEach(l=>{
       if(l.studentId) studentsWithRealLessonThisWeek.add(String(l.studentId));
       if(l.student) namesWithRealLessonThisWeek.add(l.student);
       if(!l.time) return;
+      if(l.status==='absent_excused' || l.status==='teacher_absent') return;
       if(excludeStudent && (String(l.studentId)===String(excludeStudent.id) || l.student===excludeStudent.name)) return;
       const duration=getLessonDurationMinutes(l);
       bookingsByTime[l.time]={label:l.student||'Booked', durationMinutes:duration};
