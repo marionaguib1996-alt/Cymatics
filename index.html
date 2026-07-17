@@ -285,7 +285,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-21</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-22</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1276,7 +1276,7 @@ function freezeStudent(id){
   const s=(db.students||[]).find(x=>x.id===id);
   if(!s) return;
   openModal('Freeze Enrollment', `
-    <div style="margin-bottom:12px;color:var(--text-muted)">Pauses ${escapeHtml(s.name)}'s enrollment — they won't be nagged for payment or flagged as at-risk while frozen, and their regular time slot opens up for someone else to book. Resume any time.</div>
+    <div style="margin-bottom:12px;color:var(--text-muted)">Pauses ${escapeHtml(s.name)}'s enrollment — their upcoming scheduled lessons are paused too, they won't be nagged for payment or flagged as at-risk while frozen, and their regular time slot opens up for someone else to book. Resuming recreates the same number of lessons starting from the resume date.</div>
     <div class="form-field wide"><label for="freeze-reason">Reason (optional)</label><input id="freeze-reason" placeholder="e.g. Traveling until August"></div>
     <div style="text-align:right;margin-top:14px"><button class="btn btn-gold" onclick="confirmFreezeStudent(${id})">Freeze</button></div>
   `);
@@ -1288,10 +1288,35 @@ function confirmFreezeStudent(id){
   s.frozen=true;
   s.frozenSince=new Date().toISOString().slice(0,10);
   s.frozenReason=document.getElementById('freeze-reason')?.value||'';
+
+  // Pull their not-yet-happened lessons out of the schedule too — a frozen
+  // student shouldn't still occupy the calendar or a room slot while
+  // paused. The count is remembered on the student record so resuming can
+  // recreate exactly that many sessions, starting fresh from the resume
+  // date, rather than losing track of how many they were owed.
+  const todayKey=s.frozenSince;
+  const futureScheduled=(db.lessons||[]).filter(l=>
+    (String(l.studentId)===String(s.id) || l.student===s.name) &&
+    l.status==='scheduled' &&
+    (l.status_record||'active')!=='archived' &&
+    l.date>=todayKey
+  );
+  s.frozenLessonsRemaining=futureScheduled.length;
+  if(futureScheduled.length){
+    const idsToRemove=new Set(futureScheduled.map(l=>l.id));
+    db.lessons=(db.lessons||[]).filter(l=>!idsToRemove.has(l.id));
+    idsToRemove.forEach(lid=>{
+      if(window.supabaseClientV1){
+        window.supabaseClientV1.from('lessons').delete().eq('id', lid)
+          .then(({error})=>{ if(error) console.warn('Frozen-student lesson delete failed:', error.message); });
+      }
+    });
+  }
+
   save();
   closeModal();
-  renderStudents();
-  showToast(s.name+' is now frozen');
+  refresh({students:true,lessons:true,overview:true});
+  showToast(s.name+' is now frozen'+(futureScheduled.length?' — '+futureScheduled.length+' upcoming lesson(s) paused':''));
   if(typeof syncStudentUpdateToSupabase==='function') syncStudentUpdateToSupabase(s);
 }
 
@@ -1302,9 +1327,23 @@ function resumeStudent(id){
   s.frozen=false;
   s.frozenSince='';
   s.frozenReason='';
+
+  // Recreate whatever sessions were paused at freeze time — starting from
+  // the next occurrence of their lesson day on/after TODAY (the resume
+  // date), not the old dates, since those already passed while frozen.
+  const owed=s.frozenLessonsRemaining||0;
+  s.frozenLessonsRemaining=0;
+  let recreated=0;
+  if(owed>0 && s.lesson_day && s.lessonTime){
+    const now=new Date();
+    const todayKey=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');
+    const firstDate=nextWeekdayOnOrAfter(todayKey, s.lesson_day);
+    recreated=scheduleWeeklyLessonsFrom(s, firstDate, owed);
+  }
+
   save();
-  renderStudents();
-  showToast(s.name+' resumed');
+  refresh({students:true,lessons:true,overview:true});
+  showToast(s.name+' resumed'+(recreated?' — '+recreated+' lesson(s) rescheduled starting '+formatDateDMY(nextWeekdayOnOrAfter(new Date().toISOString().slice(0,10), s.lesson_day)):''));
   if(typeof syncStudentUpdateToSupabase==='function') syncStudentUpdateToSupabase(s);
 }
 
@@ -8437,8 +8476,20 @@ setDefaultJoinedDate();
 function scheduleWeeklyLessonsFrom(student, firstDate, count){
   if(!firstDate || !count) return 0;
   const newLessons=[];
-  for(let i=0;i<count;i++){
+  // Walk forward week by week until COUNT new lessons are actually
+  // created. Previously this stopped after exactly `count` iterations
+  // regardless of collisions, so any date that already had a lesson
+  // (e.g. an older attended one sitting on/after the new start date —
+  // which resuming a frozen student runs straight into) silently
+  // produced one fewer lesson than requested instead of just moving on
+  // to the next open week. The cap below is a generous safety bound
+  // (~4 years of weekly collisions) so a pathological run of clashes
+  // still can't loop forever.
+  let i=0;
+  const maxIterations=count*10+208;
+  while(newLessons.length<count && i<maxIterations){
     const date=addDaysToDateString(firstDate, i*7);
+    i++;
     if(!date) continue;
     const already=(db.lessons||[]).some(l=>String(l.studentId)===String(student.id) && l.date===date);
     if(already) continue;
@@ -9192,11 +9243,11 @@ function getTeacherBookingsByTime(teacherName, dayName, targetDate, excludeStude
 // photo export) should call to get a teacher's actual slot list for a day
 // — never the raw static prof.timeSlots[dayName] directly, once any
 // Group-plan booking exists that day.
-function getEffectiveTeacherDaySlots(teacherName, dayName, excludeStudentId){
+function getEffectiveTeacherDaySlots(teacherName, dayName, excludeStudentId, targetDateOverride){
   const prof=(db.teacherProfiles||[]).find(p=>p.name===teacherName);
   const baseSlots=(prof?.timeSlots||{})[dayName]||generateSlotsForDay(dayName)||[];
   if(!baseSlots.length) return [];
-  const targetDate=nextOccurrenceOfWeekday(dayName);
+  const targetDate=targetDateOverride||nextOccurrenceOfWeekday(dayName);
   const bookingsByTime=getTeacherBookingsByTime(teacherName, dayName, targetDate, excludeStudentId);
   return computeEffectiveSlots(baseSlots, bookingsByTime);
 }
@@ -9206,35 +9257,40 @@ function getEffectiveTeacherDaySlots(teacherName, dayName, excludeStudentId){
 // options beyond just a student's own existing lesson times, since
 // those may not have a free follow-up slot at all (or academy-wide room
 // capacity may block it even when the teacher personally isn't busy).
-// Checks the upcoming occurrence of each day the teacher works.
+// Scoped to NEXT WEEK'S occurrence of today's own weekday specifically
+// (e.g. scheduling this on a Friday offers next Friday's windows) —
+// not the whole week, and not today itself even if today happens to be
+// that weekday, since a makeup needs to land on a day that's actually
+// still ahead.
 function findTeacherDoubleSessionWindows(teacherName, excludeLessonId){
   const prof=(db.teacherProfiles||[]).find(p=>p.name===teacherName);
   if(!prof) return [];
   const windows=[];
-  WEEKDAY_NAMES.forEach(dayName=>{
-    if(!((prof.timeSlots||{})[dayName]||[]).length) return; // teacher doesn't work this day at all
-    const targetDate=nextOccurrenceOfWeekday(dayName);
-    const effSlots=getEffectiveTeacherDaySlots(teacherName, dayName, null);
-    effSlots.forEach((slot,i)=>{
-      if(slot.occupiedBy) return; // this slot itself must be free
-      const next=effSlots[i+1];
-      if(!next || next.occupiedBy) return; // and the slot right after it too
-      // Range checks over the FULL 90 minutes — the grid checks above
-      // catch grid-aligned bookings, but staggered/off-grid ones (a
-      // lesson at 5:45 inside a 5:30–7:00 window) only show up with a
-      // proper interval-overlap check. Room capacity likewise can fill
-      // partway through the window, not just at its slot boundaries.
-      if(isTeacherBusyDuringRange(teacherName, targetDate, slot.time, 90, excludeLessonId)) return;
-      if(isRoomFullDuringRange(targetDate, slot.time, 90, excludeLessonId)){
-        // A room may free partway through this slot (e.g. a practice
-        // session ending mid-slot) — a shifted 90-minute window starting
-        // then is still a genuinely valid double-session option.
-        const shifted=resolveShiftedBookableTime(targetDate, slot.time, 90, teacherName, excludeLessonId);
-        if(shifted) windows.push({date:targetDate, time:shifted, dayName});
-        return;
-      }
-      windows.push({date:targetDate, time:slot.time, dayName});
-    });
+  const now=new Date();
+  const todayKey=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');
+  const dayName=WEEKDAY_NAMES[now.getDay()];
+  if(!((prof.timeSlots||{})[dayName]||[]).length) return windows; // teacher doesn't work today's weekday at all
+  const targetDate=nextWeekdayStrictlyAfter(todayKey, dayName);
+  const effSlots=getEffectiveTeacherDaySlots(teacherName, dayName, null, targetDate);
+  effSlots.forEach((slot,i)=>{
+    if(slot.occupiedBy) return; // this slot itself must be free
+    const next=effSlots[i+1];
+    if(!next || next.occupiedBy) return; // and the slot right after it too
+    // Range checks over the FULL 90 minutes — the grid checks above
+    // catch grid-aligned bookings, but staggered/off-grid ones (a
+    // lesson at 5:45 inside a 5:30–7:00 window) only show up with a
+    // proper interval-overlap check. Room capacity likewise can fill
+    // partway through the window, not just at its slot boundaries.
+    if(isTeacherBusyDuringRange(teacherName, targetDate, slot.time, 90, excludeLessonId)) return;
+    if(isRoomFullDuringRange(targetDate, slot.time, 90, excludeLessonId)){
+      // A room may free partway through this slot (e.g. a practice
+      // session ending mid-slot) — a shifted 90-minute window starting
+      // then is still a genuinely valid double-session option.
+      const shifted=resolveShiftedBookableTime(targetDate, slot.time, 90, teacherName, excludeLessonId);
+      if(shifted) windows.push({date:targetDate, time:shifted, dayName});
+      return;
+    }
+    windows.push({date:targetDate, time:slot.time, dayName});
   });
   return windows.sort((a,b)=> a.date===b.date ? a.time.localeCompare(b.time) : a.date.localeCompare(b.date));
 }
