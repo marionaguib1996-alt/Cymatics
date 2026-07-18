@@ -285,7 +285,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-31</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-32</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -9854,18 +9854,36 @@ function renderCalendarPage(){
           if(!stillTeacherBusy && !stillRoomFull) trailingStart=candidate;
         }
         const continuingEndLabel=formatTime12h(String(Math.floor(continuingEndMin/60)).padStart(2,'0')+':'+String(continuingEndMin%60).padStart(2,'0'));
+        // Match the exact same look as the cell where this lesson began —
+        // same trial/paid/unpaid color, same tags, no distinct "continuing"
+        // treatment — so a Group session spanning two grid slots reads as
+        // one continuous block instead of visually splitting into a
+        // different-looking second half.
+        const contMatchedStudent=(db.students||[]).find(s=>String(s.id)===String(continuing.studentId) || s.name===continuing.student);
+        const contPaid=contMatchedStudent ? paidSet.has(String(contMatchedStudent.id)) : paidSet.has(String(continuing.studentId));
+        const contIsTrial=contMatchedStudent && (contMatchedStudent.plan==='trial' || contMatchedStudent.plan==='group-trial');
+        const contIsGroup=contMatchedStudent && isGroupPlan(contMatchedStudent.plan);
+        const contTrialTag=contIsTrial ? ' 🎓' : '';
+        const contGroupTag=continuing.isDoubleSession ? ' ⏱ 90min' : (contIsGroup ? ' 👥 1hr' : '');
+        const contMakeupTag=continuing.makeupForLessonId ? ' (Make-Up)' : '';
+        const contNameBlock=`${escapeHtml(continuing.student||'Student')}${contTrialTag}${contGroupTag}${contMakeupTag}`;
+        const contCellStyle=contIsTrial
+          ? {bg:'#1b5e20',color:'#a5d6a7',border:'1px solid #2e7d32'}
+          : contPaid
+            ? {bg:'var(--surface,#1a1916)',color:'var(--text-light,#e8e4d8)',border:'1px solid #333'}
+            : {bg:'#7a5c1f',color:'#f0d78c',border:'1px solid #9c7a2e'};
         if(trailingStart){
           html+=`<div style="min-height:52px;display:flex;flex-direction:column">
-            <div onclick="editLesson(${continuing.id})" title="Click to edit — ${escapeHtml(continuing.student)}'s ${continuing.isDoubleSession?'double session (90 min)':'session'} continues from ${escapeHtml(formatTime12h(continuing.time))} to ${escapeHtml(continuingEndLabel)}" style="background:#123a24;padding:2px;font-size:10px;font-weight:600;text-align:center;color:#7fb896;border:1px dashed #2e7d32;border-bottom:none;cursor:pointer;flex:1;display:flex;align-items:center;justify-content:center">
-              ↳ ${escapeHtml(continuing.student||'')} until ${continuingEndLabel}
+            <div onclick="editLesson(${continuing.id})" title="Click to edit — ${escapeHtml(continuing.student)}'s ${continuing.isDoubleSession?'double session (90 min)':'session'} continues from ${escapeHtml(formatTime12h(continuing.time))} to ${escapeHtml(continuingEndLabel)}" style="background:${contCellStyle.bg};padding:2px;font-size:10px;font-weight:700;text-align:center;color:${contCellStyle.color};border:${contCellStyle.border};border-bottom:none;cursor:pointer;flex:1;display:flex;align-items:center;justify-content:center">
+              ${contNameBlock}
             </div>
             <div ondragover="calendarDragOverCell(event)" ondragleave="calendarDragLeaveCell(event)" ondrop="calendarDropOnCell(event,'${escapeAttr(t.name)}','${targetDate}','${trailingStart}')" title="Free from ${escapeHtml(formatTime12h(trailingStart))} — drop a lesson here to book it" style="background:#1b5e20;border:1px solid #2e7d32;flex:1;display:flex;align-items:center;justify-content:center;font-size:9px;color:rgba(165,214,167,0.75);text-align:center;padding:1px">
               then free · ${escapeHtml(formatTime12h(trailingStart))}
             </div>
           </div>`;
         } else {
-          html+=`<div onclick="editLesson(${continuing.id})" title="Click to edit — ${escapeHtml(continuing.student)}'s ${continuing.isDoubleSession?'double session (90 min)':'session'} continues from ${escapeHtml(formatTime12h(continuing.time))} to ${escapeHtml(continuingEndLabel)}" style="background:#123a24;padding:4px;font-size:11px;font-weight:600;text-align:center;color:#7fb896;border:1px dashed #2e7d32;cursor:pointer;min-height:52px;display:flex;align-items:center;justify-content:center">
-            ↳ ${escapeHtml(continuing.student||'')} until ${continuingEndLabel}
+          html+=`<div onclick="editLesson(${continuing.id})" title="Click to edit — ${escapeHtml(continuing.student)}'s ${continuing.isDoubleSession?'double session (90 min)':'session'} continues from ${escapeHtml(formatTime12h(continuing.time))} to ${escapeHtml(continuingEndLabel)}" style="background:${contCellStyle.bg};padding:4px;font-size:12px;font-weight:700;text-align:center;color:${contCellStyle.color};border:${contCellStyle.border};cursor:pointer;min-height:52px;display:flex;align-items:center;justify-content:center">
+            ${contNameBlock}
           </div>`;
         }
         return;
