@@ -285,7 +285,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-29</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-30</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -7756,10 +7756,16 @@ function renderTeacherWorkspace(){
     // here — an excused absence or a day the teacher was out has nothing
     // to log (no topic covered, no performance to rate).
     const attendedLogs=data.logs.filter(log=>String(log.attendance||'').trim().toLowerCase()==='attended');
+    // Filtered by the STUDENT'S CURRENT lesson_day, not by which weekday
+    // a given log's own date happened to fall on — consistent with how
+    // the Students tab's day filter works. Otherwise, a student whose
+    // day was changed (e.g. Saturday to Friday) would have their older
+    // attended logs stay permanently filed under the OLD day forever,
+    // since those logs' own dates never change even after the student's
+    // schedule does.
     const dayFilteredLogs=dayFilter ? attendedLogs.filter(log=>{
-      if(!log.lessonDate) return false;
-      const d=parseDateUTC(log.lessonDate);
-      return d && WEEKDAY_NAMES[d.getUTCDay()]===dayFilter;
+      const matchedStudent=(db.students||[]).find(s=>s.name===log.studentName);
+      return matchedStudent && matchedStudent.lesson_day===dayFilter;
     }) : attendedLogs;
     // Group logs by student name — one row per student instead of one per session
     const byStudent={};
@@ -7858,10 +7864,10 @@ function openTeacherLogsForStudent(studentName){
     .filter(log=>String(log.attendance||'').trim().toLowerCase()==='attended')
     .sort((a,b)=>String(a.lessonDate||'').localeCompare(String(b.lessonDate||'')));
 
-  const rows=logs.map(log=>`
+  const rows=logs.map((log,i)=>`
     <div class="teacher-row">
       <div>
-        <div class="teacher-row-title">${escapeHtml(formatTeacherLessonDate(log.lessonDate))}</div>
+        <div class="teacher-row-title">${escapeHtml(formatTeacherLessonDate(log.lessonDate))}${i===logs.length-1?' <span class="badge badge-green" style="font-size:10px">Latest Session</span>':''}</div>
         <div class="teacher-row-meta">
           ${escapeHtml(log.instrument||'')} - Performance ${renderStars(log.performanceRating)}
           ${log.topicCovered?'<br>Topic: '+escapeHtml(log.topicCovered):''}
