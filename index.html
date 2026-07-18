@@ -285,7 +285,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-30</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-31</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -9785,22 +9785,46 @@ function renderCalendarPage(){
         // Draggable so the admin can drop this lesson onto a free/frees-at
         // cell in the same teacher's column to change its time.
         const dragAttrs=`draggable="true" ondragstart="calendarDragStart(event,${l.id})"`;
-        if(isTrial){
-          // GREEN: Trial session — reserved exclusively for this now
-          html+=`<div ${dragAttrs} onclick="editLesson(${l.id})" title="Click to edit, or drag to reschedule — ${escapeHtml(l.student)} (Trial) — ${escapeHtml(STATUS_LABELS[l.status]||l.status)}${subTitle}" style="background:#1b5e20;padding:6px;font-size:12px;font-weight:700;text-align:center;color:#a5d6a7;border:1px solid #2e7d32;cursor:grab;min-height:52px;display:flex;flex-direction:column;align-items:center;justify-content:center">
-            ${nameBlock}
-          </div>`;
-        } else if(paid){
-          // NO COLOUR: paid student — blends with app background
-          html+=`<div ${dragAttrs} onclick="editLesson(${l.id})" title="Click to edit, or drag to reschedule — ${escapeHtml(l.student)} (Paid) — ${escapeHtml(STATUS_LABELS[l.status]||l.status)}${subTitle}" style="padding:6px;font-size:12px;font-weight:700;text-align:center;color:var(--text-light,#e8e4d8);border:1px solid #333;cursor:grab;min-height:52px;display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--surface,#1a1916)">
-            ${nameBlock}
-          </div>`;
-        } else {
-          // AMBER: unpaid (non-trial) student — needs attention
-          html+=`<div ${dragAttrs} onclick="editLesson(${l.id})" title="Click to edit, or drag to reschedule — ${escapeHtml(l.student)} (Unpaid) — ${escapeHtml(STATUS_LABELS[l.status]||l.status)}${subTitle}" style="background:#7a5c1f;padding:6px;font-size:12px;font-weight:700;text-align:center;color:#f0d78c;border:1px solid #9c7a2e;cursor:grab;min-height:52px;display:flex;flex-direction:column;align-items:center;justify-content:center">
-            ${nameBlock}
-          </div>`;
+        const cellStyle=isTrial
+          ? {bg:'#1b5e20',color:'#a5d6a7',border:'1px solid #2e7d32',statusLabel:'Trial'}
+          : paid
+            ? {bg:'var(--surface,#1a1916)',color:'var(--text-light,#e8e4d8)',border:'1px solid #333',statusLabel:'Paid'}
+            : {bg:'#7a5c1f',color:'#f0d78c',border:'1px solid #9c7a2e',statusLabel:'Unpaid'};
+
+        // An off-grid custom start time (e.g. 2:15 PM saved through the
+        // Edit Lesson "Custom time..." field) can land mid-slot inside a
+        // standard 45-min row (e.g. a 1:45–2:30 row). Rendering the whole
+        // row as occupied from 1:45 would hide genuinely free, bookable
+        // room time before the lesson actually starts. Split the cell the
+        // same way the trailing "then free" cell already does for the
+        // END of a session — a free portion first, then where the
+        // lesson actually begins — instead of only ever splitting for
+        // trailing time.
+        const slotStartMin=timeToMinutes(slot);
+        const lessonStartMin=timeToMinutes(l.time);
+        let leadingFreeEnd=null;
+        if(lessonStartMin>slotStartMin){
+          const gapMinutes=lessonStartMin-slotStartMin;
+          const stillTeacherBusy=isTeacherBusyDuringRange(t.name, targetDate, slot, gapMinutes, l.id);
+          const stillRoomFull=isRoomFullDuringRange(targetDate, slot, gapMinutes, l.id);
+          if(!stillTeacherBusy && !stillRoomFull) leadingFreeEnd=l.time;
         }
+
+        if(leadingFreeEnd){
+          html+=`<div style="min-height:52px;display:flex;flex-direction:column">
+            <div ondragover="calendarDragOverCell(event)" ondragleave="calendarDragLeaveCell(event)" ondrop="calendarDropOnCell(event,'${escapeAttr(t.name)}','${targetDate}','${slot}')" title="Free until ${escapeHtml(formatTime12h(leadingFreeEnd))} — drop a lesson here to book it" style="background:#1b5e20;border:1px solid #2e7d32;flex:1;display:flex;align-items:center;justify-content:center;font-size:9px;color:rgba(165,214,167,0.75);text-align:center;padding:1px">
+              free until ${escapeHtml(formatTime12h(leadingFreeEnd))}
+            </div>
+            <div ${dragAttrs} onclick="editLesson(${l.id})" title="Click to edit, or drag to reschedule — ${escapeHtml(l.student)} (${cellStyle.statusLabel}) — ${escapeHtml(STATUS_LABELS[l.status]||l.status)}${subTitle}" style="background:${cellStyle.bg};padding:2px;font-size:10px;font-weight:700;text-align:center;color:${cellStyle.color};border:${cellStyle.border};border-top:none;cursor:grab;flex:1;display:flex;align-items:center;justify-content:center">
+              ${nameBlock} begins
+            </div>
+          </div>`;
+          return;
+        }
+
+        html+=`<div ${dragAttrs} onclick="editLesson(${l.id})" title="Click to edit, or drag to reschedule — ${escapeHtml(l.student)} (${cellStyle.statusLabel}) — ${escapeHtml(STATUS_LABELS[l.status]||l.status)}${subTitle}" style="background:${cellStyle.bg};padding:6px;font-size:12px;font-weight:700;text-align:center;color:${cellStyle.color};border:${cellStyle.border};cursor:grab;min-height:52px;display:flex;flex-direction:column;align-items:center;justify-content:center">
+          ${nameBlock}
+        </div>`;
         return;
       }
 
