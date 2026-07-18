@@ -285,7 +285,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-32</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-33</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -7569,7 +7569,7 @@ function renderTeacherWorkspace(){
     const rows=filteredStudents.map(s=>`
       <div class="teacher-row">
         <div>
-          <div class="teacher-row-title">${escapeHtml(s.name||((s.first_name||'')+' '+(s.last_name||'')).trim()||'Student')}${teacherPlanBadgesHtml(s.plan)?' '+teacherPlanBadgesHtml(s.plan):''}</div>
+          <div class="teacher-row-title">${escapeHtml(s.name||((s.first_name||'')+' '+(s.last_name||'')).trim()||'Student')}${teacherPlanBadgesHtml(s.plan)?' '+teacherPlanBadgesHtml(s.plan):''}${s.frozen?' <span class="badge badge-blue" title="Enrollment paused — no lessons scheduled while frozen">❄️ Frozen</span>':''}</div>
           <div class="teacher-row-meta">${escapeHtml(s.instrument||'No instrument')} - ${escapeHtml(s.lesson_day||'No day set')}</div>
         </div>
         <button class="btn btn-sm btn-gold" onclick="openTeacherStudentWorkspace('${jsString(s.id)}')">Open</button>
@@ -8011,7 +8011,7 @@ function openTeacherStudentWorkspace(studentId){
         <div>
           <div class="card-title">Student Workspace</div>
           <h2 style="font-family:'DM Serif Display',serif;margin-bottom:4px">${escapeHtml(student.name||'Student')}</h2>
-          <div class="teacher-row-meta">${escapeHtml(student.instrument||'No instrument')} - ${escapeHtml(student.lesson_day||'No lesson day')} - ${escapeHtml(PLAN_LABELS[student.plan]||student.plan||'No plan')}</div>
+          <div class="teacher-row-meta">${escapeHtml(student.instrument||'No instrument')} - ${escapeHtml(student.lesson_day||'No lesson day')} - ${escapeHtml(PLAN_LABELS[student.plan]||student.plan||'No plan')}${student.frozen?' <span class="badge badge-blue" title="Enrollment paused — no lessons scheduled while frozen">❄️ Frozen</span>':''}</div>
         </div>
         <button class="btn btn-sm" onclick="document.getElementById('teacher-student-workspace').innerHTML=''">Close</button>
       </div>
