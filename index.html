@@ -285,7 +285,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-27</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-28</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -3119,8 +3119,17 @@ function editLesson(id){
  );
  const lessonDay=(l.date ? WEEKDAY_NAMES[parseDateUTC(l.date)?.getUTCDay()??-1] : '') || student?.lesson_day || '';
  const timeOpts=getLessonTimeOptions(l.teacher, lessonDay, l.time, l.date, l.id);
+ // The grid-based <select> is convenient (shows Teacher Busy/Rooms Full
+ // hints) but locked to 45-minute increments from the day's anchor time —
+ // an off-grid time like 2:15 PM simply can't exist as an <option>. This
+ // modal is explicitly documented as a single-session, one-off override
+ // ("Changing the time here only affects this one session"), so it needs
+ // an escape hatch: a "Custom time..." choice that reveals a free-form
+ // time input, no different in spirit from the existing custom payroll
+ // amount override right below it.
  const timeField=timeOpts
-   ? `<div class="form-field"><label for="el-time">Time Slot</label><select id="el-time">${timeOpts}</select></div>`
+   ? `<div class="form-field"><label for="el-time">Time Slot</label><select id="el-time" onchange="onEditLessonTimeSelectChange()">${timeOpts}<option value="__custom__">Custom time…</option></select>
+       <input id="el-time-custom" type="time" value="${escapeAttr(l.time)}" style="display:none;margin-top:6px"></div>`
    : `<div class="form-field"><label for="el-time">Time</label><input id="el-time" type="time" value="${escapeAttr(l.time)}"></div>`;
  openModal('Edit Lesson - '+(l.student||''), `
    <div class="teacher-log-grid">
@@ -3144,6 +3153,13 @@ function editLesson(id){
    <div style="text-align:right;margin-top:14px"><button class="btn btn-gold" onclick="saveEditLesson(${l.id})">Save Lesson</button></div>`);
 }
 
+function onEditLessonTimeSelectChange(){
+  const sel=document.getElementById('el-time');
+  const custom=document.getElementById('el-time-custom');
+  if(!sel || !custom) return;
+  custom.style.display = (sel.value==='__custom__') ? 'block' : 'none';
+}
+
 function updateEditLessonTimeOptions(id){
   const l=db.lessons.find(x=>x.id===id);
   if(!l) return;
@@ -3154,10 +3170,19 @@ function updateEditLessonTimeOptions(id){
   const dayName=(dayIdx!==undefined && dayIdx!==null) ? WEEKDAY_NAMES[dayIdx] : '';
   const timeEl=document.getElementById('el-time');
   if(!timeEl || !dayName) return;
-  const currentTime=timeEl.value||l.time;
+  const customEl=document.getElementById('el-time-custom');
+  const wasCustom=timeEl.tagName==='SELECT' && timeEl.value==='__custom__';
+  // If custom mode is active, the select's own value is the literal
+  // string "__custom__" — not a real time — so the actual time to
+  // preserve across the rebuild has to come from the custom input instead.
+  const currentTime=wasCustom ? (customEl?.value||l.time) : (timeEl.value||l.time);
   const newOpts=getLessonTimeOptions(teacherName, dayName, currentTime, newDateIso, id);
   if(newOpts && timeEl.tagName==='SELECT'){
-    timeEl.innerHTML=newOpts;
+    timeEl.innerHTML=newOpts+'<option value="__custom__">Custom time…</option>';
+    if(wasCustom){
+      timeEl.value='__custom__';
+      if(customEl) customEl.style.display='block';
+    }
   }
 }
 
@@ -3165,7 +3190,10 @@ function saveEditLesson(id){
  const l=db.lessons.find(x=>x.id===id);
  if(!l) return;
  const d=dmyToIso(document.getElementById('el-date')?.value||'')||l.date;
- const tm=document.getElementById('el-time')?.value||'';
+ const timeEl=document.getElementById('el-time');
+ const tm=(timeEl?.value==='__custom__')
+   ? (document.getElementById('el-time-custom')?.value||'')
+   : (timeEl?.value||'');
  const t=document.getElementById('el-teacher')?.value||'';
  const i=document.getElementById('el-instrument')?.value||'';
  const s=document.getElementById('el-status')?.value||l.status;
