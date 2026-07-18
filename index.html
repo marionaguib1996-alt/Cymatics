@@ -285,7 +285,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-26</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-27</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -8944,15 +8944,8 @@ function getAvailableSlotsWithCapacity(teacherName, dayName, excludeStudentId, f
   // flow, not this student-slot path, so it isn't the concern here.)
   const isExtendedBooking=!!forDoubleSession;
   const preferredDuration=isExtendedBooking ? GROUP_SESSION_DURATION_MINUTES : SESSION_DURATION_MINUTES;
-  const minDuration=isExtendedBooking ? GROUP_SESSION_MIN_MINUTES : SESSION_DURATION_MINUTES;
   const ownLesson=excludeStudentId ? (db.lessons||[]).find(l=>l.date===targetDate && String(l.studentId)===String(excludeStudentId) && (l.status_record||'active')!=='archived') : null;
   const exId=ownLesson?.id||null;
-
-  // Does a booking of `dur` fit fully (teacher free AND room physically
-  // free) starting exactly at `t`? Room capacity uses the physical range
-  // check only, matching the calendar and case (1) above.
-  const fitsAt=(t,dur)=> !isTeacherBusyDuringRange(teacherName, targetDate, t, dur, exId)
-    && !isRoomFullDuringRange(targetDate, t, dur, exId);
 
   const results=[];
   effectiveSlots.forEach(slot=>{
@@ -8980,17 +8973,21 @@ function getAvailableSlotsWithCapacity(teacherName, dayName, excludeStudentId, f
       if(shifted){ results.push({time:nominal, full:false, shiftedFrom:nominal, actualStart:shifted}); return; }
     }
 
-    // 2) Preferred didn't fit, but this booking can shrink to its minimum.
-    //    Offer the slot if at least the minimum fits — either right at the
-    //    nominal time (a 45-min gap before the next lesson), or shifted so
-    //    it ends exactly when the next lesson starts.
-    if(minDuration<preferredDuration){
-      if(fitsAt(nominal, minDuration)){ results.push({time:nominal, full:false, shortWindow:true}); return; }
-      const shiftedMin=resolveShiftedBookableTime(targetDate, nominal, minDuration, teacherName, exId);
-      if(shiftedMin){ results.push({time:nominal, full:false, shiftedFrom:nominal, actualStart:shiftedMin, shortWindow:true}); return; }
-    }
-
-    // 3) Nothing fits here — show as full/disabled.
+    // 2) Nothing fits here — show as full/disabled.
+    //
+    // NOTE: this used to also offer a "shrink to minimum duration" option
+    // when the full preferred duration didn't fit but a shorter window
+    // did (e.g. a Group session squeezed into 45 minutes instead of its
+    // usual 60). That's unsafe: nothing downstream ever remembers a
+    // lesson was booked short — getLessonDurationMinutes() always treats
+    // a Group-plan lesson as its full 60 minutes everywhere else
+    // (Calendar, room capacity, conflict detection). So a slot offered
+    // this way looked bookable at the moment of booking, then silently
+    // collided with whatever was booked right after it the instant its
+    // real duration applied — which is exactly how a Group session ended
+    // up double-booking a teacher against another student's lesson 15
+    // minutes later. A group booking now only appears as available when
+    // its full duration genuinely fits with nothing in the way.
     results.push({time:nominal, full:true});
   });
   return results;
