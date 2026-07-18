@@ -285,7 +285,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-25</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-26</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -9717,12 +9717,22 @@ function renderCalendarPage(){
       const teacherSlots=(t.timeSlots||{})[dayName]||[];
       const teacherHasSlot=teacherSlots.includes(slot);
       const booked=lessonsInSlotRange(t.name, slot, slotEnd);
+      // A longer session (e.g. a 60-minute Group lesson) that started in
+      // an earlier slot but is still running can overlap a lesson that's
+      // directly booked at this slot's own start time — the teacher
+      // can't actually be in both places. That's just as real a conflict
+      // as two lessons sharing the exact same recorded time, but it was
+      // invisible before: this only ever got checked once booked.length
+      // was already 0, i.e. after conflicts among same-slot bookings had
+      // already been ruled out.
+      const overlappingContinuing=booked.length ? continuingLesson(t.name, slot) : null;
 
-      if(booked.length>1){
+      if(booked.length>1 || overlappingContinuing){
         // CONFLICT: more than one lesson booked for this teacher in this time
         // range — shouldn't happen, but shown clearly (not silently hidden) if it does
-        html+=`<div style="background:#7a1f1f;border:2px solid #e06c6c;padding:4px;font-size:11px;font-weight:700;text-align:center;color:#ffb3b3;min-height:52px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px" title="Scheduling conflict — ${booked.length} lessons booked for the same teacher at the same time">
-          ⚠ CONFLICT<br>${booked.map(l=>`<span onclick="editLesson(${l.id})" style="cursor:pointer;text-decoration:underline">${escapeHtml(l.student||'Student')}</span>`).join(' / ')}
+        const conflictLessons=overlappingContinuing ? [...booked, overlappingContinuing] : booked;
+        html+=`<div style="background:#7a1f1f;border:2px solid #e06c6c;padding:4px;font-size:11px;font-weight:700;text-align:center;color:#ffb3b3;min-height:52px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px" title="Scheduling conflict — ${conflictLessons.length} lessons booked for the same teacher at the same time">
+          ⚠ CONFLICT<br>${conflictLessons.map(l=>`<span onclick="editLesson(${l.id})" style="cursor:pointer;text-decoration:underline">${escapeHtml(l.student||'Student')}</span>`).join(' / ')}
         </div>`;
         return;
       }
