@@ -285,7 +285,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-34</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-35</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -375,6 +375,9 @@ input::placeholder{color:var(--text-dim)}
           <option value="weekly">Weekly session (600 EGP)</option>
           <option value="group">Group — 1hr (3,000 EGP)</option>
           <option value="group-trial">Group Trial — 1hr (750 EGP)</option>
+          <option value="group-1">Group · 1 Lesson Left — 1hr (750 EGP)</option>
+          <option value="group-2">Group · 2 Lessons Left — 1hr (1,500 EGP)</option>
+          <option value="group-3">Group · 3 Lessons Left — 1hr (2,250 EGP)</option>
         </select>
       </div>
     </div>
@@ -1058,8 +1061,8 @@ input::placeholder{color:var(--text-dim)}
 </div>
 
 <script>
-const PLAN_LABELS = {'trial':'Trial Session','lesson-1':'1 Lesson Left','lesson-2':'2 Lessons Left','lesson-3':'3 Lessons Left','monthly-4':'Monthly (4 wks)','monthly-5':'Monthly (5 wks)','weekly':'Weekly','group':'Group (1hr)','group-trial':'Group Trial'};
-const PLAN_AMOUNTS = {'trial':500,'lesson-1':500,'lesson-2':1000,'lesson-3':1500,'monthly-4':2000,'monthly-5':2500,'weekly':600,'group':3000,'group-trial':750};
+const PLAN_LABELS = {'trial':'Trial Session','lesson-1':'1 Lesson Left','lesson-2':'2 Lessons Left','lesson-3':'3 Lessons Left','monthly-4':'Monthly (4 wks)','monthly-5':'Monthly (5 wks)','weekly':'Weekly','group':'Group (1hr)','group-trial':'Group Trial','group-1':'Group · 1 Lesson Left','group-2':'Group · 2 Lessons Left','group-3':'Group · 3 Lessons Left'};
+const PLAN_AMOUNTS = {'trial':500,'lesson-1':500,'lesson-2':1000,'lesson-3':1500,'monthly-4':2000,'monthly-5':2500,'weekly':600,'group':3000,'group-trial':750,'group-1':750,'group-2':1500,'group-3':2250};
 
 // A "Group" plan books a 1-hour lesson instead of the standard
 // 45-minute slot — since the app's scheduling granularity is fixed at
@@ -1075,7 +1078,7 @@ const PLAN_AMOUNTS = {'trial':500,'lesson-1':500,'lesson-2':1000,'lesson-3':1500
 // double session with its makeup). Same-ish name, different concept —
 // keeping these clearly distinct in naming avoids confusing the two.
 function isGroupPlan(plan){
-  return plan==='group' || plan==='group-trial';
+  return plan==='group' || plan==='group-trial' || plan==='group-1' || plan==='group-2' || plan==='group-3';
 }
 
 // Returns what a student actually owes — their plan's standard price,
@@ -2154,6 +2157,7 @@ function syncPaymentToggleToSupabase(id, month, paid, method){
   if(!window.supabaseClientV1) return;
   const student=db.students.find(s=>s.id===id);
   const studentName=student?.name||'';
+  const studentCode=student?.student_code||'';
   const payload={
     student_id: id,
     student_name: studentName,
@@ -2162,6 +2166,13 @@ function syncPaymentToggleToSupabase(id, month, paid, method){
     payment_method: method,
     paid_at: paid ? new Date().toISOString() : null
   };
+  // Include the stable student_code when the payments table has that
+  // column, so payment rows can be matched back to their student through
+  // local-id churn (a locally-created student's id is a temp Date.now()
+  // value until it's remapped to Supabase's serial id on the next
+  // reload). Sent only when present so this is a no-op on older schemas
+  // without the column rather than a hard failure.
+  if(studentCode) payload.student_code=studentCode;
   // Deliberately not using .upsert()/onConflict here — that silently fails
   // on every single call if the payments table doesn't have the required
   // unique constraint on (student_id, month), which looked exactly like a
@@ -2169,30 +2180,26 @@ function syncPaymentToggleToSupabase(id, month, paid, method){
   // reverts on the next reload) but was actually a guaranteed failure.
   // Checking existence manually first works regardless of that constraint.
   //
-  // Look up existing rows by student_id OR the (stable) student_name for the
-  // same month. There should be at most one, but earlier id-churn could have
-  // created duplicates — which is exactly what produced the 409 errors: the
-  // old code tried to UPDATE every match to the same student_id+month, and
-  // the second update collided with the unique constraint on
-  // (student_id, month). So: update ONE row and DELETE the rest.
-  let query=window.supabaseClientV1.from('payments').select('id,student_id,student_name').eq('month', month);
+  // Match existing rows by student_code FIRST (stable across id churn),
+  // then student_id, then the student_name — mirroring how the student
+  // merge itself resolves identity. There should be at most one, but
+  // earlier id-churn could have created duplicates: update ONE, delete
+  // the rest.
+  let query=window.supabaseClientV1.from('payments').select('id,student_id,student_name,student_code').eq('month', month);
   query.then(({data,error})=>{
       if(error){ console.warn('Payment lookup failed:', error.message); return; }
-      const rows=(data||[]).filter(r=>String(r.student_id)===String(id) || (studentName && r.student_name===studentName));
+      const rows=(data||[]).filter(r=>
+        (studentCode && r.student_code && String(r.student_code)===String(studentCode)) ||
+        String(r.student_id)===String(id) ||
+        (studentName && r.student_name===studentName)
+      );
       if(rows.length){
         const keep=rows[0];
         const dupes=rows.slice(1);
-        // Delete duplicates FIRST (sequentially), so that by the time we
-        // update the row we're keeping, it's the only row for this
-        // student+month and the update can't collide with the unique
-        // constraint. Doing these concurrently risked the update landing
-        // before a duplicate was gone — the original 409.
         let chain=Promise.resolve();
         dupes.forEach(d=>{ chain=chain.then(()=>window.supabaseClientV1.from('payments').delete().eq('id', d.id)); });
         return chain.then(()=>window.supabaseClientV1.from('payments').update(payload).eq('id', keep.id));
       } else {
-        // No existing row — insert. If a row races in and the insert 409s on
-        // the unique constraint, fall back to updating the existing row.
         return window.supabaseClientV1.from('payments').insert([payload]).then(res=>{
           if(res && res.error){
             return window.supabaseClientV1.from('payments').update(payload).eq('student_id', id).eq('month', month);
@@ -2565,7 +2572,7 @@ function convertTrial(id){
        ${timeChoicesWithCurrent.length ? timeChoicesWithCurrent.map(t=>`<option value="${escapeAttr(t)}" ${t===student.lessonTime?'selected':''}>${escapeHtml(formatTime12h(t))}</option>`).join('') : '<option value="">No available slots</option>'}
      </select></div>
      <div class="form-field"><label for="rn-plan">Convert To</label><select id="rn-plan">
-       ${['monthly-4','monthly-5','weekly','lesson-1','lesson-2','lesson-3'].map(k=>`<option value="${k}">${PLAN_LABELS[k]}</option>`).join('')}
+       ${['monthly-4','monthly-5','weekly','lesson-1','lesson-2','lesson-3','group','group-1','group-2','group-3'].map(k=>`<option value="${k}">${PLAN_LABELS[k]}</option>`).join('')}
      </select></div>
    </div>
    <div style="text-align:right;margin-top:14px"><button class="btn btn-gold" onclick="confirmRenewal(${id})">Confirm Conversion</button></div>`);
@@ -5058,11 +5065,12 @@ async function _autoLoadFromCloudImpl(){
    if(payments && payments.length){
      const newPayments={};
      payments.forEach(p=>{
-       // Match by id first — unique per enrollment, and correct even for
-       // multi-course students who deliberately share a name across two
-       // separate records. Name is only a fallback for older payment rows
-       // that might not have a valid student_id.
-       const student=(db.students||[]).find(s=>String(s.id)===String(p.student_id))
+       // Match by the stable student_code first (survives local-id churn
+       // and name edits), then by id, then by name as a last resort for
+       // older rows written before student_code existed. Same identity
+       // resolution order as the student merge and the payment write path.
+       const student=(p.student_code && (db.students||[]).find(s=>String(s.student_code)===String(p.student_code)))
+         || (db.students||[]).find(s=>String(s.id)===String(p.student_id))
          || (db.students||[]).find(s=>s.name===p.student_name);
        if(student && p.month){
          newPayments[student.id+'_'+p.month]=!!p.paid;
@@ -7166,7 +7174,7 @@ function getLocalTodayKey(){
 // emoji. Group Trial shows both badges together.
 function teacherPlanBadgesHtml(plan){
   let html='';
-  if(plan==='group' || plan==='group-trial') html+='<span class="badge badge-purple">Group</span> ';
+  if(isGroupPlan(plan)) html+='<span class="badge badge-purple">Group</span> ';
   if(plan==='trial' || plan==='group-trial') html+='<span class="badge badge-blue">Trial</span>';
   return html.trim();
 }
@@ -8561,7 +8569,7 @@ function scheduleWeeklyLessonsFrom(student, firstDate, count){
 // Single source of truth for how many recurring lessons a plan schedules.
 // group/group-trial map to their base equivalents (4 weekly / 1 trial).
 function getPlanSessionCount(plan){
-  const sessionCounts={'trial':1,'group-trial':1,'monthly-4':4,'monthly-5':5,'weekly':1,'group':4,'lesson-1':1,'lesson-2':2,'lesson-3':3};
+  const sessionCounts={'trial':1,'group-trial':1,'monthly-4':4,'monthly-5':5,'weekly':1,'group':4,'lesson-1':1,'lesson-2':2,'lesson-3':3,'group-1':1,'group-2':2,'group-3':3};
   return sessionCounts[plan]||0;
 }
 
@@ -8602,7 +8610,7 @@ function renewStudentSubscription(id){
         ${timeChoicesWithCurrent.length ? timeChoicesWithCurrent.map(t=>`<option value="${escapeAttr(t)}" ${t===student.lessonTime?'selected':''}>${escapeHtml(formatTime12h(t))}</option>`).join('') : '<option value="">No available slots</option>'}
       </select></div>
       <div class="form-field"><label for="rn-plan">Plan</label><select id="rn-plan">
-        ${['trial','monthly-4','monthly-5','weekly','lesson-1','lesson-2','lesson-3'].map(k=>`<option value="${k}" ${k===student.plan?'selected':''}>${PLAN_LABELS[k]}</option>`).join('')}
+        ${['trial','monthly-4','monthly-5','weekly','lesson-1','lesson-2','lesson-3','group','group-trial','group-1','group-2','group-3'].map(k=>`<option value="${k}" ${k===student.plan?'selected':''}>${PLAN_LABELS[k]}</option>`).join('')}
       </select></div>
     </div>
     <div style="text-align:right;margin-top:14px"><button class="btn btn-gold" onclick="confirmRenewal(${id})">Confirm Renewal</button></div>`);
@@ -8652,7 +8660,7 @@ function confirmRenewal(id){
   const rnDur=isGroupPlan(plan)?GROUP_SESSION_DURATION_MINUTES:SESSION_DURATION_MINUTES;
   if(isRoomFullDuringRange(rnTargetDate, lessonTime, rnDur, rnOwnLesson?.id||null)){ showToast('That slot is at the 3-room limit — pick another.'); return; }
 
-  const sessionCounts={'trial':1,'monthly-4':4,'monthly-5':5,'weekly':1,'lesson-1':1,'lesson-2':2,'lesson-3':3,'group':4,'group-trial':1};
+  const sessionCounts={'trial':1,'monthly-4':4,'monthly-5':5,'weekly':1,'lesson-1':1,'lesson-2':2,'lesson-3':3,'group':4,'group-trial':1,'group-1':1,'group-2':2,'group-3':3};
   const count=sessionCounts[plan];
   if(!count){ showToast('Please choose a valid plan'); return; }
 
@@ -8744,6 +8752,13 @@ function confirmRenewal(id){
     const monthSel=document.getElementById('global-month');
     if(monthSel && newLessonMonth && monthSel.value!==newLessonMonth && [...monthSel.options].some(o=>o.value===newLessonMonth)){
       monthSel.value=newLessonMonth;
+      // Fire the month-change pipeline so EVERY month-scoped render
+      // recomputes against the new month together. Without this, the
+      // selector's value changes but the render below runs while the app
+      // is half-switched, and payment status (which is keyed by month)
+      // reads the new month where nobody has paid yet — making every
+      // student briefly show unpaid until a manual refresh.
+      if(typeof onMonthChange==='function') onMonthChange();
     }
   }
 
