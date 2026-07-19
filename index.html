@@ -285,7 +285,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-33</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-34</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -8442,8 +8442,25 @@ function renderStudentScheduleView(){
   if(!studentId){ host.innerHTML=teacherEmpty('Select your name above to view your schedule.'); return; }
   const student=(db.students||[]).find(s=>String(s.id)===String(studentId));
   if(!student){ host.innerHTML=teacherEmpty('Student not found.'); return; }
-  const nextDate=nextOccurrenceOfWeekday(student.lesson_day);
   const todayKey=new Date().toISOString().slice(0,10);
+  // Next Session comes from the student's ACTUAL next scheduled lesson,
+  // not a projection of their usual weekday. The projection happily
+  // fabricated a date even when nothing was booked — most visibly for a
+  // frozen student (whose upcoming lessons are deliberately removed on
+  // freeze), where a parent could read a confident "Next Session:
+  // Saturday …" for a session that does not exist. Anchoring to the real
+  // lesson record is also simply more accurate: it reflects one-off
+  // reschedules and custom times, and shows '--' when a plan batch has
+  // genuinely run out.
+  const nextLesson=(db.lessons||[])
+    .filter(l=>(l.status_record||'active')!=='archived'
+      && (String(l.studentId)===String(student.id) || l.student===student.name)
+      && l.status==='scheduled'
+      && (l.date||'')>=todayKey)
+    .sort((a,b)=>String(a.date||'').localeCompare(String(b.date||'')))[0]||null;
+  const nextSessionValue=student.frozen
+    ? '❄️ Paused'
+    : (nextLesson ? escapeHtml(formatLedgerDate(nextLesson.date)) : '--');
   const recentLessons=(db.lessons||[])
     .filter(l=>(l.status_record||'active')!=='archived'
       && (String(l.studentId)===String(student.id) || l.student===student.name)
@@ -8454,7 +8471,7 @@ function renderStudentScheduleView(){
   host.innerHTML=`
     <div class="teacher-mini-grid" style="margin-bottom:12px">
       <div class="metric"><div class="metric-label">Time Slot</div><div class="metric-value">${student.lessonTime?escapeHtml(formatTime12h(student.lessonTime)):'--'}</div></div>
-      <div class="metric green"><div class="metric-label">Next Session</div><div class="metric-value green">${nextDate?escapeHtml(formatLedgerDate(nextDate)):'--'}</div></div>
+      <div class="metric ${student.frozen?'amber':'green'}"><div class="metric-label">Next Session</div><div class="metric-value ${student.frozen?'amber':'green'}">${nextSessionValue}</div></div>
       <div class="metric"><div class="metric-label">Instrument</div><div class="metric-value">${escapeHtml(student.instrument||'--')}</div></div>
     </div>
     <div class="summary-row"><span class="s-label">Teacher</span><span class="s-val">${escapeHtml(student.teacher||'--')}</span></div>
