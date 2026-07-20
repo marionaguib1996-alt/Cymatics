@@ -304,7 +304,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-42</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-43</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1153,10 +1153,6 @@ input::placeholder{color:var(--text-dim)}
 </div>
 
 <script>
-// InstaPay handle shown to students on their unpaid payment state so they
-// can pay without asking. Edit this to your actual InstaPay address.
-const ACADEMY_INSTAPAY_HANDLE = 'Cymatics@instapay';
-
 const PLAN_LABELS = {'trial':'Trial Session','lesson-1':'1 Lesson Left','lesson-2':'2 Lessons Left','lesson-3':'3 Lessons Left','monthly-4':'Monthly (4 wks)','monthly-5':'Monthly (5 wks)','weekly':'Weekly','group':'Group (1hr)','group-trial':'Group Trial','group-1':'Group · 1 Lesson Left','group-2':'Group · 2 Lessons Left','group-3':'Group · 3 Lessons Left'};
 const PLAN_AMOUNTS = {'trial':500,'lesson-1':500,'lesson-2':1000,'lesson-3':1500,'monthly-4':2000,'monthly-5':2500,'weekly':600,'group':3000,'group-trial':750,'group-1':750,'group-2':1500,'group-3':2250};
 
@@ -11180,10 +11176,10 @@ function renderStudentPortalPayments(){
 
   const unpaidInstapayBlock = paidThisMonth ? '' : `
     <div style="background:var(--amber-bg,#3a2f14);border:1px solid var(--amber-text,#e0b84c);border-radius:8px;padding:12px 14px;margin-bottom:12px">
-      <div style="font-weight:700;color:var(--amber-text,#e0b84c);margin-bottom:6px">💳 How to pay for ${escapeHtml(thisMonthLabel)}</div>
+      <div style="font-weight:700;color:var(--amber-text,#e0b84c);margin-bottom:6px">💳 Payment for ${escapeHtml(thisMonthLabel)}</div>
       <div style="font-size:13px;color:var(--text-light,#e8e4d8);line-height:1.6">
         Amount due: <strong>${amount}</strong><br>
-        Send via <strong>InstaPay</strong> to <strong>${escapeHtml(ACADEMY_INSTAPAY_HANDLE)}</strong>, then send the payment screenshot to us on WhatsApp to confirm your spot.
+        Message us on WhatsApp to arrange payment and confirm your spot.
       </div>
     </div>`;
 
