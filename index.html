@@ -71,6 +71,7 @@ body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;min
 
 /* METRIC GRID */
 .metric-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:1.5rem}
+.metric-grid.metric-grid-5{grid-template-columns:repeat(5,1fr)}
 .metric{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:1.1rem 1.25rem;position:relative;overflow:hidden}
 .metric::after{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--gold-dim)}
 .metric.green::after{background:var(--green)}
@@ -224,6 +225,7 @@ input::placeholder{color:var(--text-dim)}
 @keyframes toast-fadeout{0%{opacity:1;transform:translateY(0)}80%{opacity:1;transform:translateY(0)}100%{opacity:0;transform:translateY(8px)}}
 @media(max-width:768px){
   .metric-grid{grid-template-columns:1fr 1fr}
+  .metric-grid.metric-grid-5{grid-template-columns:1fr 1fr}
   .two-col{grid-template-columns:1fr}
   .app-header{padding:0.5rem 1rem;height:auto;flex-wrap:wrap;row-gap:8px}
   .main{padding:1rem}
@@ -285,7 +287,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-35</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-37</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -551,7 +553,7 @@ input::placeholder{color:var(--text-dim)}
 <option value="instrument_desc">Instrument Z-A</option>
 </select>
 </div>
-<div id="lesson-summary" class="metric-grid"></div>
+<div id="lesson-summary" class="metric-grid metric-grid-5"></div>
 </div>
 
 <div class="card">
@@ -606,7 +608,7 @@ input::placeholder{color:var(--text-dim)}
 <div class="card">
   <div class="card-title">Weekly Free Slots <small style="text-transform:none;letter-spacing:normal;font-weight:400;color:var(--text-muted)">— every open slot across the week, by instrument</small></div>
   <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
-    <select id="fs-instrument" onchange="renderFreeSlotsOverview()" style="min-width:180px"><option value="">Select Instrument</option></select>
+    <select id="fs-instrument" onchange="onFreeSlotInstrumentChange()" style="min-width:180px"><option value="">Select Instrument</option></select>
   </div>
   <div id="free-slots-overview"></div>
 </div>
@@ -2166,30 +2168,18 @@ function syncPaymentToggleToSupabase(id, month, paid, method){
     payment_method: method,
     paid_at: paid ? new Date().toISOString() : null
   };
-  // Include the stable student_code when the payments table has that
-  // column, so payment rows can be matched back to their student through
-  // local-id churn (a locally-created student's id is a temp Date.now()
-  // value until it's remapped to Supabase's serial id on the next
-  // reload). Sent only when present so this is a no-op on older schemas
-  // without the column rather than a hard failure.
-  if(studentCode) payload.student_code=studentCode;
-  // Deliberately not using .upsert()/onConflict here — that silently fails
-  // on every single call if the payments table doesn't have the required
-  // unique constraint on (student_id, month), which looked exactly like a
-  // rare race condition from the outside (toggle appears to work, then
-  // reverts on the next reload) but was actually a guaranteed failure.
-  // Checking existence manually first works regardless of that constraint.
-  //
-  // Match existing rows by student_code FIRST (stable across id churn),
-  // then student_id, then the student_name — mirroring how the student
-  // merge itself resolves identity. There should be at most one, but
-  // earlier id-churn could have created duplicates: update ONE, delete
-  // the rest.
-  let query=window.supabaseClientV1.from('payments').select('id,student_id,student_name,student_code').eq('month', month);
-  query.then(({data,error})=>{
-      if(error){ console.warn('Payment lookup failed:', error.message); return; }
+  // student_code lets a payment survive local-id churn, but only if the
+  // payments TABLE actually has that column. window._paymentsHasStudentCode
+  // is a cached one-time probe result: true/false once known, undefined
+  // until then. When it's known-false we never send or select the column,
+  // so an older schema without it degrades cleanly to id+name matching
+  // (the original behaviour) instead of erroring on every toggle.
+  const codeColOk = window._paymentsHasStudentCode !== false;
+  if(studentCode && codeColOk) payload.student_code=studentCode;
+  const selectCols = codeColOk ? 'id,student_id,student_name,student_code' : 'id,student_id,student_name';
+  const finishFromRows=(data)=>{
       const rows=(data||[]).filter(r=>
-        (studentCode && r.student_code && String(r.student_code)===String(studentCode)) ||
+        (codeColOk && studentCode && r.student_code && String(r.student_code)===String(studentCode)) ||
         String(r.student_id)===String(id) ||
         (studentName && r.student_name===studentName)
       );
@@ -2207,6 +2197,24 @@ function syncPaymentToggleToSupabase(id, month, paid, method){
           return res;
         });
       }
+  };
+  window.supabaseClientV1.from('payments').select(selectCols).eq('month', month)
+    .then(({data,error})=>{
+      if(error){
+        // A missing-column error (42703 / "does not exist") means this
+        // schema predates student_code — remember that, drop the column,
+        // and retry once so the toggle still succeeds.
+        const msg=(error.message||'')+' '+(error.code||'');
+        if(codeColOk && /student_code/.test(msg) && /does not exist|42703/.test(msg)){
+          window._paymentsHasStudentCode=false;
+          delete payload.student_code;
+          return window.supabaseClientV1.from('payments').select('id,student_id,student_name').eq('month', month)
+            .then(({data:d2,error:e2})=>{ if(e2){ console.warn('Payment lookup failed:', e2.message); return; } return finishFromRows(d2); });
+        }
+        console.warn('Payment lookup failed:', error.message); return;
+      }
+      if(window._paymentsHasStudentCode===undefined) window._paymentsHasStudentCode=true;
+      return finishFromRows(data);
     })
     .then(res=>{ if(res && res.error) console.warn('Payment sync failed:', res.error.message); })
     .catch(err=>console.warn('Payment sync failed:', err.message));
@@ -2970,7 +2978,13 @@ if(sum){sum.innerHTML=`<div class="metric"><div class="metric-label">Lessons</di
      const linkedMakeup=owed ? findMakeupLessonFor(l.id) : null;
      const attendedUnpaid=l.status==='attended' && l.unpaid;
      const matchedStudent=(db.students||[]).find(s=>String(s.id)===String(l.studentId) || s.name===l.student);
-     const planBadges=typeof teacherPlanBadgesHtml==='function' ? teacherPlanBadgesHtml(matchedStudent?.plan) : '';
+     let planBadges=typeof teacherPlanBadgesHtml==='function' ? teacherPlanBadgesHtml(matchedStudent?.plan) : '';
+     // A lesson that WAS a trial (stamped at conversion) keeps its Trial
+     // badge even though the student is no longer on a trial plan — the
+     // badge otherwise derives only from the current plan and would vanish.
+     if(l.wasTrial && !/>Trial</.test(planBadges)){
+       planBadges=(planBadges?planBadges+' ':'')+'<span class="badge badge-blue">Trial</span>';
+     }
      return `
    <tr>
     <td>${formatLedgerDate(l.date)}${l.time?' <span class="badge badge-blue">'+escapeHtml(formatTime12h(l.time))+'</span>':''}${l.isDoubleSession?' <span class="badge badge-purple" title="Absorbs a missed lesson as a double session">Double Session</span>':''}${(l.makeupForLessonId && !l.isDoubleSession)?' <span class="badge badge-purple" title="This session is a makeup for a previously missed lesson">🔁 Makeup Session</span>':''}</td>
@@ -5359,12 +5373,25 @@ try{
  const recordSyncFailure=(url, options, detail)=>{
    const method=(options&&options.method)||'GET';
    const tableMatch=String(url).match(/\/rest\/v1\/([a-zA-Z_]+)/);
-   window.syncFailures.unshift({
-     time:new Date().toLocaleTimeString(),
-     table:tableMatch?tableMatch[1]:'unknown',
-     method,
-     detail
-   });
+   const table=tableMatch?tableMatch[1]:'unknown';
+   // Collapse repeats: a batch operation (e.g. logging a whole lesson
+   // batch) can fail the same way dozens of times in one second. Showing
+   // each one individually just buries every other issue past the 20-row
+   // cap. If the most recent entry is the same table+method+detail, bump
+   // its count and time instead of adding a new row.
+   const existing=window.syncFailures[0];
+   if(existing && existing.table===table && existing.method===method && existing.detail===detail){
+     existing.count=(existing.count||1)+1;
+     existing.time=new Date().toLocaleTimeString();
+   } else {
+     window.syncFailures.unshift({
+       time:new Date().toLocaleTimeString(),
+       table,
+       method,
+       detail,
+       count:1
+     });
+   }
    if(window.syncFailures.length>20) window.syncFailures.length=20;
    if(typeof updateSyncFailureBadge==='function') updateSyncFailureBadge();
  };
@@ -5463,11 +5490,11 @@ try{
  }
  window.flushOutbox=flushOutbox;
  if(typeof window!=='undefined'){
-   window.addEventListener('online', ()=>{ flushOutbox(); updateSyncHealthBadge(); });
+   window.addEventListener('online', ()=>{ flushOutbox(); if(typeof window.flushLessonLogRetries==='function') window.flushLessonLogRetries(); updateSyncHealthBadge(); });
    window.addEventListener('offline', ()=>{ updateSyncHealthBadge(); });
    // Periodic safety-net flush — catches anything queued from a transient
    // failure without waiting for an 'online' event or a page reload.
-   setInterval(()=>{ if(window.supabaseClientV1) flushOutbox(); }, 20000);
+   setInterval(()=>{ if(window.supabaseClientV1){ flushOutbox(); if(typeof window.flushLessonLogRetries==='function') window.flushLessonLogRetries(); } }, 20000);
 
    // Keep the header sync-health badge current. Cheap (reads a localStorage
    // count and navigator.onLine), so a short interval keeps it feeling live.
@@ -5611,7 +5638,7 @@ function showSyncFailurePanel(){
   const failures=window.syncFailures||[];
   const rows=failures.map((f,i)=>`
     <tr>
-      <td>${escapeHtml(f.time)}</td>
+      <td>${escapeHtml(f.time)}${(f.count>1)?` <span class="badge badge-amber" title="This same error occurred ${f.count} times">×${f.count}</span>`:''}</td>
       <td>${escapeHtml(f.table)}</td>
       <td>${escapeHtml(f.method)}</td>
       <td>${escapeHtml(f.detail)}</td>
@@ -5624,7 +5651,6 @@ function showSyncFailurePanel(){
     </table></div>` : '<p>No sync issues recorded this session.</p>'}
     <div style="text-align:right;margin-top:14px">
       <button class="btn btn-danger" onclick="window.syncFailures=[];updateSyncFailureBadge();closeModal();">Clear</button>
-      <button class="btn" onclick="closeModal()">Close</button>
     </div>
   `);
 }
@@ -5692,6 +5718,11 @@ async function addStudentToSupabase(student){
       if(data[0].id!=null) student.id=data[0].id;
       if(data[0].public_id) student.public_id=data[0].public_id;
       save();
+      // Re-render any id-bearing views so their row action buttons pick up
+      // the new permanent id — otherwise Edit (and other row actions) on a
+      // just-added student silently no-op until a manual refresh, because
+      // the button still references the old temporary id.
+      if(typeof renderStudents==='function') renderStudents();
       if(typeof renderDatabase==='function') renderDatabase();
     }
     if(data && data[0] && data[0].public_id){
@@ -7973,11 +8004,19 @@ function saveTeacherLessonLog(logId){
 async function syncLessonLogToSupabase(log){
   try{
     if(!window.supabaseClientV1) return;
+    // Resolve the teacher name robustly. The lesson_updates RLS INSERT
+    // policy requires lower(teacher_id) = lower(current_teacher_name()),
+    // so a blank or stale teacher_id is a guaranteed 403 for a teacher
+    // session. Fall back through the log's own teacherName, then the
+    // linked lesson's teacher, then the student's current teacher.
+    const linkedLesson=(db.lessons||[]).find(l=>String(l.id)===String(log.lessonId));
+    const linkedStudent=(db.students||[]).find(s=>String(s.id)===String(log.studentId) || s.name===log.studentName);
+    const teacherId=(log.teacherName||linkedLesson?.teacher||linkedStudent?.teacher||'').trim();
     const payload={
       lesson_id: log.lessonId,
       student_id: String(log.studentId||''),
       student_name: log.studentName||'',
-      teacher_id: log.teacherName||'',
+      teacher_id: teacherId,
       lesson_date: log.lessonDate||null,
       performance_rating: log.performanceRating||null,
       topic_covered: log.topicCovered||'',
@@ -7989,9 +8028,41 @@ async function syncLessonLogToSupabase(log){
     };
     const {error}=await window.supabaseClientV1.from('lesson_updates')
       .upsert(payload, {onConflict:'lesson_id'});
-    if(error) console.warn('Lesson log sync failed:', error.message);
-  }catch(err){ console.warn('Lesson log sync failed:', err.message); }
+    if(error){
+      console.warn('Lesson log sync failed:', error.message);
+      // Queue for automatic retry rather than dropping it. A permission
+      // failure (RLS) that later gets fixed on the server, or a transient
+      // error, will then replay on the next flush instead of the log
+      // never reaching the cloud.
+      if(typeof window.enqueueLessonLogRetry==='function') window.enqueueLessonLogRetry(log);
+    }
+  }catch(err){
+    console.warn('Lesson log sync failed:', err.message);
+    if(typeof window.enqueueLessonLogRetry==='function') window.enqueueLessonLogRetry(log);
+  }
 }
+
+// ── Lesson-log retry queue ───────────────────────────────────────────
+// Failed lesson-log syncs (e.g. an RLS 403 before the server policy is
+// fixed, or a transient network error) are remembered here and replayed
+// when the app next has a chance, so a teacher's written log is never
+// silently lost. Keyed by lessonId so repeated failures for the same log
+// collapse to a single pending entry rather than piling up.
+window._lessonLogRetryQueue = window._lessonLogRetryQueue || {};
+window.enqueueLessonLogRetry=function(log){
+  if(!log || log.lessonId==null) return;
+  window._lessonLogRetryQueue[String(log.lessonId)]=log;
+};
+window.flushLessonLogRetries=async function(){
+  const entries=Object.entries(window._lessonLogRetryQueue||{});
+  if(!entries.length || !window.supabaseClientV1) return;
+  for(const [lessonId, log] of entries){
+    // Remove first; syncLessonLogToSupabase re-enqueues on renewed failure,
+    // so a still-broken write stays queued without duplicating.
+    delete window._lessonLogRetryQueue[lessonId];
+    try{ await syncLessonLogToSupabase(log); }catch(e){ /* re-enqueued inside on failure */ }
+  }
+};
 
 function openTeacherStudentWorkspace(studentId){
   const student=(db.students||[]).find(s=>String(s.id)===String(studentId) || String(s.public_id||'')===String(studentId));
@@ -8663,6 +8734,20 @@ function confirmRenewal(id){
   const sessionCounts={'trial':1,'monthly-4':4,'monthly-5':5,'weekly':1,'lesson-1':1,'lesson-2':2,'lesson-3':3,'group':4,'group-trial':1,'group-1':1,'group-2':2,'group-3':3};
   const count=sessionCounts[plan];
   if(!count){ showToast('Please choose a valid plan'); return; }
+
+  // Before changing the plan away from trial, mark the student's existing
+  // (pre-conversion) lessons as having been trial sessions. The ledger's
+  // Trial badge is otherwise derived from the student's CURRENT plan, so
+  // once they're converted to monthly the original trial lesson would
+  // silently lose its Trial badge — this preserves it as a fact about
+  // that specific past lesson.
+  if(wasTrial){
+    (db.lessons||[]).forEach(l=>{
+      if((String(l.studentId)===String(id) || l.student===student.name) && (l.status_record||'active')!=='archived'){
+        l.wasTrial=true;
+      }
+    });
+  }
 
   // Apply any changes to the student record before scheduling — the scheduler
   // reads teacher/instrument/day/time directly from the student object.
@@ -9385,53 +9470,63 @@ function renderFreeSlotsOverview(){
     return;
   }
 
-  // Aggregate free times per day across all teachers of this instrument,
-  // deduplicated and sorted, into a copy-ready plain-text block:
-  //   Monday
-  //   5:30 PM
-  //   7:00 PM
-  //   Friday
-  //   3:30 PM
-  const byDay={};
-  WEEKDAY_NAMES.forEach(dayName=>{
-    const times=new Set();
-    teachers.forEach(t=>{
+  // Build per-teacher availability. Each teacher who teaches this
+  // instrument gets their own block, so the admin can see and copy "who
+  // is free when" rather than an anonymous merged list where two teachers'
+  // identical times collapsed into one.
+  const perTeacher=teachers.map(t=>{
+    const byDay={};
+    WEEKDAY_NAMES.forEach(dayName=>{
       const hasConfiguredDay=((t.timeSlots||{})[dayName]||[]).length>0;
       if(!hasConfiguredDay) return;
-      getEffectiveTeacherDaySlots(t.name, dayName, null)
+      const times=getEffectiveTeacherDaySlots(t.name, dayName, null)
         .filter(s=>!s.occupiedBy)
-        .forEach(s=>times.add(s.time)); // store 24h for correct sorting
+        .map(s=>s.time)
+        .sort();
+      if(times.length) byDay[dayName]=times;
     });
-    if(times.size) byDay[dayName]=[...times].sort();
-  });
+    return {name:t.name, byDay, daysWithSlots:WEEKDAY_NAMES.filter(d=>byDay[d])};
+  }).filter(t=>t.daysWithSlots.length);
 
-  const daysWithSlots=WEEKDAY_NAMES.filter(d=>byDay[d]);
-  if(!daysWithSlots.length){
+  if(!perTeacher.length){
     host.innerHTML='<p style="color:var(--text-muted)">No free slots found for '+escapeHtml(instrument)+' this week — fully booked.</p>';
     return;
   }
 
-  // Build clickable day/time structure. Each time is an individually
-  // selectable chip so the admin can hand-pick a few slots across different
-  // days and copy just those to send to an applying student.
-  const dayBlocks=daysWithSlots.map(dayName=>{
-    const chips=byDay[dayName].map(t24=>{
-      const key=dayName+'|'+t24;
-      const selected=_freeSlotSelection.has(key);
-      return `<button type="button" class="free-slot-chip${selected?' selected':''}" data-slot-key="${escapeAttr(key)}" onclick="toggleFreeSlot('${escapeAttr(key)}')">${escapeHtml(formatTime12h(t24))}</button>`;
+  // Selection keys are scoped by instrument + teacher + day + time so a
+  // pick is globally unambiguous and can never collide with a same-time
+  // slot under a different instrument or teacher.
+  const teacherBlocks=perTeacher.map(t=>{
+    const dayBlocks=t.daysWithSlots.map(dayName=>{
+      const chips=t.byDay[dayName].map(t24=>{
+        const key=instrument+'||'+t.name+'||'+dayName+'||'+t24;
+        const selected=_freeSlotSelection.has(key);
+        return `<button type="button" class="free-slot-chip${selected?' selected':''}" data-slot-key="${escapeAttr(key)}" onclick="toggleFreeSlot('${escapeAttr(key)}')">${escapeHtml(formatTime12h(t24))}</button>`;
+      }).join('');
+      return `
+        <div style="margin-bottom:10px">
+          <div style="font-weight:700;color:var(--gold-light,#e2c47a);margin-bottom:6px">${escapeHtml(dayName)}</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px">${chips}</div>
+        </div>`;
     }).join('');
     return `
-      <div style="margin-bottom:14px">
-        <div style="font-weight:700;color:var(--gold-light,#e2c47a);margin-bottom:6px">${escapeHtml(dayName)}</div>
-        <div style="display:flex;flex-wrap:wrap;gap:6px">${chips}</div>
+      <div style="margin-bottom:18px;padding:12px;border:1px solid var(--border,#2e2c28);border-radius:8px">
+        <div style="font-weight:700;font-size:15px;margin-bottom:10px;color:var(--text-light,#e8e4d8)">👤 ${escapeHtml(t.name)}</div>
+        ${dayBlocks}
       </div>`;
   }).join('');
 
-  // Also keep the plain-text of the WHOLE list for the "Copy All" button.
+  // Copy All plain text, grouped by teacher:
+  //   — Mariam —
+  //   Monday
+  //   5:30 PM
   const lines=[];
-  daysWithSlots.forEach(dayName=>{
-    lines.push(dayName);
-    byDay[dayName].forEach(t24=>lines.push(formatTime12h(t24)));
+  perTeacher.forEach(t=>{
+    lines.push('— '+t.name+' —');
+    t.daysWithSlots.forEach(dayName=>{
+      lines.push(dayName);
+      t.byDay[dayName].forEach(t24=>lines.push(formatTime12h(t24)));
+    });
     lines.push('');
   });
   const plainTextAll=lines.join('\n').trim();
@@ -9445,10 +9540,18 @@ function renderFreeSlotsOverview(){
         <button class="btn btn-sm btn-gold" onclick="copySelectedFreeSlots(this)">📋 Copy Selected</button>
       </div>
     </div>
-    <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px">Tap the times you want to send — pick a few across different days, then Copy Selected.</div>
-    <div id="free-slots-chips">${dayBlocks}</div>
+    <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px">Tap the times you want to send — pick a few across teachers/days, then Copy Selected.</div>
+    <div id="free-slots-chips">${teacherBlocks}</div>
     <pre id="free-slots-plaintext" style="display:none">${escapeHtml(plainTextAll)}</pre>`;
   updateFreeSlotSelectionUI();
+}
+
+// Instrument change resets the picked-slot selection — otherwise slots
+// picked under the previous instrument stay in _freeSlotSelection and
+// would be included by Copy Selected alongside the new instrument's picks.
+function onFreeSlotInstrumentChange(){
+  _freeSlotSelection.clear();
+  renderFreeSlotsOverview();
 }
 
 // Selection of individually-picked free slots (keys are "Day|HH:MM"),
@@ -9478,19 +9581,29 @@ function updateFreeSlotSelectionUI(){
   }
 }
 
-// Builds the copy text from just the selected slots, grouped by day in the
-// same clean day-header format, days and times in chronological order.
+// Builds the copy text from just the selected slots, grouped by teacher
+// then day, in the same clean format as the on-screen blocks.
 function buildSelectedFreeSlotsText(){
-  const byDay={};
+  // key = instrument||teacher||day||HH:MM
+  const byTeacher={};
   _freeSlotSelection.forEach(key=>{
-    const [day,t24]=key.split('|');
-    (byDay[day]=byDay[day]||[]).push(t24);
+    const parts=key.split('||');
+    // Tolerate any legacy 2-part keys still lingering in the set.
+    const teacher = parts.length>=4 ? parts[1] : '';
+    const day = parts.length>=4 ? parts[2] : parts[0];
+    const t24 = parts.length>=4 ? parts[3] : parts[1];
+    const tKey=teacher||'';
+    byTeacher[tKey]=byTeacher[tKey]||{};
+    (byTeacher[tKey][day]=byTeacher[tKey][day]||[]).push(t24);
   });
   const lines=[];
-  WEEKDAY_NAMES.forEach(day=>{
-    if(!byDay[day]) return;
-    lines.push(day);
-    byDay[day].sort().forEach(t24=>lines.push(formatTime12h(t24)));
+  Object.keys(byTeacher).sort().forEach(teacher=>{
+    if(teacher) lines.push('— '+teacher+' —');
+    WEEKDAY_NAMES.forEach(day=>{
+      if(!byTeacher[teacher][day]) return;
+      lines.push(day);
+      byTeacher[teacher][day].sort().forEach(t24=>lines.push(formatTime12h(t24)));
+    });
     lines.push('');
   });
   return lines.join('\n').trim();
