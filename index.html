@@ -191,6 +191,12 @@ input::placeholder{color:var(--text-dim)}
 .teacher-timeline{display:grid;gap:8px}
 .teacher-timeline-item{display:grid;grid-template-columns:110px 1fr;gap:10px;padding:10px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface2)}
 .teacher-rating{color:var(--gold-light);font-weight:600;letter-spacing:.06em}
+.student-portal-tabs{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px}
+.sp-tab{border:1px solid var(--border);background:var(--surface);color:var(--text-muted);padding:9px 14px;border-radius:var(--radius-sm);font-family:'DM Sans',sans-serif;font-size:13px;cursor:pointer;transition:all .15s}
+.sp-tab:hover{background:var(--surface2);color:var(--text)}
+.sp-tab.active{background:var(--gold-dim);border-color:var(--gold);color:var(--gold-light);font-weight:600}
+.sp-panel{display:none}
+.sp-panel.active{display:block}
 @media(max-width:900px){
   .teacher-shell{grid-template-columns:1fr}
   .teacher-sidebar{position:relative;height:auto;border-right:none;border-bottom:1px solid var(--border)}
@@ -206,6 +212,17 @@ input::placeholder{color:var(--text-dim)}
   .teacher-nav{grid-template-columns:1fr}
   .teacher-grid{grid-template-columns:1fr}
   .teacher-topbar{align-items:flex-start;flex-direction:column}
+  /* Stack each teacher-row's content and its right-side status/action so
+     nothing is cramped on a phone; the status cluster left-aligns under
+     the name/time instead of being squeezed into a narrow column. */
+  .teacher-row{grid-template-columns:1fr}
+  .teacher-row > div[style*="text-align:right"]{text-align:left}
+  .teacher-row .btn{width:100%}
+  /* Student portal: tab bar scrolls sideways rather than stacking into
+     six rows; mini-grids go two-up; the wishlist add-row stacks. */
+  .student-portal-tabs{flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:4px}
+  .sp-tab{white-space:nowrap;flex:0 0 auto}
+  .student-portal-main .teacher-mini-grid{grid-template-columns:1fr 1fr}
 }
 
 
@@ -287,7 +304,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-37</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-42</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -325,8 +342,13 @@ input::placeholder{color:var(--text-dim)}
 <!-- OVERVIEW -->
 <div id="page-overview" class="page active">
   <div id="profit-banner"></div>
+  <div id="overview-conflict-banner"></div>
   <div class="card-title">Academy Overview</div><div class="metric-grid" id="academy-kpis"></div>
   <div class="card-title" id="monthly-kpi-title">Monthly Activity</div><div class="metric-grid" id="metrics"></div>
+  <div class="card" id="renewals-due-card">
+    <div class="card-title">Renewals Due</div>
+    <div id="renewals-due-list"></div>
+  </div>
   <div class="two-col">
     <div class="card">
       <div class="card-title">Income</div>
@@ -598,6 +620,7 @@ input::placeholder{color:var(--text-dim)}
     </select>
     <select id="cal-teacher-download" style="min-width:180px"><option value="">Select Teacher</option></select>
     <button class="btn btn-gold" onclick="downloadTeacherSchedulePhoto()">📷 Download Schedule Photo</button>
+    <button class="btn" onclick="downloadAllTeacherSchedulePhotos()">📷 All Teachers</button>
     <small id="cal-room-status" style="color:var(--text-muted)"></small>
   </div>
 </div>
@@ -683,7 +706,7 @@ input::placeholder{color:var(--text-dim)}
   <div class="card-title">Lapsed Trials <small style="text-transform:none;letter-spacing:normal;font-weight:400;color:var(--text-muted)">— trial students who didn't continue with a plan</small></div>
   <div id="lapsed-trials-summary" style="margin-bottom:12px;color:var(--text-muted)"></div>
   <div class="table-wrap"><table>
-    <thead><tr><th>Student</th><th>Instrument</th><th>Teacher</th><th>Trial Date</th></tr></thead>
+    <thead><tr><th>Student</th><th>Instrument</th><th>Teacher</th><th>Trial Date</th><th>Days Ago</th><th>Follow-up</th></tr></thead>
     <tbody id="report-lapsed-trials"></tbody>
   </table></div>
   <div style="margin-top:16px">
@@ -924,6 +947,8 @@ input::placeholder{color:var(--text-dim)}
       <button class="teacher-nav-btn" onclick="switchTeacherPage('schedule',this)">Schedule</button>
       <button class="teacher-nav-btn" onclick="switchTeacherPage('plans',this)">Lesson Plans</button>
       <button class="teacher-nav-btn" onclick="switchTeacherPage('logs',this)">Lesson Logs</button>
+      <button class="teacher-nav-btn" onclick="switchTeacherPage('resources',this)">Resources</button>
+      <button class="teacher-nav-btn" onclick="switchTeacherPage('wishlists',this)">Student Wishlists</button>
     </nav>
   </aside>
 
@@ -945,7 +970,11 @@ input::placeholder{color:var(--text-dim)}
           <div class="metric"><div class="metric-label">Taught This Week</div><div id="teacher-sessions-week" class="metric-value">0</div></div>
           <div class="metric green"><div class="metric-label">Taught This Month</div><div id="teacher-sessions-month" class="metric-value green">0</div></div>
           <div class="metric amber"><div class="metric-label">Excused Absences</div><div id="teacher-excused-count" class="metric-value amber">0</div></div>
-          <div class="metric red"><div class="metric-label">Makeups Owed</div><div id="teacher-makeups-count" class="metric-value red">0</div></div>
+          <div class="metric red" style="cursor:pointer" onclick="toggleTeacherMakeupsDrilldown()" title="Tap to see who's owed a make-up"><div class="metric-label">Makeups Owed</div><div id="teacher-makeups-count" class="metric-value red">0</div></div>
+        </div>
+        <div id="teacher-makeups-drilldown" class="card" style="display:none">
+          <div class="card-title">Make-ups Owed — Details</div>
+          <div id="teacher-makeups-list" class="teacher-list"></div>
         </div>
         <div class="teacher-section-grid">
           <div class="card">
@@ -1037,9 +1066,70 @@ input::placeholder{color:var(--text-dim)}
             <option value="Saturday">Saturday</option>
           </select>
         </div>
+        <div id="teacher-logs-needs-summary" style="margin-bottom:10px"></div>
         <div id="teacher-lesson-logs-list" class="teacher-list" style="max-height:340px;overflow-y:auto"></div>
       </div>
       <div id="teacher-logs-student-detail"></div>
+    </div>
+
+    <div id="teacher-panel-resources" class="teacher-panel">
+      <div class="card">
+        <div class="card-title">Share a Resource</div>
+        <div style="display:flex;flex-direction:column;gap:10px;max-width:560px">
+          <div class="form-field">
+            <label for="tres-title">Title</label>
+            <input id="tres-title" placeholder="e.g. Major Scales Practice Sheet">
+          </div>
+          <div class="form-field">
+            <label for="tres-kind">Type</label>
+            <select id="tres-kind" onchange="onTeacherResourceKindChange()">
+              <option value="file">File (PDF / Image)</option>
+              <option value="link">Link (URL)</option>
+            </select>
+          </div>
+          <div class="form-field" id="tres-file-field">
+            <label for="tres-file">File</label>
+            <input id="tres-file" type="file" accept=".pdf,image/*">
+          </div>
+          <div class="form-field" id="tres-link-field" style="display:none">
+            <label for="tres-link">Link URL</label>
+            <input id="tres-link" placeholder="https://...">
+          </div>
+          <div class="form-field">
+            <label for="tres-target">Share with</label>
+            <select id="tres-target" onchange="onTeacherResourceTargetChange()">
+              <option value="all">All my students</option>
+              <option value="skill">Students at a skill level</option>
+              <option value="students">Specific students</option>
+            </select>
+          </div>
+          <div class="form-field" id="tres-skill-field" style="display:none">
+            <label for="tres-skill">Skill level</label>
+            <select id="tres-skill"></select>
+          </div>
+          <div class="form-field" id="tres-students-field" style="display:none">
+            <label>Choose students</label>
+            <div id="tres-students-checklist" style="display:flex;flex-direction:column;gap:6px;max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:8px"></div>
+          </div>
+          <div style="display:flex;align-items:center;gap:12px">
+            <button class="btn btn-gold" onclick="teacherUploadResource()">Share Resource</button>
+            <small id="tres-status" style="color:var(--text-muted)"></small>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">My Resource Library</div>
+        <div id="teacher-resources-list" class="teacher-list" style="max-height:420px;overflow-y:auto"></div>
+      </div>
+    </div>
+
+    <div id="teacher-panel-wishlists" class="teacher-panel">
+      <div class="card">
+        <div class="card-title">Student Wishlists</div>
+        <input id="teacher-wishlist-search" placeholder="Search students..." oninput="renderTeacherWishlists()" style="margin-bottom:10px;max-width:240px">
+        <div id="teacher-wishlists-list" class="teacher-list" style="max-height:420px;overflow-y:auto"></div>
+      </div>
+      <div id="teacher-wishlist-detail"></div>
     </div>
   </section>
 </div>
@@ -1063,6 +1153,10 @@ input::placeholder{color:var(--text-dim)}
 </div>
 
 <script>
+// InstaPay handle shown to students on their unpaid payment state so they
+// can pay without asking. Edit this to your actual InstaPay address.
+const ACADEMY_INSTAPAY_HANDLE = 'Cymatics@instapay';
+
 const PLAN_LABELS = {'trial':'Trial Session','lesson-1':'1 Lesson Left','lesson-2':'2 Lessons Left','lesson-3':'3 Lessons Left','monthly-4':'Monthly (4 wks)','monthly-5':'Monthly (5 wks)','weekly':'Weekly','group':'Group (1hr)','group-trial':'Group Trial','group-1':'Group · 1 Lesson Left','group-2':'Group · 2 Lessons Left','group-3':'Group · 3 Lessons Left'};
 const PLAN_AMOUNTS = {'trial':500,'lesson-1':500,'lesson-2':1000,'lesson-3':1500,'monthly-4':2000,'monthly-5':2500,'weekly':600,'group':3000,'group-trial':750,'group-1':750,'group-2':1500,'group-3':2250};
 
@@ -1560,7 +1654,7 @@ sel.value=(MONTHS.find(m=>m.key===currentKey)||MONTHS[0]).key;
 function currentMonth(){return document.getElementById('global-month').value;}
 
 // State
-let db = JSON.parse(localStorage.getItem('musicacademy_db')||'{"students":[],"payments":{},"expenses":[],"lessons":[],"lessonLogs":[]}'); db.lessons=db.lessons||[]; db.lessonLogs=db.lessonLogs||[]; db.instruments=db.instruments||[]; db.teacherProfiles=db.teacherProfiles||[]; db.payrollPaid=db.payrollPaid||{}; db.practiceSessions=db.practiceSessions||[]; db.paymentMethods=db.paymentMethods||{}; db.resources=db.resources||[]; db.refunds=db.refunds||[]; db.otherRevenue=db.otherRevenue||[];
+let db = JSON.parse(localStorage.getItem('musicacademy_db')||'{"students":[],"payments":{},"expenses":[],"lessons":[],"lessonLogs":[]}'); db.lessons=db.lessons||[]; db.lessonLogs=db.lessonLogs||[]; db.instruments=db.instruments||[]; db.teacherProfiles=db.teacherProfiles||[]; db.payrollPaid=db.payrollPaid||{}; db.practiceSessions=db.practiceSessions||[]; db.paymentMethods=db.paymentMethods||{}; db.resources=db.resources||[]; db.refunds=db.refunds||[]; db.otherRevenue=db.otherRevenue||[]; db.wishlists=db.wishlists||{};
 function save(){try{localStorage.setItem('musicacademy_db',JSON.stringify(db));}catch(e){console.error('save() failed:',e);}}
 
 // Updates the "Last Sync" label on the Cloud tab. Previously this was
@@ -1842,7 +1936,7 @@ function login(role,user={}){
             if(typeof renderStudentScheduleView==='function') renderStudentScheduleView();
             if(typeof renderStudentPortalPayments==='function') renderStudentPortalPayments();
             if(typeof renderStudentPortalAttendance==='function') renderStudentPortalAttendance();
-            if(typeof renderStudentPortalResources==='function') renderStudentPortalResources();
+            if(typeof renderStudentPortalResources==='function') renderStudentPortalResources(); if(typeof renderStudentPortalWishlist==='function') renderStudentPortalWishlist();
           }
         }
       })
@@ -2036,7 +2130,7 @@ function lockStudentPortalToOwnRecord(rootStudent){
   if(typeof renderStudentScheduleView==='function') renderStudentScheduleView();
   if(typeof renderStudentPortalPayments==='function') renderStudentPortalPayments();
   if(typeof renderStudentPortalAttendance==='function') renderStudentPortalAttendance();
-  if(typeof renderStudentPortalResources==='function') renderStudentPortalResources();
+  if(typeof renderStudentPortalResources==='function') renderStudentPortalResources(); if(typeof renderStudentPortalWishlist==='function') renderStudentPortalWishlist();
 }
 
 // Shared by the pill buttons — sets the underlying select's value and
@@ -2055,7 +2149,7 @@ function selectStudentPortalRecord(id){
   if(typeof renderStudentScheduleView==='function') renderStudentScheduleView();
   if(typeof renderStudentPortalPayments==='function') renderStudentPortalPayments();
   if(typeof renderStudentPortalAttendance==='function') renderStudentPortalAttendance();
-  if(typeof renderStudentPortalResources==='function') renderStudentPortalResources();
+  if(typeof renderStudentPortalResources==='function') renderStudentPortalResources(); if(typeof renderStudentPortalWishlist==='function') renderStudentPortalWishlist();
 }
 
 // Resumes an existing real login on page reload — Supabase Auth persists
@@ -2811,6 +2905,115 @@ function renderOverview(){
       <button class="btn btn-sm btn-gold" onclick="togglePayment(${s.id})">Mark paid</button>
     </div>
   </div>`).join('');}
+
+  if(typeof renderRenewalsDue==='function') renderRenewalsDue();
+  if(typeof renderOverviewConflicts==='function') renderOverviewConflicts();
+}
+
+// ── Renewals Due ──────────────────────────────────────────────────────
+// Every plan is a fixed batch of lessons; once the last scheduled lesson
+// is used up, the student has no future lessons until they renew. This
+// surfaces students whose final scheduled lesson is within the next 7
+// days (or already passed with nothing after it), so renewal stops
+// depending on the admin noticing. Frozen and archived students are
+// excluded — they're intentionally not scheduled.
+function renderRenewalsDue(){
+  const host=document.getElementById('renewals-due-list');
+  if(!host) return;
+  const todayKey=new Date().toISOString().slice(0,10);
+  const soonKey=(()=>{ const d=new Date(); d.setDate(d.getDate()+7); return d.toISOString().slice(0,10); })();
+  const rows=[];
+  (db.students||[]).forEach(s=>{
+    if((s.status||'active')==='archived' || s.frozen) return;
+    if(s.plan==='weekly') return; // open-ended, never "runs out"
+    const scheduled=(db.lessons||[])
+      .filter(l=>(String(l.studentId)===String(s.id) || l.student===s.name)
+        && l.status==='scheduled'
+        && (l.status_record||'active')!=='archived')
+      .map(l=>l.date).sort();
+    const lastScheduled=scheduled[scheduled.length-1]||null;
+    // Due if: no scheduled lessons left at all, OR the last one is within 7 days.
+    if(!lastScheduled){
+      // Only flag "no lessons" students who have a real history (have
+      // attended before) — brand-new unscheduled records aren't renewals.
+      const hasHistory=(db.lessons||[]).some(l=>(String(l.studentId)===String(s.id)||l.student===s.name) && l.status!=='scheduled');
+      if(hasHistory) rows.push({s, lastScheduled:null, urgency:'over'});
+      return;
+    }
+    if(lastScheduled<=soonKey){
+      rows.push({s, lastScheduled, urgency: lastScheduled<todayKey ? 'over' : 'soon'});
+    }
+  });
+  rows.sort((a,b)=>{
+    const av=a.lastScheduled||'0000-00-00', bv=b.lastScheduled||'0000-00-00';
+    return av.localeCompare(bv);
+  });
+  const card=document.getElementById('renewals-due-card');
+  if(!rows.length){
+    host.innerHTML='<div class="empty"><div class="empty-icon">✅</div><div class="empty-text">No renewals due in the next 7 days.</div></div>';
+    return;
+  }
+  host.innerHTML=rows.map(({s,lastScheduled,urgency})=>{
+    const label = lastScheduled
+      ? (urgency==='over' ? 'Last lesson '+formatLedgerDate(lastScheduled)+' (passed)' : 'Last lesson '+formatLedgerDate(lastScheduled))
+      : 'No lessons scheduled';
+    const badgeClass = urgency==='over' ? 'badge-red' : 'badge-amber';
+    return `<div class="unpaid-item">
+      <div>
+        <div class="unpaid-name">${escapeHtml(s.name)}</div>
+        <div class="unpaid-meta">${escapeHtml(s.instrument||'')} ${s.instrument&&s.teacher?'·':''} ${escapeHtml(s.teacher||'')} · <span class="badge ${badgeClass}" style="font-size:10px">${label}</span></div>
+      </div>
+      <button class="btn btn-sm btn-gold" onclick="convertTrial(${s.id})">Renew</button>
+    </div>`;
+  }).join('');
+}
+
+// ── Conflict Sweep ────────────────────────────────────────────────────
+// The red CONFLICT cell only helps if the admin happens to open that day
+// on the calendar. This scans the next 14 days for any teacher who is
+// double-booked (two lessons whose times overlap for the same teacher on
+// the same date) and surfaces a banner up top so conflicts can't hide.
+function renderOverviewConflicts(){
+  const host=document.getElementById('overview-conflict-banner');
+  if(!host) return;
+  if(typeof isTeacherBusyDuringRange!=='function'){ host.innerHTML=''; return; }
+  const todayKey=new Date().toISOString().slice(0,10);
+  const horizon=(()=>{ const d=new Date(); d.setDate(d.getDate()+14); return d.toISOString().slice(0,10); })();
+  const upcoming=(db.lessons||[]).filter(l=>
+    (l.status_record||'active')!=='archived' &&
+    l.status==='scheduled' &&
+    l.teacher && l.time && l.date &&
+    l.date>=todayKey && l.date<=horizon
+  );
+  // Group by teacher+date, then detect any overlapping pair.
+  const seen=new Set();
+  const conflicts=[];
+  const byKey={};
+  upcoming.forEach(l=>{ const k=l.teacher+'|'+l.date; (byKey[k]=byKey[k]||[]).push(l); });
+  Object.values(byKey).forEach(list=>{
+    if(list.length<2) return;
+    for(let i=0;i<list.length;i++){
+      for(let j=i+1;j<list.length;j++){
+        const a=list[i], b=list[j];
+        const aDur=getLessonDurationMinutes(a), bDur=getLessonDurationMinutes(b);
+        const aStart=timeToMinutes(a.time), aEnd=aStart+aDur;
+        const bStart=timeToMinutes(b.time), bEnd=bStart+bDur;
+        if(aStart<bEnd && bStart<aEnd){
+          const sig=a.teacher+'|'+a.date;
+          if(!seen.has(sig)){ seen.add(sig); conflicts.push({teacher:a.teacher, date:a.date, a, b}); }
+        }
+      }
+    }
+  });
+  if(!conflicts.length){ host.innerHTML=''; return; }
+  host.innerHTML=`<div style="background:#7a1f1f;border:2px solid #e06c6c;border-radius:8px;padding:12px 16px;margin-bottom:16px;color:#ffd9d9">
+    <div style="font-weight:700;margin-bottom:6px">⚠ ${conflicts.length} scheduling conflict${conflicts.length>1?'s':''} in the next 14 days</div>
+    <div style="font-size:13px;display:flex;flex-direction:column;gap:3px">
+      ${conflicts.slice(0,6).map(c=>`<div>${escapeHtml(c.teacher)} — ${formatLedgerDate(c.date)}: ${escapeHtml(c.a.student||'?')} &amp; ${escapeHtml(c.b.student||'?')} overlap</div>`).join('')}
+      ${conflicts.length>6?`<div style="opacity:0.8">…and ${conflicts.length-6} more</div>`:''}
+    </div>
+    <div style="margin-top:8px"><button class="btn btn-sm" onclick="switchPage('calendar', document.querySelector('[onclick*=&quot;calendar&quot;]'))">Open Calendar</button></div>
+  </div>`;
 }
 
 // LESSONS
@@ -3439,18 +3642,22 @@ async function downloadResource(storagePath, filename){
 }
 
 async function deleteResource(id){
-  const r=(db.resources||[]).find(x=>x.id===id);
+  const r=(db.resources||[]).find(x=>String(x.id)===String(id));
   if(!r) return;
-  if(!confirm('Delete "'+r.title+'"? This removes the file for everyone it was shared with.')) return;
+  if(!confirm('Delete "'+r.title+'"? This removes it for everyone it was shared with.')) return;
 
   if(window.supabaseClientV1){
-    await window.supabaseClientV1.storage.from('resources').remove([r.storagePath]);
-    const {error}=await window.supabaseClientV1.from('resources').delete().eq('id', id);
+    // Only a file resource has a stored object to remove; links don't.
+    if(r.resourceKind!=='link' && r.storagePath){
+      await window.supabaseClientV1.storage.from('resources').remove([r.storagePath]);
+    }
+    const {error}=await window.supabaseClientV1.from('resources').delete().eq('id', r.id);
     if(error){ alert('Failed to delete: '+error.message); return; }
   }
-  db.resources=(db.resources||[]).filter(x=>x.id!==id);
+  db.resources=(db.resources||[]).filter(x=>String(x.id)!==String(id));
   save();
-  renderResourcesPage();
+  if(typeof renderResourcesPage==='function') renderResourcesPage();
+  if(typeof renderTeacherResources==='function') renderTeacherResources();
   showToast('Resource deleted');
 }
 
@@ -3667,9 +3874,23 @@ function renderReports(){
      return {s, trialDate:trialLessons[0]?.date||''};
    });
 
-   rlt.innerHTML=lapsed.map(({s,trialDate})=>
-     `<tr><td>${escapeHtml(s.name)}</td><td>${escapeHtml(s.instrument||'')}</td><td>${escapeHtml(s.teacher||'')}</td><td>${trialDate?escapeHtml(formatLedgerDate(trialDate)):'—'}</td></tr>`
-   ).join('') || '<tr><td colspan="4">No lapsed trials — every trial student converted. 🎉</td></tr>';
+   rlt.innerHTML=lapsed.map(({s,trialDate})=>{
+     const daysAgo = trialDate ? Math.floor((Date.now()-new Date(trialDate).getTime())/86400000) : null;
+     const phone=(s.phone1||s.phone||'').trim();
+     let followUp='<span style="color:var(--text-muted)">No phone</span>';
+     if(phone){
+       // Normalize to an international wa.me number: strip non-digits, and
+       // turn a leading Egyptian 0 into the 20 country code.
+       let digits=phone.replace(/[^0-9]/g,'');
+       if(digits.startsWith('0')) digits='20'+digits.slice(1);
+       else if(!digits.startsWith('20') && digits.length===10) digits='20'+digits;
+       const msg=encodeURIComponent('Hi '+(s.first_name||s.name||'')+'! We loved having you at your trial session at Cymatics. Would you like to continue with regular lessons? We would be happy to reserve your spot 🎵');
+       followUp=`<a class="btn btn-sm btn-gold" href="https://wa.me/${digits}?text=${msg}" target="_blank" rel="noopener">💬 WhatsApp</a>`;
+     }
+     const daysBadge = daysAgo==null ? '—'
+       : `<span class="badge ${daysAgo>7?'badge-red':daysAgo>3?'badge-amber':''}">${daysAgo}d</span>`;
+     return `<tr><td>${escapeHtml(s.name)}</td><td>${escapeHtml(s.instrument||'')}</td><td>${escapeHtml(s.teacher||'')}</td><td>${trialDate?escapeHtml(formatLedgerDate(trialDate)):'—'}</td><td>${daysBadge}</td><td>${followUp}</td></tr>`;
+   }).join('') || '<tr><td colspan="6">No lapsed trials — every trial student converted. 🎉</td></tr>';
 
    if(rltSummary){
      rltSummary.textContent=lapsed.length
@@ -5224,7 +5445,7 @@ async function _autoLoadFromCloudImpl(){
      if(typeof renderStudentScheduleView==='function') renderStudentScheduleView();
      if(typeof renderStudentPortalPayments==='function') renderStudentPortalPayments();
      if(typeof renderStudentPortalAttendance==='function') renderStudentPortalAttendance();
-     if(typeof renderStudentPortalResources==='function') renderStudentPortalResources();
+     if(typeof renderStudentPortalResources==='function') renderStudentPortalResources(); if(typeof renderStudentPortalWishlist==='function') renderStudentPortalWishlist();
    }
    populateTeacherDropdowns();
 
@@ -5243,12 +5464,41 @@ async function _autoLoadFromCloudImpl(){
            uploadedBy: r.uploaded_by||'', targetType: r.target_type||'all',
            targetStudentId: r.target_student_id||null,
            targetStudentName: targetStudent?.name||null,
+           // New targeting fields (backward-compatible defaults for old rows):
+           //  - targetSkill: a SKILL_LEVELS value when target_type==='skill'
+           //  - targetStudentIds: array for multi-student targeting
+           //  - resourceKind: 'file' | 'link'
+           //  - linkUrl: for link resources (no storage file)
+           //  - uploadedByRole/teacherOwner: who owns it (admin vs a teacher)
+           targetSkill: r.target_skill||null,
+           targetStudentIds: Array.isArray(r.target_student_ids) ? r.target_student_ids : (r.target_student_ids ? [r.target_student_ids] : null),
+           resourceKind: r.resource_kind||'file',
+           linkUrl: r.link_url||null,
+           uploadedByRole: r.uploaded_by_role||'admin',
+           teacherOwner: r.teacher_owner||null,
            createdAt: r.created_at||''
          };
        });
        save();
      }
    }catch(resErr){ console.warn('Resources load failed:', resErr.message); }
+
+   // Wishlists — independent load so a missing table can't break the rest.
+   try{
+     const {data:wishRows,error:eWish}=await client.from('wishlists').select('*');
+     if(eWish){ /* table may not exist yet — silent */ }
+     else if(wishRows){
+       const map={};
+       wishRows.forEach(row=>{
+         const key=row.student_code || ('id:'+row.student_id);
+         let items=[];
+         try{ items=Array.isArray(row.items)?row.items:JSON.parse(row.items||'[]'); }catch(e){ items=[]; }
+         if(key) map[key]=items;
+       });
+       db.wishlists=map;
+       save();
+     }
+   }catch(wishErr){ /* silent — non-critical */ }
 
    // Independent for the same reason as resources above — a newer,
    // less critical feature shouldn't be able to fail the main load.
@@ -7455,8 +7705,77 @@ const TEACHER_PAGE_META={
   students:  {title:'My Students', meta:'Students assigned to you'},
   schedule:  {title:'Schedule', meta:'Upcoming lessons'},
   plans:     {title:'Lesson Plans', meta:'Prep notes for upcoming lessons'},
-  logs:      {title:'Lesson Logs', meta:'Session records for the selected month'}
+  logs:      {title:'Lesson Logs', meta:'Session records for the selected month'},
+  resources: {title:'Resources', meta:'Share materials with your students'},
+  wishlists: {title:'Student Wishlists', meta:'What your students want to learn'}
 };
+
+function toggleLessonNote(id){
+  const el=document.getElementById(id);
+  if(!el) return;
+  el.style.display = el.style.display==='none' ? 'block' : 'none';
+}
+
+function toggleTeacherMakeupsDrilldown(){  const el=document.getElementById('teacher-makeups-drilldown');
+  if(!el) return;
+  el.style.display = el.style.display==='none' ? 'block' : 'none';
+}
+
+function switchStudentTab(name, btn){
+  document.querySelectorAll('.sp-panel').forEach(p=>p.classList.toggle('active', p.getAttribute('data-sp-panel')===name));
+  document.querySelectorAll('.sp-tab').forEach(b=>b.classList.remove('active'));
+  if(btn) btn.classList.add('active');
+}
+
+function currentPortalStudent(){
+  const sel=document.getElementById('student-portal-select');
+  const id=sel?.value;
+  if(!id) return null;
+  return (db.students||[]).find(s=>String(s.id)===String(id))||null;
+}
+
+function renderStudentPortalWishlist(){
+  const host=document.getElementById('student-portal-wishlist');
+  if(!host) return;
+  const student=currentPortalStudent();
+  if(!student){ host.innerHTML=teacherEmpty('Select your name above.'); return; }
+  const items=getStudentWishlist(student);
+  if(!items.length){ host.innerHTML=teacherEmpty('Nothing yet — add a song or skill you\'d like to learn.'); return; }
+  host.innerHTML=items.map(i=>`
+    <div class="teacher-row">
+      <div style="min-width:0">
+        <div class="teacher-row-title" style="${i.done?'text-decoration:line-through;opacity:0.6':''}">${escapeHtml(i.text)}</div>
+        <div class="teacher-row-meta">${i.addedAt?escapeHtml(formatDateDMY(String(i.addedAt).slice(0,10))):''}${i.done?' · learned ✓':''}</div>
+      </div>
+      <div style="display:flex;gap:6px">
+        <button class="btn btn-sm" onclick="portalToggleWishlistDone('${jsString(String(i.id))}')">${i.done?'Undo':'✓ Learned'}</button>
+        <button class="btn btn-sm btn-danger" onclick="portalRemoveWishlistItem('${jsString(String(i.id))}')">✕</button>
+      </div>
+    </div>`).join('');
+}
+
+function addStudentWishlistItem(){
+  const student=currentPortalStudent();
+  if(!student) return;
+  const input=document.getElementById('student-wishlist-input');
+  const text=(input?.value||'').trim();
+  if(!text) return;
+  addWishlistItem(student, text);
+  if(input) input.value='';
+  renderStudentPortalWishlist();
+}
+function portalRemoveWishlistItem(itemId){
+  const student=currentPortalStudent();
+  if(!student) return;
+  removeWishlistItem(student, itemId);
+  renderStudentPortalWishlist();
+}
+function portalToggleWishlistDone(itemId){
+  const student=currentPortalStudent();
+  if(!student) return;
+  toggleWishlistItemDone(student, itemId);
+  renderStudentPortalWishlist();
+}
 
 function switchTeacherPage(page, btn){
   // Hide all panels, deactivate all nav buttons
@@ -7486,6 +7805,8 @@ function switchTeacherPage(page, btn){
     if(dayEl) dayEl.value=todayWeekday;
   }
   if(typeof renderTeacherWorkspace==='function') renderTeacherWorkspace();
+  if(page==='resources' && typeof renderTeacherResources==='function') renderTeacherResources();
+  if(page==='wishlists' && typeof renderTeacherWishlists==='function') renderTeacherWishlists();
 }
 
 function renderStars(rating){
@@ -7560,6 +7881,29 @@ function renderTeacherWorkspace(){
   if(monthEl) monthEl.textContent=sessionsThisMonth;
   if(excusedEl) excusedEl.textContent=excusedCount;
   if(makeupsEl) makeupsEl.textContent=makeupsOwedCount;
+
+  // Build the drill-down list: which students are owed a make-up, and
+  // from which missed session. Uses the same isMakeupOwed test as the
+  // count, so the list and the number always agree.
+  const makeupsList=document.getElementById('teacher-makeups-list');
+  if(makeupsList){
+    const owed=data.allLessons.filter(l=>(l.status_record||'active')!=='archived' && isMakeupOwed(l))
+      .sort((a,b)=>String(a.date||'').localeCompare(String(b.date||'')));
+    if(!owed.length){
+      makeupsList.innerHTML='<div class="teacher-empty">No make-ups currently owed. 🎉</div>';
+    } else {
+      makeupsList.innerHTML=owed.map(l=>{
+        const reason = l.status==='teacher_absent' ? 'Teacher was absent'
+          : l.status==='absent_excused' ? 'Excused absence' : 'Missed session';
+        return `<div class="teacher-row">
+          <div>
+            <div class="teacher-row-title">${escapeHtml(l.student||'Student')}</div>
+            <div class="teacher-row-meta">${escapeHtml(l.instrument||'')} · ${l.date?escapeHtml(formatTeacherLessonDate(l.date)):'—'} · ${escapeHtml(reason)}</div>
+          </div>
+        </div>`;
+      }).join('');
+    }
+  }
 
   const schedulePreview=document.getElementById('teacher-schedule');
   if(schedulePreview){
@@ -7689,14 +8033,14 @@ function renderTeacherWorkspace(){
         const statusText=STATUS_LABELS[status]||status;
         const makeupBadge=(l.makeupForLessonId && !l.isDoubleSession) ? ' <span class="badge badge-purple" title="This session is a makeup for a previously missed lesson">🔁 Makeup</span>' : '';
         const doubleBadge=l.isDoubleSession ? ' <span class="badge badge-purple" title="Absorbs a missed lesson as a double session">Double Session</span>' : '';
-        const notesBadge=l.notes ? ` <span class="badge badge-purple" title="${escapeAttr(l.notes)}">📝</span>` : '';
+        const notesBadge=l.notes ? ` <span class="badge badge-purple" style="cursor:pointer" onclick="toggleLessonNote('note-${l.id}')" title="Tap to read note">📝 Notes</span>` : '';
         const matchedStudent=(db.students||[]).find(s=>String(s.id)===String(l.studentId) || s.name===(l.student_name||l.student));
         const planBadges=teacherPlanBadgesHtml(matchedStudent?.plan);
         return `
         <div class="teacher-row">
-          <div style="display:flex;align-items:center;gap:12px">
+          <div style="display:flex;align-items:center;gap:12px;min-width:0">
             <div style="min-width:70px;text-align:center;background:var(--surface2,#242220);border-radius:6px;padding:6px 4px;font-weight:700;font-size:13px;color:var(--gold-light,#e2c47a)">${escapeHtml(formatTime12h(l.time||''))}</div>
-            <div>
+            <div style="min-width:0">
               <div class="teacher-row-title">${escapeHtml(l.student_name||l.student||'Student')}${planBadges?' '+planBadges:''}</div>
               <div class="teacher-row-meta">${escapeHtml(l.instrument||'')}</div>
             </div>
@@ -7704,6 +8048,7 @@ function renderTeacherWorkspace(){
           <div style="text-align:right">
             <span class="badge ${statusClass}">${escapeHtml(statusText)}</span>${makeupBadge}${doubleBadge}${notesBadge}
           </div>
+          ${l.notes ? `<div id="note-${l.id}" style="display:none;grid-column:1/-1;margin-top:6px;padding:8px 10px;background:var(--surface,#1a1916);border-radius:6px;font-size:13px;color:var(--text-light,#e8e4d8);white-space:pre-wrap">${escapeHtml(l.notes)}</div>` : ''}
         </div>`;
       });
       const realCount=lessons.filter(l=>!isAbsentStatus(l)).length;
@@ -7819,16 +8164,33 @@ function renderTeacherWorkspace(){
     const rows=studentNames.map(name=>{
       const matchedStudent=(db.students||[]).find(s=>s.name===name);
       const isTrial=matchedStudent && matchedStudent.plan==='trial';
+      // "Needs logging" = at least one attended session for this student
+      // whose log has neither a topic covered nor a performance rating.
+      const unlogged=byStudent[name].filter(lg=>!(lg.topicCovered||'').trim() && !lg.performanceRating).length;
+      const needsBadge = unlogged>0
+        ? ` <span class="badge badge-amber" style="font-size:10px">${unlogged} to log</span>`
+        : ' <span class="badge badge-green" style="font-size:10px">Logged</span>';
       return `
       <div class="teacher-row">
         <div>
-          <div class="teacher-row-title">${escapeHtml(name)}${isTrial?' <span class="badge badge-blue" title="Trial student">🎓 Trial</span>':''}</div>
+          <div class="teacher-row-title">${escapeHtml(name)}${isTrial?' <span class="badge badge-blue" title="Trial student">🎓 Trial</span>':''}${needsBadge}</div>
         </div>
         <button class="btn btn-sm btn-gold" onclick="openTeacherLogsForStudent('${jsString(name)}')">Open</button>
       </div>`;
     });
     const monthLabel=(typeof MONTHS!=='undefined' ? MONTHS.find(m=>m.key===getTeacherLogsMonth())?.label : null) || getTeacherLogsMonth();
     logsList.innerHTML=renderTeacherRows(rows,'No lesson logs for '+escapeHtml(monthLabel)+(dayFilter?' on '+escapeHtml(dayFilter):'')+'.');
+
+    // Needs-logging summary: total attended sessions in view with an empty
+    // log (no topic and no rating). A gentle nudge, styled to disappear
+    // when everything's logged so a diligent teacher sees no noise.
+    const needsSummary=document.getElementById('teacher-logs-needs-summary');
+    if(needsSummary){
+      const totalUnlogged=dayFilteredLogs.filter(lg=>!(lg.topicCovered||'').trim() && !lg.performanceRating).length;
+      needsSummary.innerHTML = totalUnlogged>0
+        ? `<div style="background:var(--amber-bg,#3a2f14);border:1px solid var(--amber-text,#e0b84c);border-radius:8px;padding:8px 12px;color:var(--amber-text,#e0b84c);font-size:13px;font-weight:600">📝 ${totalUnlogged} session${totalUnlogged>1?'s':''} still need${totalUnlogged>1?'':'s'} a log — tap a student to fill it in.</div>`
+        : '';
+    }
   }
 }
 
@@ -8454,36 +8816,53 @@ function renderStudentPortalHomework(){
       <div class="main student-portal-main" style="max-width:900px;margin:0 auto;">
         <div class="card-title" style="font-size:1.4rem">Cymatics</div>
         <div class="teacher-row-meta" style="margin-bottom:2px">Music Academy</div>
-        <div class="teacher-row-meta" style="margin-bottom:16px">View-only.</div>
+        <div class="teacher-row-meta" style="margin-bottom:16px">View-only, except your Notes / Wishlist.</div>
         <div class="card" id="student-portal-viewing-as-card">
           <div class="form-field wide" id="student-portal-select-field">
             <label for="student-portal-select">Viewing as</label>
-            <select id="student-portal-select" onchange="renderStudentPortalHomework();renderStudentScheduleView();renderStudentPortalPayments();renderStudentPortalAttendance();renderStudentPortalResources();"></select>
+            <select id="student-portal-select" onchange="renderStudentPortalHomework();renderStudentScheduleView();renderStudentPortalPayments();renderStudentPortalAttendance();renderStudentPortalResources();renderStudentPortalWishlist();"></select>
           </div>
           <div id="student-portal-pill-field" style="display:none">
             <label style="display:block;color:var(--text-muted);font-size:13px;margin-bottom:8px">Your courses</label>
             <div id="student-portal-pills" style="display:flex;gap:8px;flex-wrap:wrap"></div>
           </div>
         </div>
-        <div class="card">
+        <div class="student-portal-tabs" id="student-portal-tabs">
+          <button class="sp-tab active" onclick="switchStudentTab('schedule',this)">Schedule</button>
+          <button class="sp-tab" onclick="switchStudentTab('payments',this)">Payments</button>
+          <button class="sp-tab" onclick="switchStudentTab('attendance',this)">Attendance</button>
+          <button class="sp-tab" onclick="switchStudentTab('homework',this)">Homework</button>
+          <button class="sp-tab" onclick="switchStudentTab('resources',this)">Resources</button>
+          <button class="sp-tab" onclick="switchStudentTab('wishlist',this)">Notes / Wishlist</button>
+        </div>
+        <div class="card sp-panel active" data-sp-panel="schedule">
           <div class="card-title">My Schedule</div>
           <div id="student-portal-schedule" class="teacher-list"></div>
         </div>
-        <div class="card">
+        <div class="card sp-panel" data-sp-panel="payments">
           <div class="card-title">My Payments</div>
           <div id="student-portal-payments" class="teacher-list"></div>
         </div>
-        <div class="card">
+        <div class="card sp-panel" data-sp-panel="attendance">
           <div class="card-title">My Attendance</div>
           <div id="student-portal-attendance" class="teacher-list"></div>
         </div>
-        <div class="card">
+        <div class="card sp-panel" data-sp-panel="homework">
           <div class="card-title">My Homework</div>
           <div id="student-portal-homework-list" class="teacher-list"></div>
         </div>
-        <div class="card">
+        <div class="card sp-panel" data-sp-panel="resources">
           <div class="card-title">My Resources</div>
           <div id="student-portal-resources" class="teacher-list"></div>
+        </div>
+        <div class="card sp-panel" data-sp-panel="wishlist">
+          <div class="card-title">My Notes / Wishlist</div>
+          <div class="teacher-row-meta" style="margin-bottom:10px">Add songs or skills you'd like to learn — your teacher can see these.</div>
+          <div style="display:flex;gap:8px;margin-bottom:12px">
+            <input id="student-wishlist-input" placeholder="e.g. Learn Für Elise" style="flex:1" onkeydown="if(event.key==='Enter')addStudentWishlistItem()">
+            <button class="btn btn-gold" onclick="addStudentWishlistItem()">Add</button>
+          </div>
+          <div id="student-portal-wishlist" class="teacher-list"></div>
         </div>
         <div style="margin-top:16px"><button class="btn btn-gold" onclick="logout()">Logout</button></div>
       </div>`;
@@ -8496,7 +8875,7 @@ function renderStudentPortalHomework(){
       if(typeof renderStudentScheduleView==='function') renderStudentScheduleView();
       if(typeof renderStudentPortalPayments==='function') renderStudentPortalPayments();
       if(typeof renderStudentPortalAttendance==='function') renderStudentPortalAttendance();
-      if(typeof renderStudentPortalResources==='function') renderStudentPortalResources();
+      if(typeof renderStudentPortalResources==='function') renderStudentPortalResources(); if(typeof renderStudentPortalWishlist==='function') renderStudentPortalWishlist();
     }
   };
 })();
@@ -8540,6 +8919,11 @@ function renderStudentScheduleView(){
   const nextSessionValue=student.frozen
     ? '❄️ Paused'
     : (nextLesson ? escapeHtml(formatLedgerDate(nextLesson.date)) : '--');
+  // The next session's ACTUAL time (which may differ from the default
+  // lessonTime for a one-off reschedule), plus a make-up marker.
+  const nextSessionTime = (!student.frozen && nextLesson && nextLesson.time)
+    ? formatTime12h(nextLesson.time) : (student.lessonTime?formatTime12h(student.lessonTime):'--');
+  const nextIsMakeup = !!(nextLesson && nextLesson.makeupForLessonId);
   const recentLessons=(db.lessons||[])
     .filter(l=>(l.status_record||'active')!=='archived'
       && (String(l.studentId)===String(student.id) || l.student===student.name)
@@ -8549,8 +8933,8 @@ function renderStudentScheduleView(){
     .slice(0,5);
   host.innerHTML=`
     <div class="teacher-mini-grid" style="margin-bottom:12px">
-      <div class="metric"><div class="metric-label">Time Slot</div><div class="metric-value">${student.lessonTime?escapeHtml(formatTime12h(student.lessonTime)):'--'}</div></div>
-      <div class="metric ${student.frozen?'amber':'green'}"><div class="metric-label">Next Session</div><div class="metric-value ${student.frozen?'amber':'green'}">${nextSessionValue}</div></div>
+      <div class="metric"><div class="metric-label">Next Session Time</div><div class="metric-value">${escapeHtml(nextSessionTime)}</div></div>
+      <div class="metric ${student.frozen?'amber':'green'}"><div class="metric-label">Next Session</div><div class="metric-value ${student.frozen?'amber':'green'}" style="font-size:1.1rem">${nextSessionValue}${nextIsMakeup?' <span class="badge badge-purple" style="font-size:9px;vertical-align:middle">Make-Up</span>':''}</div></div>
       <div class="metric"><div class="metric-label">Instrument</div><div class="metric-value">${escapeHtml(student.instrument||'--')}</div></div>
     </div>
     <div class="summary-row"><span class="s-label">Teacher</span><span class="s-val">${escapeHtml(student.teacher||'--')}</span></div>
@@ -8558,7 +8942,7 @@ function renderStudentScheduleView(){
     <div class="teacher-list">${renderTeacherRows(recentLessons.map(l=>`
       <div class="teacher-row">
         <div>
-          <div class="teacher-row-title">${escapeHtml(formatTeacherLessonDate(l.date))}${l.time?' '+escapeHtml(formatTime12h(l.time)):''}</div>
+          <div class="teacher-row-title">${escapeHtml(formatTeacherLessonDate(l.date))}${l.time?' '+escapeHtml(formatTime12h(l.time)):''}${l.makeupForLessonId?' <span class="badge badge-purple" style="font-size:9px">Make-Up</span>':''}</div>
           <div class="teacher-row-meta">${escapeHtml(l.instrument||'')} - ${escapeHtml(STATUS_LABELS[l.status]||l.status||'')}</div>
         </div>
       </div>`), 'No lesson history yet.')}</div>`;
@@ -9516,17 +9900,27 @@ function renderFreeSlotsOverview(){
       </div>`;
   }).join('');
 
-  // Copy All plain text, grouped by teacher:
-  //   — Mariam —
+  // Copy All plain text: the on-screen view is grouped by teacher (so you
+  // can see who's free), but the COPIED text a student receives is
+  // organized by DAY with teacher names stripped and duplicate times
+  // merged — a student doesn't need to know which teacher, only when.
   //   Monday
   //   5:30 PM
-  const lines=[];
+  //   7:00 PM
+  //   Friday
+  //   3:30 PM
+  const allByDay={};
   perTeacher.forEach(t=>{
-    lines.push('— '+t.name+' —');
     t.daysWithSlots.forEach(dayName=>{
-      lines.push(dayName);
-      t.byDay[dayName].forEach(t24=>lines.push(formatTime12h(t24)));
+      (allByDay[dayName]=allByDay[dayName]||new Set());
+      t.byDay[dayName].forEach(t24=>allByDay[dayName].add(t24));
     });
+  });
+  const lines=[];
+  WEEKDAY_NAMES.forEach(dayName=>{
+    if(!allByDay[dayName]) return;
+    lines.push(dayName);
+    [...allByDay[dayName]].sort().forEach(t24=>lines.push(formatTime12h(t24)));
     lines.push('');
   });
   const plainTextAll=lines.join('\n').trim();
@@ -9581,29 +9975,24 @@ function updateFreeSlotSelectionUI(){
   }
 }
 
-// Builds the copy text from just the selected slots, grouped by teacher
-// then day, in the same clean format as the on-screen blocks.
+// Builds the copy text from just the selected slots, organized by DAY
+// with teacher names stripped and duplicate times merged — the same
+// student-facing format as Copy All. (The on-screen selection is grouped
+// by teacher; the copied text is not.)
 function buildSelectedFreeSlotsText(){
   // key = instrument||teacher||day||HH:MM
-  const byTeacher={};
+  const byDay={};
   _freeSlotSelection.forEach(key=>{
     const parts=key.split('||');
-    // Tolerate any legacy 2-part keys still lingering in the set.
-    const teacher = parts.length>=4 ? parts[1] : '';
     const day = parts.length>=4 ? parts[2] : parts[0];
     const t24 = parts.length>=4 ? parts[3] : parts[1];
-    const tKey=teacher||'';
-    byTeacher[tKey]=byTeacher[tKey]||{};
-    (byTeacher[tKey][day]=byTeacher[tKey][day]||[]).push(t24);
+    (byDay[day]=byDay[day]||new Set()).add(t24);
   });
   const lines=[];
-  Object.keys(byTeacher).sort().forEach(teacher=>{
-    if(teacher) lines.push('— '+teacher+' —');
-    WEEKDAY_NAMES.forEach(day=>{
-      if(!byTeacher[teacher][day]) return;
-      lines.push(day);
-      byTeacher[teacher][day].sort().forEach(t24=>lines.push(formatTime12h(t24)));
-    });
+  WEEKDAY_NAMES.forEach(day=>{
+    if(!byDay[day]) return;
+    lines.push(day);
+    [...byDay[day]].sort().forEach(t24=>lines.push(formatTime12h(t24)));
     lines.push('');
   });
   return lines.join('\n').trim();
@@ -10789,7 +11178,17 @@ function renderStudentPortalPayments(){
     </div>`;
   }).join('');
 
+  const unpaidInstapayBlock = paidThisMonth ? '' : `
+    <div style="background:var(--amber-bg,#3a2f14);border:1px solid var(--amber-text,#e0b84c);border-radius:8px;padding:12px 14px;margin-bottom:12px">
+      <div style="font-weight:700;color:var(--amber-text,#e0b84c);margin-bottom:6px">💳 How to pay for ${escapeHtml(thisMonthLabel)}</div>
+      <div style="font-size:13px;color:var(--text-light,#e8e4d8);line-height:1.6">
+        Amount due: <strong>${amount}</strong><br>
+        Send via <strong>InstaPay</strong> to <strong>${escapeHtml(ACADEMY_INSTAPAY_HANDLE)}</strong>, then send the payment screenshot to us on WhatsApp to confirm your spot.
+      </div>
+    </div>`;
+
   host.innerHTML=`
+    ${unpaidInstapayBlock}
     <div class="teacher-mini-grid" style="margin-bottom:12px">
       <div class="metric"><div class="metric-label">Plan</div><div class="metric-value">${escapeHtml(getStudentPortalPlanLabel(student.plan))}</div></div>
       <div class="metric"><div class="metric-label">Amount</div><div class="metric-value">${amount}</div></div>
@@ -10818,14 +11217,279 @@ function renderStudentPortalAttendance(){
   const remaining=lessons.filter(l=>l.status==='scheduled').length;
   const makeupSessions=lessons.filter(l=>isMakeupOwed(l)).length;
 
+  // Scheduled make-up sessions this student has booked — shown distinctly
+  // so they can see WHEN their make-up is, not just that one is owed.
+  const scheduledMakeups=lessons.filter(l=>l.makeupForLessonId && l.status==='scheduled')
+    .sort((a,b)=>String(a.date||'').localeCompare(String(b.date||'')));
+
+  const makeupListBlock = scheduledMakeups.length ? `
+    <div class="card-title" style="margin-top:16px">Your Scheduled Make-ups</div>
+    <div class="teacher-list">${scheduledMakeups.map(l=>`
+      <div class="teacher-row">
+        <div>
+          <div class="teacher-row-title">${escapeHtml(formatLedgerDate(l.date))}${l.time?' · '+escapeHtml(formatTime12h(l.time)):''} <span class="badge badge-purple" style="font-size:9px">Make-Up</span></div>
+          <div class="teacher-row-meta">${escapeHtml(l.instrument||'')}${l.teacher?' · '+escapeHtml(l.teacher):''}</div>
+        </div>
+      </div>`).join('')}</div>` : '';
+
   host.innerHTML=`
     <div class="teacher-mini-grid">
       <div class="metric green"><div class="metric-label">Attended</div><div class="metric-value green">${attended}</div></div>
       <div class="metric amber"><div class="metric-label">Absent</div><div class="metric-value amber">${absent}</div></div>
       <div class="metric"><div class="metric-label">Remaining</div><div class="metric-value">${remaining}</div></div>
-      <div class="metric ${makeupSessions?'red':''}"><div class="metric-label">Makeup Sessions</div><div class="metric-value ${makeupSessions?'red':''}">${makeupSessions}</div></div>
+      <div class="metric ${makeupSessions?'red':''}"><div class="metric-label">Makeups Owed</div><div class="metric-value ${makeupSessions?'red':''}">${makeupSessions}</div></div>
     </div>
+    ${makeupListBlock}
   `;
+}
+
+// Single source of truth for whether a resource is visible to a given
+// student. Handles every targeting mode so the student portal and any
+// future view stay consistent.
+// ── Student Wishlists ─────────────────────────────────────────────────
+// A structured list of songs/skills a student wants to learn. Editable by
+// the student in their portal, read-only for teachers in their Wishlists
+// tab. Keyed by the stable student_code (not the churning local id) so it
+// survives reloads and id remapping, same lesson we learned with payments.
+function wishlistKeyFor(student){
+  return student ? (student.student_code || ('id:'+student.id)) : '';
+}
+function getStudentWishlist(student){
+  db.wishlists=db.wishlists||{};
+  const key=wishlistKeyFor(student);
+  return key ? (db.wishlists[key]||[]) : [];
+}
+function addWishlistItem(student, text){
+  const clean=String(text||'').trim();
+  if(!clean) return;
+  db.wishlists=db.wishlists||{};
+  const key=wishlistKeyFor(student);
+  if(!key) return;
+  const list=db.wishlists[key]||[];
+  list.push({ id: (crypto.randomUUID?crypto.randomUUID():String(Date.now())), text: clean, addedAt: new Date().toISOString(), done:false });
+  db.wishlists[key]=list;
+  save();
+  if(typeof syncWishlistToSupabase==='function') syncWishlistToSupabase(student);
+}
+function removeWishlistItem(student, itemId){
+  db.wishlists=db.wishlists||{};
+  const key=wishlistKeyFor(student);
+  if(!key || !db.wishlists[key]) return;
+  db.wishlists[key]=db.wishlists[key].filter(i=>String(i.id)!==String(itemId));
+  save();
+  if(typeof syncWishlistToSupabase==='function') syncWishlistToSupabase(student);
+}
+function toggleWishlistItemDone(student, itemId){
+  db.wishlists=db.wishlists||{};
+  const key=wishlistKeyFor(student);
+  if(!key || !db.wishlists[key]) return;
+  const item=db.wishlists[key].find(i=>String(i.id)===String(itemId));
+  if(item){ item.done=!item.done; save(); if(typeof syncWishlistToSupabase==='function') syncWishlistToSupabase(student); }
+}
+
+// Sync a student's whole wishlist as one row (upsert by student_code).
+// Degrades silently if the wishlists table/columns aren't present yet.
+async function syncWishlistToSupabase(student){
+  try{
+    if(!window.supabaseClientV1 || !student) return;
+    const key=wishlistKeyFor(student);
+    const payload={
+      student_code: student.student_code||'',
+      student_id: String(student.id||''),
+      student_name: student.name||'',
+      items: JSON.stringify(db.wishlists[key]||[])
+    };
+    const {error}=await window.supabaseClientV1.from('wishlists')
+      .upsert(payload, {onConflict:'student_code'});
+    if(error) console.warn('Wishlist sync failed:', error.message);
+  }catch(err){ console.warn('Wishlist sync failed:', err.message); }
+}
+
+function isResourceVisibleToStudent(r, student){
+  if(!r || !student) return false;
+  const sid=String(student.id);
+  switch(r.targetType){
+    case 'all': return true;
+    case 'skill':
+      return !!r.targetSkill && (student.skillLevel||'')===r.targetSkill;
+    case 'students':
+      return Array.isArray(r.targetStudentIds) && r.targetStudentIds.map(String).includes(sid);
+    case 'student':
+    default:
+      return String(r.targetStudentId)===sid;
+  }
+}
+
+// ── Teacher Resources tab ─────────────────────────────────────────────
+function onTeacherResourceKindChange(){
+  const kind=document.getElementById('tres-kind')?.value||'file';
+  const fileF=document.getElementById('tres-file-field');
+  const linkF=document.getElementById('tres-link-field');
+  if(fileF) fileF.style.display = kind==='file' ? 'block' : 'none';
+  if(linkF) linkF.style.display = kind==='link' ? 'block' : 'none';
+}
+function onTeacherResourceTargetChange(){
+  const target=document.getElementById('tres-target')?.value||'all';
+  const skillF=document.getElementById('tres-skill-field');
+  const studentsF=document.getElementById('tres-students-field');
+  if(skillF) skillF.style.display = target==='skill' ? 'block' : 'none';
+  if(studentsF) studentsF.style.display = target==='students' ? 'block' : 'none';
+  if(target==='skill'){
+    const skillSel=document.getElementById('tres-skill');
+    if(skillSel && !skillSel.options.length){
+      skillSel.innerHTML=(SKILL_LEVELS||[]).map(s=>`<option value="${escapeAttr(s)}">${escapeHtml(s)}</option>`).join('');
+    }
+  }
+  if(target==='students'){
+    const host=document.getElementById('tres-students-checklist');
+    if(host){
+      const mine=getTeacherWorkspaceData().students.filter(s=>(s.status||'active')!=='archived');
+      host.innerHTML=mine.length ? mine.map(s=>`<label style="display:flex;align-items:center;gap:8px;font-size:14px"><input type="checkbox" value="${s.id}" style="width:auto;min-height:0"> ${escapeHtml(s.name)}</label>`).join('') : '<span style="color:var(--text-muted)">No students assigned.</span>';
+    }
+  }
+}
+
+async function teacherUploadResource(){
+  const title=(document.getElementById('tres-title')?.value||'').trim();
+  const kind=document.getElementById('tres-kind')?.value||'file';
+  const target=document.getElementById('tres-target')?.value||'all';
+  const setStatus=(m)=>{ const el=document.getElementById('tres-status'); if(el) el.textContent=m; };
+  if(!title){ setStatus('Please enter a title.'); return; }
+  if(!window.supabaseClientV1){ setStatus('Not connected to Supabase.'); return; }
+
+  // Resolve targeting
+  let targetSkill=null, targetStudentIds=null;
+  if(target==='skill'){
+    targetSkill=document.getElementById('tres-skill')?.value||'';
+    if(!targetSkill){ setStatus('Please choose a skill level.'); return; }
+  } else if(target==='students'){
+    targetStudentIds=[...document.querySelectorAll('#tres-students-checklist input:checked')].map(cb=>cb.value);
+    if(!targetStudentIds.length){ setStatus('Please choose at least one student.'); return; }
+  }
+
+  const teacherName=teacherScopeName();
+  const baseRow={
+    title,
+    target_type: target,
+    target_skill: targetSkill,
+    target_student_ids: targetStudentIds,
+    uploaded_by: session.name||session.email||'Teacher',
+    uploaded_by_role: 'teacher',
+    teacher_owner: teacherName
+  };
+
+  try{
+    if(kind==='link'){
+      const url=(document.getElementById('tres-link')?.value||'').trim();
+      if(!url){ setStatus('Please enter a link URL.'); return; }
+      setStatus('⏳ Sharing…');
+      const payload={...baseRow, resource_kind:'link', link_url:url, filename:'', storage_path:'', file_size:0};
+      const {data,error}=await window.supabaseClientV1.from('resources').insert([payload]).select().single();
+      if(error){ setStatus('Failed: '+error.message); return; }
+      pushLocalResource(data, payload);
+    } else {
+      const file=document.getElementById('tres-file')?.files?.[0];
+      if(!file){ setStatus('Please choose a file.'); return; }
+      setStatus('⏳ Uploading…');
+      const storagePath=Date.now()+'_'+file.name.replace(/[^a-zA-Z0-9._-]/g,'_');
+      const {error:upErr}=await window.supabaseClientV1.storage.from('resources').upload(storagePath, file);
+      if(upErr){ setStatus('Upload failed: '+upErr.message); return; }
+      const payload={...baseRow, resource_kind:'file', filename:file.name, storage_path:storagePath, file_size:file.size};
+      const {data,error}=await window.supabaseClientV1.from('resources').insert([payload]).select().single();
+      if(error){ setStatus('File uploaded, but saving failed: '+error.message); return; }
+      pushLocalResource(data, payload);
+    }
+    // Reset form
+    document.getElementById('tres-title').value='';
+    if(document.getElementById('tres-link')) document.getElementById('tres-link').value='';
+    if(document.getElementById('tres-file')) document.getElementById('tres-file').value='';
+    setStatus('✅ Shared.');
+    renderTeacherResources();
+  }catch(err){ setStatus('Failed: '+err.message); }
+}
+
+function pushLocalResource(data, payload){
+  db.resources=db.resources||[];
+  db.resources.push({
+    id: data?.id, title: payload.title, filename: payload.filename||'',
+    storagePath: payload.storage_path||'', fileSize: payload.file_size||0,
+    uploadedBy: payload.uploaded_by, targetType: payload.target_type,
+    targetStudentId: null,
+    targetSkill: payload.target_skill||null,
+    targetStudentIds: payload.target_student_ids||null,
+    resourceKind: payload.resource_kind||'file',
+    linkUrl: payload.link_url||null,
+    uploadedByRole: payload.uploaded_by_role||'teacher',
+    teacherOwner: payload.teacher_owner||null,
+    createdAt: data?.created_at||new Date().toISOString()
+  });
+  save();
+}
+
+function teacherResourceTargetLabel(r){
+  if(r.targetType==='all') return 'All my students';
+  if(r.targetType==='skill') return 'Skill: '+(r.targetSkill||'—');
+  if(r.targetType==='students'){
+    const names=(r.targetStudentIds||[]).map(id=>(db.students||[]).find(s=>String(s.id)===String(id))?.name).filter(Boolean);
+    return names.length ? names.join(', ') : 'Specific students';
+  }
+  return r.targetStudentName || 'A student';
+}
+
+function renderTeacherResources(){
+  const host=document.getElementById('teacher-resources-list');
+  if(!host) return;
+  const teacherName=teacherScopeName();
+  // Show only resources this teacher owns (their own library).
+  const mine=(db.resources||[]).filter(r=>r.uploadedByRole==='teacher' && (r.teacherOwner||'').toLowerCase()===teacherName)
+    .sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||'')));
+  host.innerHTML=renderTeacherRows(mine.map(r=>{
+    const isLink=r.resourceKind==='link';
+    return `<div class="teacher-row">
+      <div style="min-width:0">
+        <div class="teacher-row-title">${escapeHtml(r.title)}${isLink?' 🔗':''}</div>
+        <div class="teacher-row-meta">${isLink?'Link':escapeHtml(r.filename||'')} · Shared with: ${escapeHtml(teacherResourceTargetLabel(r))}</div>
+      </div>
+      <button class="btn btn-sm btn-danger" onclick="deleteResource('${jsString(String(r.id))}')">Delete</button>
+    </div>`;
+  }), 'You haven\'t shared any resources yet.');
+}
+
+// ── Teacher Student-Wishlists tab ─────────────────────────────────────
+function renderTeacherWishlists(){
+  const host=document.getElementById('teacher-wishlists-list');
+  if(!host) return;
+  const search=(document.getElementById('teacher-wishlist-search')?.value||'').toLowerCase();
+  const students=getTeacherWorkspaceData().students
+    .filter(s=>(s.status||'active')!=='archived')
+    .filter(s=>!search || (s.name||'').toLowerCase().includes(search))
+    .sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+  host.innerHTML=renderTeacherRows(students.map(s=>{
+    const count=getStudentWishlist(s).length;
+    const badge = count>0
+      ? `<span class="badge badge-purple" style="font-size:10px">${count} item${count>1?'s':''}</span>`
+      : '<span class="badge" style="font-size:10px;opacity:0.7">Empty</span>';
+    return `<div class="teacher-row">
+      <div><div class="teacher-row-title">${escapeHtml(s.name)} ${badge}</div>
+      <div class="teacher-row-meta">${escapeHtml(s.instrument||'')}</div></div>
+      <button class="btn btn-sm btn-gold" onclick="openTeacherWishlistDetail('${jsString(String(s.id))}')">Open</button>
+    </div>`;
+  }), 'No students assigned to you.');
+}
+
+function openTeacherWishlistDetail(studentId){
+  const host=document.getElementById('teacher-wishlist-detail');
+  if(!host) return;
+  const student=(db.students||[]).find(s=>String(s.id)===String(studentId));
+  if(!student){ host.innerHTML=''; return; }
+  const items=getStudentWishlist(student);
+  const rows = items.length
+    ? items.map(i=>`<div class="teacher-row"><div><div class="teacher-row-title" style="${i.done?'text-decoration:line-through;opacity:0.6':''}">${escapeHtml(i.text)}</div><div class="teacher-row-meta">${i.addedAt?escapeHtml(formatDateDMY(String(i.addedAt).slice(0,10))):''}${i.done?' · learned':''}</div></div></div>`).join('')
+    : teacherEmpty('This student hasn\'t added anything yet.');
+  host.innerHTML=`<div class="card">
+    <div class="card-title">${escapeHtml(student.name)} — Wishlist</div>
+    <div class="teacher-list">${rows}</div>
+  </div>`;
 }
 
 function renderStudentPortalResources(){
@@ -10834,19 +11498,29 @@ function renderStudentPortalResources(){
   if(!sel || !host) return;
   const studentId=sel.value;
   if(!studentId){ host.innerHTML=teacherEmpty('Select your name above to view resources.'); return; }
+  const student=(db.students||[]).find(s=>String(s.id)===String(studentId));
+  if(!student){ host.innerHTML=teacherEmpty('No resources shared yet.'); return; }
 
-  const items=(db.resources||[]).filter(r=>
-    r.targetType==='all' || String(r.targetStudentId)===String(studentId)
-  ).sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||'')));
+  const items=(db.resources||[]).filter(r=>isResourceVisibleToStudent(r, student))
+    .sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||'')));
 
-  host.innerHTML=renderTeacherRows(items.map(r=>`
+  host.innerHTML=renderTeacherRows(items.map(r=>{
+    const isLink=r.resourceKind==='link';
+    const meta = isLink
+      ? 'Link'+(r.createdAt?' · '+escapeHtml(formatDateDMY(String(r.createdAt).slice(0,10))):'')
+      : escapeHtml(r.filename||'')+(r.createdAt?' · '+escapeHtml(formatDateDMY(String(r.createdAt).slice(0,10))):'');
+    const action = isLink
+      ? `<a class="btn btn-sm btn-gold" href="${escapeAttr(r.linkUrl||'#')}" target="_blank" rel="noopener">Open Link</a>`
+      : `<button class="btn btn-sm btn-gold" onclick="downloadResource('${jsString(r.storagePath)}','${jsString(r.filename)}')">Download</button>`;
+    return `
     <div class="teacher-row">
       <div>
-        <div class="teacher-row-title">${escapeHtml(r.title)}</div>
-        <div class="teacher-row-meta">${escapeHtml(r.filename)}${r.createdAt?' · '+escapeHtml(formatDateDMY(String(r.createdAt).slice(0,10))):''}</div>
+        <div class="teacher-row-title">${escapeHtml(r.title)}${isLink?' 🔗':''}</div>
+        <div class="teacher-row-meta">${meta}</div>
       </div>
-      <button class="btn btn-sm btn-gold" onclick="downloadResource('${jsString(r.storagePath)}','${jsString(r.filename)}')">Download</button>
-    </div>`), 'No resources shared yet.');
+      ${action}
+    </div>`;
+  }), 'No resources shared with you yet.');
 }
 </script>
 
@@ -11258,15 +11932,30 @@ async function syncPracticeSessionUpdateToSupabase(session){
 
 function downloadTeacherSchedulePhoto(){
   const teacherName=document.getElementById('cal-teacher-download')?.value||'';
-  const dayName=document.getElementById('cal-day')?.value||'';
-
   if(!teacherName){ showToast('Please select a teacher first'); return; }
+  const dayName=document.getElementById('cal-day')?.value||'';
+  generateTeacherSchedulePhoto(teacherName, dayName);
+}
 
+// Download a schedule photo for every active teacher who has slots on the
+// selected day. Staggered slightly so browsers don't block the rapid
+// multiple downloads as a popup.
+function downloadAllTeacherSchedulePhotos(){
+  const dayName=document.getElementById('cal-day')?.value||'';
+  const teachers=(db.teacherProfiles||[]).filter(p=>(p.status||'active')!=='archived' && ((p.timeSlots||{})[dayName]||[]).length);
+  if(!teachers.length){ showToast('No teachers have slots configured on '+dayName); return; }
+  showToast('Generating '+teachers.length+' schedule photo'+(teachers.length>1?'s':'')+'…');
+  teachers.forEach((t,i)=>{
+    setTimeout(()=>generateTeacherSchedulePhoto(t.name, dayName, true), i*600);
+  });
+}
+
+function generateTeacherSchedulePhoto(teacherName, dayName, silent){
   const profile=(db.teacherProfiles||[]).find(p=>p.name===teacherName);
-  if(!profile){ showToast('Teacher not found'); return; }
+  if(!profile){ if(!silent) showToast('Teacher not found'); return; }
 
   const effectiveSlots=getEffectiveTeacherDaySlots(teacherName, dayName, null);
-  if(!effectiveSlots.length){ showToast('This teacher has no configured slots on '+dayName); return; }
+  if(!effectiveSlots.length){ if(!silent) showToast('This teacher has no configured slots on '+dayName); return; }
 
   const month=currentMonth();
   const paidSet=new Set(
