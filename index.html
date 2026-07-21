@@ -304,7 +304,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-43</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-46</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -325,6 +325,7 @@ input::placeholder{color:var(--text-dim)}
 <nav class="nav-bar">
   <button class="nav-btn active" onclick="switchPage('overview',this)">📊 Overview</button>
   <button class="nav-btn" onclick="switchPage('students',this)">🎓 Students</button>
+  <button class="nav-btn" onclick="switchPage('renewals',this)">🔁 Renewals</button>
   <button class="nav-btn" onclick="switchPage('teachers',this)">💰 Payroll</button>
   <button class="nav-btn" onclick="switchPage('profiles',this)">👨‍🏫 Teacher Management</button>
   <button class="nav-btn" onclick="switchPage('lessons',this)">📅 Lessons</button>
@@ -345,10 +346,6 @@ input::placeholder{color:var(--text-dim)}
   <div id="overview-conflict-banner"></div>
   <div class="card-title">Academy Overview</div><div class="metric-grid" id="academy-kpis"></div>
   <div class="card-title" id="monthly-kpi-title">Monthly Activity</div><div class="metric-grid" id="metrics"></div>
-  <div class="card" id="renewals-due-card">
-    <div class="card-title">Renewals Due</div>
-    <div id="renewals-due-list"></div>
-  </div>
   <div class="two-col">
     <div class="card">
       <div class="card-title">Income</div>
@@ -454,6 +451,15 @@ input::placeholder{color:var(--text-dim)}
     </table></div>
   </div>
   <div id="admin-student-profile-detail"></div>
+</div>
+
+<!-- RENEWALS -->
+<div id="page-renewals" class="page">
+  <div class="card">
+    <div class="card-title">Renewals Due</div>
+    <div class="teacher-row-meta" style="margin-bottom:12px">Students whose lesson batch is running out (within 7 days) or has already ended. Renew to book their next batch.</div>
+    <div id="renewals-due-list"></div>
+  </div>
 </div>
 
 <!-- TEACHERS -->
@@ -970,6 +976,7 @@ input::placeholder{color:var(--text-dim)}
           <div class="metric"><div class="metric-label">Taught This Week</div><div id="teacher-sessions-week" class="metric-value">0</div></div>
           <div class="metric green"><div class="metric-label">Taught This Month</div><div id="teacher-sessions-month" class="metric-value green">0</div></div>
           <div class="metric amber"><div class="metric-label">Excused Absences</div><div id="teacher-excused-count" class="metric-value amber">0</div></div>
+          <div class="metric red"><div class="metric-label">Days Absent (Month)</div><div id="teacher-days-absent" class="metric-value red">0</div></div>
           <div class="metric red" style="cursor:pointer" onclick="toggleTeacherMakeupsDrilldown()" title="Tap to see who's owed a make-up"><div class="metric-label">Makeups Owed</div><div id="teacher-makeups-count" class="metric-value red">0</div></div>
         </div>
         <div id="teacher-makeups-drilldown" class="card" style="display:none">
@@ -1004,6 +1011,12 @@ input::placeholder{color:var(--text-dim)}
             <option value="Thursday">Thursday</option>
             <option value="Friday">Friday</option>
             <option value="Saturday">Saturday</option>
+          </select>
+          <label for="teacher-students-type-filter" class="visually-hidden">Filter by type</label>
+          <select id="teacher-students-type-filter" onchange="renderTeacherWorkspace()" style="max-width:160px">
+            <option value="">All students</option>
+            <option value="normal">Normal students</option>
+            <option value="trial">Trial students</option>
           </select>
         </div>
         <div id="teacher-students-list" class="teacher-list" style="max-height:340px;overflow-y:auto"></div>
@@ -1074,26 +1087,48 @@ input::placeholder{color:var(--text-dim)}
 
     <div id="teacher-panel-resources" class="teacher-panel">
       <div class="card">
-        <div class="card-title">Share a Resource</div>
+        <div class="card-title">Add to Library</div>
+        <div class="teacher-row-meta" style="margin-bottom:10px">Upload a file or save a link to your personal library. Sharing with students is a separate step below.</div>
         <div style="display:flex;flex-direction:column;gap:10px;max-width:560px">
           <div class="form-field">
-            <label for="tres-title">Title</label>
-            <input id="tres-title" placeholder="e.g. Major Scales Practice Sheet">
+            <label for="tlib-title">Title</label>
+            <input id="tlib-title" placeholder="e.g. Major Scales Practice Sheet">
           </div>
           <div class="form-field">
-            <label for="tres-kind">Type</label>
-            <select id="tres-kind" onchange="onTeacherResourceKindChange()">
+            <label for="tlib-kind">Type</label>
+            <select id="tlib-kind" onchange="onTeacherLibraryKindChange()">
               <option value="file">File (PDF / Image)</option>
               <option value="link">Link (URL)</option>
             </select>
           </div>
-          <div class="form-field" id="tres-file-field">
-            <label for="tres-file">File</label>
-            <input id="tres-file" type="file" accept=".pdf,image/*">
+          <div class="form-field" id="tlib-file-field">
+            <label for="tlib-file">File</label>
+            <input id="tlib-file" type="file" accept=".pdf,image/*">
           </div>
-          <div class="form-field" id="tres-link-field" style="display:none">
-            <label for="tres-link">Link URL</label>
-            <input id="tres-link" placeholder="https://...">
+          <div class="form-field" id="tlib-link-field" style="display:none">
+            <label for="tlib-link">Link URL</label>
+            <input id="tlib-link" placeholder="https://...">
+          </div>
+          <div style="display:flex;align-items:center;gap:12px">
+            <button class="btn btn-gold" onclick="teacherAddToLibrary()">Add to Library</button>
+            <small id="tlib-status" style="color:var(--text-muted)"></small>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Share with Students</div>
+        <div style="display:flex;flex-direction:column;gap:10px;max-width:560px">
+          <div class="form-field">
+            <label for="tres-source">Resource</label>
+            <select id="tres-source" onchange="onTeacherShareSourceChange()">
+              <option value="">— Choose from my library —</option>
+            </select>
+          </div>
+          <div class="form-field" id="tres-newfile-wrap" style="display:none">
+            <label for="tres-newfile-title">New file title</label>
+            <input id="tres-newfile-title" placeholder="e.g. This Week's Piece" style="margin-bottom:8px">
+            <input id="tres-newfile" type="file" accept=".pdf,image/*">
           </div>
           <div class="form-field">
             <label for="tres-target">Share with</label>
@@ -1112,11 +1147,12 @@ input::placeholder{color:var(--text-dim)}
             <div id="tres-students-checklist" style="display:flex;flex-direction:column;gap:6px;max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:8px"></div>
           </div>
           <div style="display:flex;align-items:center;gap:12px">
-            <button class="btn btn-gold" onclick="teacherUploadResource()">Share Resource</button>
+            <button class="btn btn-gold" onclick="teacherShareResource()">Share</button>
             <small id="tres-status" style="color:var(--text-muted)"></small>
           </div>
         </div>
       </div>
+
       <div class="card">
         <div class="card-title">My Resource Library</div>
         <div id="teacher-resources-list" class="teacher-list" style="max-height:420px;overflow-y:auto"></div>
@@ -2902,7 +2938,6 @@ function renderOverview(){
     </div>
   </div>`).join('');}
 
-  if(typeof renderRenewalsDue==='function') renderRenewalsDue();
   if(typeof renderOverviewConflicts==='function') renderOverviewConflicts();
 }
 
@@ -2944,7 +2979,6 @@ function renderRenewalsDue(){
     const av=a.lastScheduled||'0000-00-00', bv=b.lastScheduled||'0000-00-00';
     return av.localeCompare(bv);
   });
-  const card=document.getElementById('renewals-due-card');
   if(!rows.length){
     host.innerHTML='<div class="empty"><div class="empty-icon">✅</div><div class="empty-text">No renewals due in the next 7 days.</div></div>';
     return;
@@ -4985,6 +5019,7 @@ function switchPage(page, btn){
   if(page==='expenses'){renderExpenses(); if(typeof renderOtherRevenue==='function') renderOtherRevenue();}
   if(page==='reports')renderReports();
   if(page==='profiles'){refreshInstrumentSelectors(); renderProfiles(); renderInstrumentPage(); if(typeof renderAddProfileTimeSlots==='function') renderAddProfileTimeSlots();}
+  if(page==='renewals' && typeof renderRenewalsDue==='function') renderRenewalsDue();
   if(page==='instruments')renderInstrumentPage();
   if(page==='database')renderDatabase(); if(page==='cloud'){}
   if(page==='notes' && typeof renderNotesPage==='function')renderNotesPage();
@@ -5816,7 +5851,13 @@ function syncHealthClick(){
            detail='Error '+response.status+': '+(body.message||body.error||body.details);
          }
        }catch(parseErr){ /* body wasn't JSON — keep the bare status */ }
-       recordSyncFailure(url, options, detail);
+       // Suppress the expected, self-healing payments.student_code probe:
+       // the payment sync deliberately tries the student_code column and
+       // retries cleanly without it when the column isn't present. That
+       // 400 is benign and already handled, so surfacing it in the panel
+       // just alarms the user about an error the app recovered from.
+       const isBenignCodeProbe = /\/rest\/v1\/payments/.test(String(url)) && /student_code/.test(detail) && /does not exist|42703/.test(detail);
+       if(!isBenignCodeProbe) recordSyncFailure(url, options, detail);
      } else if(!isAuthRequest && response.ok){
        if(isTableWrite && typeof window.stampLastSync==='function') window.stampLastSync('saved');
      }
@@ -7801,7 +7842,7 @@ function switchTeacherPage(page, btn){
     if(dayEl) dayEl.value=todayWeekday;
   }
   if(typeof renderTeacherWorkspace==='function') renderTeacherWorkspace();
-  if(page==='resources' && typeof renderTeacherResources==='function') renderTeacherResources();
+  if(page==='resources' && typeof renderTeacherResources==='function'){ renderTeacherResources(); if(typeof populateShareSourceDropdown==='function') populateShareSourceDropdown(); }
   if(page==='wishlists' && typeof renderTeacherWishlists==='function') renderTeacherWishlists();
 }
 
@@ -7864,6 +7905,15 @@ function renderTeacherWorkspace(){
     lessonDateKey(l.date||l.lesson_date).slice(0,7)===currentMonthKey && String(l.status||'')==='attended'
   ).length;
   const excusedCount=data.allLogs.filter(l=>l.attendance==='absent_excused').length;
+  // Days the teacher was absent this month — counted as DISTINCT days
+  // (a day with several teacher_absent lessons is one absence day).
+  const teacherAbsentDays=new Set(
+    data.allLessons
+      .filter(l=>(l.status_record||'active')!=='archived'
+        && String(l.status||'')==='teacher_absent'
+        && lessonDateKey(l.date||l.lesson_date).slice(0,7)===currentMonthKey)
+      .map(l=>lessonDateKey(l.date||l.lesson_date))
+  ).size;
   const makeupsOwedCount=data.allLogs.filter(l=>{
     const lesson=(db.lessons||[]).find(x=>x.id==l.lessonId);
     return lesson ? isMakeupOwed(lesson) : (l.attendance==='teacher_absent'||l.attendance==='absent_excused');
@@ -7876,6 +7926,8 @@ function renderTeacherWorkspace(){
   if(weekEl) weekEl.textContent=sessionsThisWeek;
   if(monthEl) monthEl.textContent=sessionsThisMonth;
   if(excusedEl) excusedEl.textContent=excusedCount;
+  const daysAbsentEl=document.getElementById('teacher-days-absent');
+  if(daysAbsentEl) daysAbsentEl.textContent=teacherAbsentDays;
   if(makeupsEl) makeupsEl.textContent=makeupsOwedCount;
 
   // Build the drill-down list: which students are owed a make-up, and
@@ -7940,10 +7992,15 @@ function renderTeacherWorkspace(){
   if(studentsList){
     const studentSearch=(document.getElementById('teacher-students-search')||{}).value?.toLowerCase()||'';
     const studentDayFilter=document.getElementById('teacher-students-day-filter')?.value||'';
+    const studentTypeFilter=document.getElementById('teacher-students-type-filter')?.value||'';
+    const isTrialPlan=(p)=>p==='trial'||p==='group-trial';
     const filteredStudents=data.students
       .filter(s=>(s.status||'active')!=='archived')
       .filter(s=>!studentSearch || (s.name||'').toLowerCase().includes(studentSearch))
       .filter(s=>!studentDayFilter || s.lesson_day===studentDayFilter)
+      .filter(s=> studentTypeFilter==='trial' ? isTrialPlan(s.plan)
+                : studentTypeFilter==='normal' ? !isTrialPlan(s.plan)
+                : true)
       .sort((a,b)=>(a.name||'').localeCompare(b.name||''));
     const rows=filteredStudents.map(s=>`
       <div class="teacher-row">
@@ -9024,13 +9081,25 @@ function getPlanSessionCount(plan){
   return sessionCounts[plan]||0;
 }
 
-function scheduleMonthlyLessons(student){
+function scheduleMonthlyLessons(student, startPreference){
   const count=getPlanSessionCount(student.plan);
   if(!count || !student.lesson_day) return 0;
   const now=new Date();
   const todayKey=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');
-  const startBase=student.joined_date || todayKey;
-  const firstDate=nextWeekdayOnOrAfter(startBase, student.lesson_day);
+  // Normalize joined_date to a plain YYYY-MM-DD. It can arrive as a full
+  // ISO timestamp; taken whole, an evening in a UTC+ timezone reads as the
+  // next calendar day and shoves the first lesson a week forward (the
+  // reported "added on Tuesday, first lesson lands next Tuesday" bug).
+  // Slicing to the date part keeps the weekday math on the intended day.
+  const joinedKey=(student.joined_date ? String(student.joined_date).slice(0,10) : '');
+  const startBase=(joinedKey && joinedKey>=todayKey) ? joinedKey : todayKey;
+  // startPreference==='next' forces the first lesson to the next
+  // occurrence AFTER today (used when the admin says the student starts
+  // next week even though today is their lesson day). Otherwise today is
+  // eligible when it falls on the lesson day.
+  const firstDate = startPreference==='next'
+    ? nextWeekdayStrictlyAfter(startBase, student.lesson_day)
+    : nextWeekdayOnOrAfter(startBase, student.lesson_day);
   return scheduleWeeklyLessonsFrom(student, firstDate, count);
 }
 
@@ -9247,20 +9316,55 @@ function confirmRenewal(id){
       oldAddStudentPhase20();
       if((db.students||[]).length>countBefore){
         const student=db.students[db.students.length-1];
-        const created=scheduleMonthlyLessons(student);
-        if(created){
-          save();
-          renderLessons();
-          if(typeof renderTeacherWorkspace==='function') renderTeacherWorkspace();
-          showToast(created+' upcoming session(s) scheduled for '+(student.name||'student'));
+        // If today IS the student's lesson day, the first lesson is
+        // ambiguous — start today, or next week? Ask instead of guessing.
+        const now=new Date();
+        const todayWeekday=WEEKDAY_NAMES[now.getDay()];
+        const needsPrompt=student.lesson_day===todayWeekday && getPlanSessionCount(student.plan)>0;
+        if(needsPrompt){
+          promptStudentStartWhen(student);
+        } else {
+          finalizeNewStudentSchedule(student);
         }
-        const dateEl=document.getElementById('s-joined-date');
-        if(dateEl) dateEl.value='';
-        if(typeof setDefaultJoinedDate==='function') setDefaultJoinedDate();
       }
     };
   }
 })();
+
+function promptStudentStartWhen(student){
+  const now=new Date();
+  const todayKey=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');
+  const todayLabel=formatDateDMY(todayKey);
+  const nextKey=nextWeekdayStrictlyAfter(todayKey, student.lesson_day);
+  const nextLabel=formatDateDMY(nextKey);
+  openModal('When will '+escapeHtml(student.name||'the student')+' start?', `
+    <p style="color:var(--text-muted);margin-bottom:16px">Today is ${escapeHtml(student.lesson_day)} — their lesson day. When should their first ${escapeHtml(student.plan==='trial'||student.plan==='group-trial'?'trial ':'')}session be scheduled?</p>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <button class="btn btn-gold" onclick="chooseStudentStart(${student.id}, 'today')">Today — ${escapeHtml(todayLabel)}</button>
+      <button class="btn" onclick="chooseStudentStart(${student.id}, 'next')">Next ${escapeHtml(student.lesson_day)} — ${escapeHtml(nextLabel)}</button>
+    </div>`);
+}
+
+function chooseStudentStart(studentId, when){
+  const student=(db.students||[]).find(s=>String(s.id)===String(studentId));
+  closeModal();
+  if(!student) return;
+  finalizeNewStudentSchedule(student, when==='next' ? 'next' : 'today');
+}
+
+function finalizeNewStudentSchedule(student, startPreference){
+  const created=scheduleMonthlyLessons(student, startPreference);
+  if(created){
+    save();
+    renderLessons();
+    if(typeof renderTeacherWorkspace==='function') renderTeacherWorkspace();
+    if(typeof renderOverview==='function') renderOverview();
+    showToast(created+' upcoming session(s) scheduled for '+(student.name||'student'));
+  }
+  const dateEl=document.getElementById('s-joined-date');
+  if(dateEl) dateEl.value='';
+  if(typeof setDefaultJoinedDate==='function') setDefaultJoinedDate();
+}
 
 (function(){
   const oldAddLessonPhase20=window.addLesson;
@@ -9601,17 +9705,23 @@ window.onEditStudentDayChange=function(studentId){
     const plan=document.getElementById('es-plan')?.value||'';
     const dur=isGroupPlan(plan)?GROUP_SESSION_DURATION_MINUTES:SESSION_DURATION_MINUTES;
     const targetDate=dayName?nextOccurrenceOfWeekday(dayName):'';
-    // The student's own lesson this week must not count against them —
-    // re-saving their existing slot isn't a conflict with themselves.
-    const ownLesson=(db.lessons||[]).find(l=>l.date===targetDate && String(l.studentId)===String(id) && (l.status_record||'active')!=='archived');
-    // Physical bookings only — consistent with the dropdown and calendar.
-    if(dayName && time && isRoomFullDuringRange(targetDate, time, dur, ownLesson?.id||null)){
-      openModal('🚫 Rooms Fully Occupied',`
-        <div style="text-align:center;padding:20px 0">
-          <div style="font-size:1.1rem;font-weight:600;margin-bottom:8px">All 3 rooms are occupied at ${escapeHtml(formatTime12h(time))} on ${escapeHtml(dayName)}</div>
-          <div style="color:var(--text-muted)">Please choose a different time slot.</div>
-        </div>`);
-      return;
+    // Only validate room capacity if the day or time actually CHANGED.
+    // Editing an unrelated field (price, phone, notes) must never trip a
+    // room-full error just because the student's existing slot happens to
+    // be at the 3-room limit — they already occupy one of those rooms.
+    const existing=(db.students||[]).find(s=>String(s.id)===String(id));
+    const slotChanged = existing && (String(existing.lesson_day||'')!==String(dayName) || String(existing.lessonTime||'')!==String(time));
+    if(slotChanged){
+      // The student's own lesson this week must not count against them.
+      const ownLesson=(db.lessons||[]).find(l=>l.date===targetDate && String(l.studentId)===String(id) && (l.status_record||'active')!=='archived');
+      if(dayName && time && isRoomFullDuringRange(targetDate, time, dur, ownLesson?.id||null)){
+        openModal('🚫 Rooms Fully Occupied',`
+          <div style="text-align:center;padding:20px 0">
+            <div style="font-size:1.1rem;font-weight:600;margin-bottom:8px">All 3 rooms are occupied at ${escapeHtml(formatTime12h(time))} on ${escapeHtml(dayName)}</div>
+            <div style="color:var(--text-muted)">Please choose a different time slot.</div>
+          </div>`);
+        return;
+      }
     }
     if(oldSave) await oldSave.call(this, id);
   };
@@ -9919,7 +10029,7 @@ function renderFreeSlotsOverview(){
     [...allByDay[dayName]].sort().forEach(t24=>lines.push(formatTime12h(t24)));
     lines.push('');
   });
-  const plainTextAll=lines.join('\n').trim();
+  const plainTextAll='These are the available slots:\n\n'+lines.join('\n').trim();
 
   host.innerHTML=`
     <div id="free-slot-selection-bar" style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px">
@@ -9991,7 +10101,7 @@ function buildSelectedFreeSlotsText(){
     [...byDay[day]].sort().forEach(t24=>lines.push(formatTime12h(t24)));
     lines.push('');
   });
-  return lines.join('\n').trim();
+  return 'These are the available slots:\n\n'+lines.join('\n').trim();
 }
 
 function copySelectedFreeSlots(btn){
@@ -10934,7 +11044,7 @@ function openScheduleMakeup(missedLessonId){
     <p style="color:var(--text-muted);margin-bottom:14px">Missed lesson: ${escapeHtml(formatLedgerDate(missed.date))}${missed.time?' at '+escapeHtml(formatTime12h(missed.time)):''} — ${escapeHtml(STATUS_LABELS[missed.status]||missed.status)}</p>
 
     <div class="card-title">Option 1 — Double Session</div>
-    <small>Merge this makeup into one of ${escapeHtml(student?.name||'the student')}'s upcoming lessons (becomes 90 minutes), or into any other genuinely open 90-minute window ${escapeHtml(missed.teacher||'the teacher')} has.</small>
+    <small>Merge this makeup into one of ${escapeHtml(student?.name||'the student')}'s upcoming lessons (becomes 90 minutes), any other genuinely open 90-minute window ${escapeHtml(missed.teacher||'the teacher')} has, or pick your own day &amp; start time below.</small>
     <div style="margin-top:8px">
       ${hasAnyOption ? `
         <select id="ms-double-target" style="width:100%">
@@ -10942,7 +11052,16 @@ function openScheduleMakeup(missedLessonId){
           ${otherWindows.map(w=>`<option value="new:${w.date}:${w.time}">${escapeHtml(formatLedgerDate(w.date))} at ${escapeHtml(formatTime12h(w.time))} — new time with ${escapeHtml(missed.teacher||'')}</option>`).join('')}
         </select>
         <button class="btn btn-sm btn-gold" style="margin-top:8px" onclick="confirmDoubleSessionMakeup(${missedLessonId})">Make This a Double Session</button>
-      ` : `<p style="color:var(--text-muted)">No genuinely open 90-minute window found — every upcoming slot for ${escapeHtml(missed.teacher||'this teacher')} is already at capacity or booked.</p>`}
+      ` : `<p style="color:var(--text-muted)">No auto-detected 90-minute window — use the custom picker below.</p>`}
+    </div>
+    <div style="margin-top:14px;padding-top:12px;border-top:1px dashed var(--border)">
+      <div style="font-size:13px;font-weight:600;margin-bottom:8px">Or pick a custom day &amp; start time</div>
+      <div class="teacher-log-grid">
+        <div class="form-field"><label for="msd-date">Date</label><div style="display:flex;gap:4px"><input id="msd-date" type="text" placeholder="dd/mm/yyyy" maxlength="10" oninput="maskDateInput(this)" onchange="updateDoubleSessionCustomSlots(${missedLessonId})"><button type="button" class="btn btn-sm" onclick="openDatePicker('msd-date')">📅</button></div></div>
+        <div class="form-field"><label for="msd-time">Start Time</label><select id="msd-time"><option value="">Pick a date first</option></select></div>
+      </div>
+      <div id="msd-note" style="margin-top:6px;font-size:12px;color:var(--text-muted)"></div>
+      <button class="btn btn-sm btn-gold" style="margin-top:10px" onclick="confirmCustomDoubleSession(${missedLessonId})">Book Custom Double Session</button>
     </div>
 
     <div class="card-title" style="margin-top:20px">Option 2 — Book a Separate Day</div>
@@ -11092,6 +11211,95 @@ function confirmDoubleSessionMakeup(missedLessonId){
   }
 
   showToast('Unrecognized selection — please try again.');
+}
+
+function updateDoubleSessionCustomSlots(missedLessonId){
+  const missed=(db.lessons||[]).find(l=>l.id===missedLessonId);
+  if(!missed) return;
+  const dateEl=document.getElementById('msd-date');
+  const timeEl=document.getElementById('msd-time');
+  const noteEl=document.getElementById('msd-note');
+  if(!dateEl || !timeEl) return;
+  const date=dmyToIso(dateEl.value||'');
+  const teacherName=missed.teacher;
+  if(!date){ timeEl.innerHTML='<option value="">Pick a date first</option>'; return; }
+  if(date<new Date().toISOString().slice(0,10)){
+    timeEl.innerHTML='<option value="">Invalid date</option>';
+    if(noteEl) noteEl.textContent='Double sessions can\'t be booked in the past.';
+    return;
+  }
+  const dayIdx=parseDateUTC(date)?.getUTCDay();
+  const dayName=(dayIdx!==undefined && dayIdx!==null) ? WEEKDAY_NAMES[dayIdx] : '';
+  const prof=(db.teacherProfiles||[]).find(p=>p.name===teacherName);
+  let slots=(prof?.timeSlots||{})[dayName]||[];
+  if(!slots.length) slots=generateSlotsForDay(dayName)||[];
+  if(!slots.length){
+    timeEl.innerHTML='<option value="">No working hours on this day</option>';
+    if(noteEl) noteEl.textContent=(teacherName||'This teacher')+' has no availability on '+dayName+'.';
+    return;
+  }
+  // Offer every working-hour start where a full 90-minute double session
+  // fits — checking teacher availability AND room capacity across the
+  // WHOLE range (not just the start instant), so staggered bookings are
+  // respected. A slot whose start is blocked but where a room frees
+  // partway through still offers that shifted start.
+  const opts=[];
+  slots.forEach(t=>{
+    const teacherBusy=isTeacherBusyDuringRange(teacherName, date, t, DOUBLE_SESSION_DURATION_MINUTES, null);
+    const roomFull=isRoomFullDuringRange(date, t, DOUBLE_SESSION_DURATION_MINUTES, null);
+    if(!teacherBusy && !roomFull){
+      opts.push(`<option value="${escapeAttr(t)}">${escapeHtml(formatTime12h(t))} – ${escapeHtml(formatTime12h(addSlotMinutes(t,DOUBLE_SESSION_DURATION_MINUTES)))}</option>`);
+    } else if(!teacherBusy){
+      const shifted=resolveShiftedBookableTime(date, t, DOUBLE_SESSION_DURATION_MINUTES, teacherName, null);
+      if(shifted) opts.push(`<option value="${escapeAttr(shifted)}">${escapeHtml(formatTime12h(shifted))} – ${escapeHtml(formatTime12h(addSlotMinutes(shifted,DOUBLE_SESSION_DURATION_MINUTES)))} (room frees up)</option>`);
+    }
+  });
+  if(!opts.length){
+    timeEl.innerHTML='<option value="">No 90-min opening on this day</option>';
+    if(noteEl) noteEl.textContent=(teacherName||'The teacher')+' has no 90-minute opening on '+dayName+' — every window is booked or at the room limit.';
+    return;
+  }
+  timeEl.innerHTML='<option value="">Choose a start time</option>'+opts.join('');
+  if(noteEl) noteEl.textContent='Times shown fit a full 90-minute double session for '+(teacherName||'the teacher')+'.';
+}
+
+function confirmCustomDoubleSession(missedLessonId){
+  const missed=(db.lessons||[]).find(l=>l.id===missedLessonId);
+  if(!missed) return;
+  const student=(db.students||[]).find(s=>String(s.id)===String(missed.studentId) || s.name===missed.student);
+  const date=dmyToIso(document.getElementById('msd-date')?.value||'');
+  const time=document.getElementById('msd-time')?.value||'';
+  if(!date || !time){ showToast('Please pick a date and start time.'); return; }
+  // Re-validate the full 90-minute range at confirm — someone may have
+  // booked into it since the dropdown was built.
+  if(isTeacherBusyDuringRange(missed.teacher, date, time, DOUBLE_SESSION_DURATION_MINUTES, null) || isRoomFullDuringRange(date, time, DOUBLE_SESSION_DURATION_MINUTES, null)){
+    showToast('That window just filled up — pick a different time.');
+    updateDoubleSessionCustomSlots(missedLessonId);
+    return;
+  }
+  const newLesson={
+    id:Date.now(),
+    studentId: student?.id || missed.studentId,
+    student: missed.student,
+    instrument: missed.instrument,
+    teacher: missed.teacher,
+    date: date,
+    time: time,
+    status: 'scheduled',
+    month: String(date).slice(0,7),
+    isDoubleSession: true,
+    isExtendedDuration: true,
+    makeupForLessonId: missedLessonId
+  };
+  db.lessons.push(newLesson);
+  if(student) createLessonLog(student, newLesson);
+  save();
+  closeModal();
+  renderLessons();
+  renderOverview();
+  if(typeof renderReports==='function') renderReports();
+  if(typeof syncLessonToSupabase==='function') syncLessonToSupabase(newLesson);
+  showToast('Double session booked (90 min, '+formatTime12h(time)+'–'+formatTime12h(addSlotMinutes(time,DOUBLE_SESSION_DURATION_MINUTES))+' on '+formatLedgerDate(date)+') — resolves automatically once attended');
 }
 
 function confirmSeparateDayMakeup(missedLessonId){
@@ -11305,6 +11513,7 @@ function isResourceVisibleToStudent(r, student){
   if(!r || !student) return false;
   const sid=String(student.id);
   switch(r.targetType){
+    case 'library': return false; // in a teacher's library, not shared
     case 'all': return true;
     case 'skill':
       return !!r.targetSkill && (student.skillLevel||'')===r.targetSkill;
@@ -11317,13 +11526,80 @@ function isResourceVisibleToStudent(r, student){
 }
 
 // ── Teacher Resources tab ─────────────────────────────────────────────
-function onTeacherResourceKindChange(){
-  const kind=document.getElementById('tres-kind')?.value||'file';
-  const fileF=document.getElementById('tres-file-field');
-  const linkF=document.getElementById('tres-link-field');
+// ── Add to Library (upload only, no targeting) ────────────────────────
+function onTeacherLibraryKindChange(){
+  const kind=document.getElementById('tlib-kind')?.value||'file';
+  const fileF=document.getElementById('tlib-file-field');
+  const linkF=document.getElementById('tlib-link-field');
   if(fileF) fileF.style.display = kind==='file' ? 'block' : 'none';
   if(linkF) linkF.style.display = kind==='link' ? 'block' : 'none';
 }
+
+async function teacherAddToLibrary(){
+  const title=(document.getElementById('tlib-title')?.value||'').trim();
+  const kind=document.getElementById('tlib-kind')?.value||'file';
+  const setStatus=(m)=>{ const el=document.getElementById('tlib-status'); if(el) el.textContent=m; };
+  if(!title){ setStatus('Please enter a title.'); return; }
+  if(!window.supabaseClientV1){ setStatus('Not connected to Supabase.'); return; }
+
+  const teacherName=teacherScopeName();
+  // Library items are targeted at 'library' — a sentinel that no student
+  // matches, so they stay private to the teacher until explicitly shared.
+  const baseRow={
+    title, target_type:'library', target_skill:null, target_student_ids:null,
+    uploaded_by: session.name||session.email||'Teacher',
+    uploaded_by_role: 'teacher', teacher_owner: teacherName
+  };
+  try{
+    if(kind==='link'){
+      const url=(document.getElementById('tlib-link')?.value||'').trim();
+      if(!url){ setStatus('Please enter a link URL.'); return; }
+      setStatus('⏳ Saving…');
+      const payload={...baseRow, resource_kind:'link', link_url:url, filename:'', storage_path:'', file_size:0};
+      const {data,error}=await window.supabaseClientV1.from('resources').insert([payload]).select().single();
+      if(error){ setStatus('Failed: '+error.message); return; }
+      pushLocalResource(data, payload);
+    } else {
+      const file=document.getElementById('tlib-file')?.files?.[0];
+      if(!file){ setStatus('Please choose a file.'); return; }
+      setStatus('⏳ Uploading…');
+      const storagePath=Date.now()+'_'+file.name.replace(/[^a-zA-Z0-9._-]/g,'_');
+      const {error:upErr}=await window.supabaseClientV1.storage.from('resources').upload(storagePath, file);
+      if(upErr){ setStatus('Upload failed: '+upErr.message); return; }
+      const payload={...baseRow, resource_kind:'file', filename:file.name, storage_path:storagePath, file_size:file.size};
+      const {data,error}=await window.supabaseClientV1.from('resources').insert([payload]).select().single();
+      if(error){ setStatus('File uploaded, but saving failed: '+error.message); return; }
+      pushLocalResource(data, payload);
+    }
+    document.getElementById('tlib-title').value='';
+    if(document.getElementById('tlib-link')) document.getElementById('tlib-link').value='';
+    if(document.getElementById('tlib-file')) document.getElementById('tlib-file').value='';
+    setStatus('✅ Added to your library.');
+    renderTeacherResources();
+    populateShareSourceDropdown();
+  }catch(err){ setStatus('Failed: '+err.message); }
+}
+
+// ── Share with Students ───────────────────────────────────────────────
+function populateShareSourceDropdown(){
+  const sel=document.getElementById('tres-source');
+  if(!sel) return;
+  const teacherName=teacherScopeName();
+  const mine=(db.resources||[]).filter(r=>r.uploadedByRole==='teacher' && (r.teacherOwner||'').toLowerCase()===teacherName)
+    .sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||'')));
+  const current=sel.value;
+  sel.innerHTML='<option value="">— Choose from my library —</option>'
+    + mine.map(r=>`<option value="${escapeAttr(String(r.id))}">${escapeHtml(r.title)}${r.resourceKind==='link'?' 🔗':''}</option>`).join('')
+    + '<option value="__new__">＋ Upload a new file…</option>';
+  if(current && [...sel.options].some(o=>o.value===current)) sel.value=current;
+}
+
+function onTeacherShareSourceChange(){
+  const val=document.getElementById('tres-source')?.value||'';
+  const newWrap=document.getElementById('tres-newfile-wrap');
+  if(newWrap) newWrap.style.display = val==='__new__' ? 'block' : 'none';
+}
+
 function onTeacherResourceTargetChange(){
   const target=document.getElementById('tres-target')?.value||'all';
   const skillF=document.getElementById('tres-skill-field');
@@ -11345,12 +11621,11 @@ function onTeacherResourceTargetChange(){
   }
 }
 
-async function teacherUploadResource(){
-  const title=(document.getElementById('tres-title')?.value||'').trim();
-  const kind=document.getElementById('tres-kind')?.value||'file';
+async function teacherShareResource(){
+  const source=document.getElementById('tres-source')?.value||'';
   const target=document.getElementById('tres-target')?.value||'all';
   const setStatus=(m)=>{ const el=document.getElementById('tres-status'); if(el) el.textContent=m; };
-  if(!title){ setStatus('Please enter a title.'); return; }
+  if(!source){ setStatus('Please choose a resource from your library, or upload a new file.'); return; }
   if(!window.supabaseClientV1){ setStatus('Not connected to Supabase.'); return; }
 
   // Resolve targeting
@@ -11363,44 +11638,45 @@ async function teacherUploadResource(){
     if(!targetStudentIds.length){ setStatus('Please choose at least one student.'); return; }
   }
 
-  const teacherName=teacherScopeName();
-  const baseRow={
-    title,
-    target_type: target,
-    target_skill: targetSkill,
-    target_student_ids: targetStudentIds,
-    uploaded_by: session.name||session.email||'Teacher',
-    uploaded_by_role: 'teacher',
-    teacher_owner: teacherName
-  };
-
   try{
-    if(kind==='link'){
-      const url=(document.getElementById('tres-link')?.value||'').trim();
-      if(!url){ setStatus('Please enter a link URL.'); return; }
-      setStatus('⏳ Sharing…');
-      const payload={...baseRow, resource_kind:'link', link_url:url, filename:'', storage_path:'', file_size:0};
-      const {data,error}=await window.supabaseClientV1.from('resources').insert([payload]).select().single();
-      if(error){ setStatus('Failed: '+error.message); return; }
-      pushLocalResource(data, payload);
-    } else {
-      const file=document.getElementById('tres-file')?.files?.[0];
+    if(source==='__new__'){
+      // Upload a brand-new file and share it directly (never enters the
+      // library as an unshared item — it's created already-targeted).
+      const title=(document.getElementById('tres-newfile-title')?.value||'').trim();
+      const file=document.getElementById('tres-newfile')?.files?.[0];
+      if(!title){ setStatus('Please enter a title for the new file.'); return; }
       if(!file){ setStatus('Please choose a file.'); return; }
-      setStatus('⏳ Uploading…');
+      setStatus('⏳ Uploading & sharing…');
       const storagePath=Date.now()+'_'+file.name.replace(/[^a-zA-Z0-9._-]/g,'_');
       const {error:upErr}=await window.supabaseClientV1.storage.from('resources').upload(storagePath, file);
       if(upErr){ setStatus('Upload failed: '+upErr.message); return; }
-      const payload={...baseRow, resource_kind:'file', filename:file.name, storage_path:storagePath, file_size:file.size};
+      const payload={
+        title, target_type:target, target_skill:targetSkill, target_student_ids:targetStudentIds,
+        uploaded_by: session.name||session.email||'Teacher', uploaded_by_role:'teacher', teacher_owner:teacherScopeName(),
+        resource_kind:'file', filename:file.name, storage_path:storagePath, file_size:file.size
+      };
       const {data,error}=await window.supabaseClientV1.from('resources').insert([payload]).select().single();
-      if(error){ setStatus('File uploaded, but saving failed: '+error.message); return; }
+      if(error){ setStatus('Saving failed: '+error.message); return; }
       pushLocalResource(data, payload);
+      document.getElementById('tres-newfile-title').value='';
+      document.getElementById('tres-newfile').value='';
+    } else {
+      // Share an existing library item: update its targeting in place.
+      const r=(db.resources||[]).find(x=>String(x.id)===String(source));
+      if(!r){ setStatus('That resource is no longer in your library.'); return; }
+      setStatus('⏳ Sharing…');
+      const {error}=await window.supabaseClientV1.from('resources')
+        .update({ target_type:target, target_skill:targetSkill, target_student_ids:targetStudentIds })
+        .eq('id', r.id);
+      if(error){ setStatus('Sharing failed: '+error.message); return; }
+      r.targetType=target; r.targetSkill=targetSkill; r.targetStudentIds=targetStudentIds;
+      save();
     }
-    // Reset form
-    document.getElementById('tres-title').value='';
-    if(document.getElementById('tres-link')) document.getElementById('tres-link').value='';
-    if(document.getElementById('tres-file')) document.getElementById('tres-file').value='';
-    setStatus('✅ Shared.');
+    document.getElementById('tres-source').value='';
+    onTeacherShareSourceChange();
+    setStatus('✅ Shared with students.');
     renderTeacherResources();
+    populateShareSourceDropdown();
   }catch(err){ setStatus('Failed: '+err.message); }
 }
 
@@ -11423,6 +11699,7 @@ function pushLocalResource(data, payload){
 }
 
 function teacherResourceTargetLabel(r){
+  if(r.targetType==='library') return 'Not shared yet';
   if(r.targetType==='all') return 'All my students';
   if(r.targetType==='skill') return 'Skill: '+(r.targetSkill||'—');
   if(r.targetType==='students'){
@@ -11436,19 +11713,20 @@ function renderTeacherResources(){
   const host=document.getElementById('teacher-resources-list');
   if(!host) return;
   const teacherName=teacherScopeName();
-  // Show only resources this teacher owns (their own library).
   const mine=(db.resources||[]).filter(r=>r.uploadedByRole==='teacher' && (r.teacherOwner||'').toLowerCase()===teacherName)
     .sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||'')));
   host.innerHTML=renderTeacherRows(mine.map(r=>{
     const isLink=r.resourceKind==='link';
+    const unshared=r.targetType==='library';
+    const label=teacherResourceTargetLabel(r);
     return `<div class="teacher-row">
       <div style="min-width:0">
-        <div class="teacher-row-title">${escapeHtml(r.title)}${isLink?' 🔗':''}</div>
-        <div class="teacher-row-meta">${isLink?'Link':escapeHtml(r.filename||'')} · Shared with: ${escapeHtml(teacherResourceTargetLabel(r))}</div>
+        <div class="teacher-row-title">${escapeHtml(r.title)}${isLink?' 🔗':''}${unshared?' <span class="badge" style="font-size:10px;opacity:0.75">Library</span>':' <span class="badge badge-green" style="font-size:10px">Shared</span>'}</div>
+        <div class="teacher-row-meta">${isLink?'Link':escapeHtml(r.filename||'')} · ${escapeHtml(label)}</div>
       </div>
       <button class="btn btn-sm btn-danger" onclick="deleteResource('${jsString(String(r.id))}')">Delete</button>
     </div>`;
-  }), 'You haven\'t shared any resources yet.');
+  }), 'Your library is empty — add a file or link above.');
 }
 
 // ── Teacher Student-Wishlists tab ─────────────────────────────────────
@@ -11458,19 +11736,18 @@ function renderTeacherWishlists(){
   const search=(document.getElementById('teacher-wishlist-search')?.value||'').toLowerCase();
   const students=getTeacherWorkspaceData().students
     .filter(s=>(s.status||'active')!=='archived')
+    .filter(s=>getStudentWishlist(s).length>0)
     .filter(s=>!search || (s.name||'').toLowerCase().includes(search))
     .sort((a,b)=>(a.name||'').localeCompare(b.name||''));
   host.innerHTML=renderTeacherRows(students.map(s=>{
     const count=getStudentWishlist(s).length;
-    const badge = count>0
-      ? `<span class="badge badge-purple" style="font-size:10px">${count} item${count>1?'s':''}</span>`
-      : '<span class="badge" style="font-size:10px;opacity:0.7">Empty</span>';
+    const badge = `<span class="badge badge-purple" style="font-size:10px">${count} item${count>1?'s':''}</span>`;
     return `<div class="teacher-row">
       <div><div class="teacher-row-title">${escapeHtml(s.name)} ${badge}</div>
       <div class="teacher-row-meta">${escapeHtml(s.instrument||'')}</div></div>
       <button class="btn btn-sm btn-gold" onclick="openTeacherWishlistDetail('${jsString(String(s.id))}')">Open</button>
     </div>`;
-  }), 'No students assigned to you.');
+  }), 'None of your students have added wishlist items yet.');
 }
 
 function openTeacherWishlistDetail(studentId){
