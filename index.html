@@ -304,7 +304,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-47</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-48</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -11048,7 +11048,7 @@ function openScheduleMakeup(missedLessonId){
       <div class="teacher-log-grid">
         <div class="form-field"><label for="msd-day">Day</label><select id="msd-day" onchange="updateDoubleSessionCustomSlots(${missedLessonId})">
           <option value="">Choose a day</option>
-          ${['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'].map(d=>`<option value="${d}">${d}</option>`).join('')}
+          ${['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'].map(d=>`<option value="${d}" ${d===(student?.lesson_day||'')?'selected':''}>${d}</option>`).join('')}
         </select></div>
         <div class="form-field"><label for="msd-time">Start Time</label><select id="msd-time"><option value="">Pick a day first</option></select></div>
       </div>
@@ -11068,6 +11068,12 @@ function openScheduleMakeup(missedLessonId){
     <div id="ms-capacity-note" style="margin-top:6px;font-size:12px;color:var(--text-muted)"></div>
     <button class="btn btn-sm btn-gold" style="margin-top:10px" onclick="confirmSeparateDayMakeup(${missedLessonId})">Book Separate Makeup</button>
   `);
+  // The custom double-session day dropdown defaults to the student's own
+  // lesson day; populate its start times right away so the admin just
+  // picks a time rather than re-selecting the day first.
+  if(student?.lesson_day && typeof updateDoubleSessionCustomSlots==='function'){
+    updateDoubleSessionCustomSlots(missedLessonId);
+  }
 }
 
 function updateMakeupSeparateDaySlots(missedLessonId){
