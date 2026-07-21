@@ -304,7 +304,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-46</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-47</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -457,7 +457,7 @@ input::placeholder{color:var(--text-dim)}
 <div id="page-renewals" class="page">
   <div class="card">
     <div class="card-title">Renewals Due</div>
-    <div class="teacher-row-meta" style="margin-bottom:12px">Students whose lesson batch is running out (within 7 days) or has already ended. Renew to book their next batch.</div>
+    <div class="teacher-row-meta" style="margin-bottom:12px">Students who have finished all their scheduled sessions (last lesson already passed) and need to renew for a new batch. Renew to book their next sessions.</div>
     <div id="renewals-due-list"></div>
   </div>
 </div>
@@ -2952,46 +2952,35 @@ function renderRenewalsDue(){
   const host=document.getElementById('renewals-due-list');
   if(!host) return;
   const todayKey=new Date().toISOString().slice(0,10);
-  const soonKey=(()=>{ const d=new Date(); d.setDate(d.getDate()+7); return d.toISOString().slice(0,10); })();
   const rows=[];
   (db.students||[]).forEach(s=>{
     if((s.status||'active')==='archived' || s.frozen) return;
-    if(s.plan==='weekly') return; // open-ended, never "runs out"
-    const scheduled=(db.lessons||[])
-      .filter(l=>(String(l.studentId)===String(s.id) || l.student===s.name)
-        && l.status==='scheduled'
-        && (l.status_record||'active')!=='archived')
-      .map(l=>l.date).sort();
-    const lastScheduled=scheduled[scheduled.length-1]||null;
-    // Due if: no scheduled lessons left at all, OR the last one is within 7 days.
-    if(!lastScheduled){
-      // Only flag "no lessons" students who have a real history (have
-      // attended before) — brand-new unscheduled records aren't renewals.
-      const hasHistory=(db.lessons||[]).some(l=>(String(l.studentId)===String(s.id)||l.student===s.name) && l.status!=='scheduled');
-      if(hasHistory) rows.push({s, lastScheduled:null, urgency:'over'});
-      return;
-    }
-    if(lastScheduled<=soonKey){
-      rows.push({s, lastScheduled, urgency: lastScheduled<todayKey ? 'over' : 'soon'});
-    }
+    if(s.plan==='weekly') return;               // open-ended, never "runs out"
+    if(s.plan==='trial' || s.plan==='group-trial') return; // a trial isn't a renewable batch
+    const own=(db.lessons||[]).filter(l=>(String(l.studentId)===String(s.id) || l.student===s.name)
+      && (l.status_record||'active')!=='archived');
+    // Any lesson still coming up? (scheduled and dated today or later)
+    const hasUpcoming=own.some(l=>l.status==='scheduled' && (l.date||'')>=todayKey);
+    if(hasUpcoming) return; // batch still has sessions left — not due yet
+    // Renewal is due only once every session has passed. Require a real
+    // history (at least one non-scheduled/attended-type lesson) so a brand
+    // new record with nothing booked doesn't show up as a renewal.
+    const past=own.filter(l=>l.status!=='scheduled' || (l.date||'')<todayKey);
+    if(!past.length) return;
+    const lastDate=past.map(l=>l.date).filter(Boolean).sort().slice(-1)[0]||null;
+    rows.push({s, lastDate});
   });
-  rows.sort((a,b)=>{
-    const av=a.lastScheduled||'0000-00-00', bv=b.lastScheduled||'0000-00-00';
-    return av.localeCompare(bv);
-  });
+  rows.sort((a,b)=>String(a.lastDate||'').localeCompare(String(b.lastDate||'')));
   if(!rows.length){
-    host.innerHTML='<div class="empty"><div class="empty-icon">✅</div><div class="empty-text">No renewals due in the next 7 days.</div></div>';
+    host.innerHTML='<div class="empty"><div class="empty-icon">✅</div><div class="empty-text">No renewals due — every active student still has upcoming sessions.</div></div>';
     return;
   }
-  host.innerHTML=rows.map(({s,lastScheduled,urgency})=>{
-    const label = lastScheduled
-      ? (urgency==='over' ? 'Last lesson '+formatLedgerDate(lastScheduled)+' (passed)' : 'Last lesson '+formatLedgerDate(lastScheduled))
-      : 'No lessons scheduled';
-    const badgeClass = urgency==='over' ? 'badge-red' : 'badge-amber';
+  host.innerHTML=rows.map(({s,lastDate})=>{
+    const label = lastDate ? 'Last lesson '+formatLedgerDate(lastDate) : 'No upcoming lessons';
     return `<div class="unpaid-item">
       <div>
         <div class="unpaid-name">${escapeHtml(s.name)}</div>
-        <div class="unpaid-meta">${escapeHtml(s.instrument||'')} ${s.instrument&&s.teacher?'·':''} ${escapeHtml(s.teacher||'')} · <span class="badge ${badgeClass}" style="font-size:10px">${label}</span></div>
+        <div class="unpaid-meta">${escapeHtml(s.instrument||'')} ${s.instrument&&s.teacher?'·':''} ${escapeHtml(s.teacher||'')} · <span class="badge badge-red" style="font-size:10px">${label}</span></div>
       </div>
       <button class="btn btn-sm btn-gold" onclick="convertTrial(${s.id})">Renew</button>
     </div>`;
@@ -11057,8 +11046,11 @@ function openScheduleMakeup(missedLessonId){
     <div style="margin-top:14px;padding-top:12px;border-top:1px dashed var(--border)">
       <div style="font-size:13px;font-weight:600;margin-bottom:8px">Or pick a custom day &amp; start time</div>
       <div class="teacher-log-grid">
-        <div class="form-field"><label for="msd-date">Date</label><div style="display:flex;gap:4px"><input id="msd-date" type="text" placeholder="dd/mm/yyyy" maxlength="10" oninput="maskDateInput(this)" onchange="updateDoubleSessionCustomSlots(${missedLessonId})"><button type="button" class="btn btn-sm" onclick="openDatePicker('msd-date')">📅</button></div></div>
-        <div class="form-field"><label for="msd-time">Start Time</label><select id="msd-time"><option value="">Pick a date first</option></select></div>
+        <div class="form-field"><label for="msd-day">Day</label><select id="msd-day" onchange="updateDoubleSessionCustomSlots(${missedLessonId})">
+          <option value="">Choose a day</option>
+          ${['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'].map(d=>`<option value="${d}">${d}</option>`).join('')}
+        </select></div>
+        <div class="form-field"><label for="msd-time">Start Time</label><select id="msd-time"><option value="">Pick a day first</option></select></div>
       </div>
       <div id="msd-note" style="margin-top:6px;font-size:12px;color:var(--text-muted)"></div>
       <button class="btn btn-sm btn-gold" style="margin-top:10px" onclick="confirmCustomDoubleSession(${missedLessonId})">Book Custom Double Session</button>
@@ -11216,60 +11208,68 @@ function confirmDoubleSessionMakeup(missedLessonId){
 function updateDoubleSessionCustomSlots(missedLessonId){
   const missed=(db.lessons||[]).find(l=>l.id===missedLessonId);
   if(!missed) return;
-  const dateEl=document.getElementById('msd-date');
+  const dayEl=document.getElementById('msd-day');
   const timeEl=document.getElementById('msd-time');
   const noteEl=document.getElementById('msd-note');
-  if(!dateEl || !timeEl) return;
-  const date=dmyToIso(dateEl.value||'');
+  if(!dayEl || !timeEl) return;
+  const dayName=dayEl.value||'';
   const teacherName=missed.teacher;
-  if(!date){ timeEl.innerHTML='<option value="">Pick a date first</option>'; return; }
-  if(date<new Date().toISOString().slice(0,10)){
-    timeEl.innerHTML='<option value="">Invalid date</option>';
-    if(noteEl) noteEl.textContent='Double sessions can\'t be booked in the past.';
-    return;
-  }
-  const dayIdx=parseDateUTC(date)?.getUTCDay();
-  const dayName=(dayIdx!==undefined && dayIdx!==null) ? WEEKDAY_NAMES[dayIdx] : '';
-  const prof=(db.teacherProfiles||[]).find(p=>p.name===teacherName);
-  let slots=(prof?.timeSlots||{})[dayName]||[];
-  if(!slots.length) slots=generateSlotsForDay(dayName)||[];
+  if(!dayName){ timeEl.innerHTML='<option value="">Pick a day first</option>'; if(noteEl) noteEl.textContent=''; return; }
+  // Resolve the chosen weekday to its next occurrence on the calendar.
+  const todayKey=new Date().toISOString().slice(0,10);
+  const date=nextWeekdayOnOrAfter(todayKey, dayName);
+
+  // Candidate start times come from the ACADEMY working hours for the day,
+  // not just the teacher's own configured slots — so every legitimate time
+  // is offered, including earlier ones. The academy's closing time is the
+  // hard ceiling: the whole 90-minute double session must end by then.
+  const range=(dayName==='Friday') ? null : ACADEMY_WORKING_HOURS[dayName];
+  let slots=generateSlotsForDay(dayName)||[];
   if(!slots.length){
-    timeEl.innerHTML='<option value="">No working hours on this day</option>';
-    if(noteEl) noteEl.textContent=(teacherName||'This teacher')+' has no availability on '+dayName+'.';
+    timeEl.innerHTML='<option value="">Academy closed on this day</option>';
+    if(noteEl) noteEl.textContent='The academy has no working hours on '+dayName+'.';
     return;
   }
-  // Offer every working-hour start where a full 90-minute double session
-  // fits — checking teacher availability AND room capacity across the
-  // WHOLE range (not just the start instant), so staggered bookings are
-  // respected. A slot whose start is blocked but where a room frees
-  // partway through still offers that shifted start.
+  // Closing time in minutes (end of the day's working range). Friday uses
+  // its own slot list, so derive the close from the last slot + a session.
+  const toMin=(t)=>{ const [h,m]=String(t).split(':').map(Number); return h*60+m; };
+  let closeMin;
+  if(range){ closeMin=toMin(range[1]); }
+  else { const lastFri=slots[slots.length-1]; closeMin=toMin(lastFri)+SESSION_DURATION_MINUTES; }
+
   const opts=[];
   slots.forEach(t=>{
+    // The full double session must finish by closing time.
+    if(toMin(t)+DOUBLE_SESSION_DURATION_MINUTES > closeMin) return;
     const teacherBusy=isTeacherBusyDuringRange(teacherName, date, t, DOUBLE_SESSION_DURATION_MINUTES, null);
     const roomFull=isRoomFullDuringRange(date, t, DOUBLE_SESSION_DURATION_MINUTES, null);
     if(!teacherBusy && !roomFull){
       opts.push(`<option value="${escapeAttr(t)}">${escapeHtml(formatTime12h(t))} – ${escapeHtml(formatTime12h(addSlotMinutes(t,DOUBLE_SESSION_DURATION_MINUTES)))}</option>`);
     } else if(!teacherBusy){
       const shifted=resolveShiftedBookableTime(date, t, DOUBLE_SESSION_DURATION_MINUTES, teacherName, null);
-      if(shifted) opts.push(`<option value="${escapeAttr(shifted)}">${escapeHtml(formatTime12h(shifted))} – ${escapeHtml(formatTime12h(addSlotMinutes(shifted,DOUBLE_SESSION_DURATION_MINUTES)))} (room frees up)</option>`);
+      // A shifted start must ALSO still fit before closing.
+      if(shifted && toMin(shifted)+DOUBLE_SESSION_DURATION_MINUTES <= closeMin){
+        opts.push(`<option value="${escapeAttr(shifted)}">${escapeHtml(formatTime12h(shifted))} – ${escapeHtml(formatTime12h(addSlotMinutes(shifted,DOUBLE_SESSION_DURATION_MINUTES)))} (room frees up)</option>`);
+      }
     }
   });
   if(!opts.length){
     timeEl.innerHTML='<option value="">No 90-min opening on this day</option>';
-    if(noteEl) noteEl.textContent=(teacherName||'The teacher')+' has no 90-minute opening on '+dayName+' — every window is booked or at the room limit.';
+    if(noteEl) noteEl.textContent=(teacherName||'The teacher')+' has no 90-minute opening on '+dayName+' before closing — every window is booked or at the room limit.';
     return;
   }
   timeEl.innerHTML='<option value="">Choose a start time</option>'+opts.join('');
-  if(noteEl) noteEl.textContent='Times shown fit a full 90-minute double session for '+(teacherName||'the teacher')+'.';
+  if(noteEl) noteEl.textContent='Next '+dayName+' ('+formatDateDMY(date)+'). Times fit a full 90-minute double session for '+(teacherName||'the teacher')+'.';
 }
 
 function confirmCustomDoubleSession(missedLessonId){
   const missed=(db.lessons||[]).find(l=>l.id===missedLessonId);
   if(!missed) return;
   const student=(db.students||[]).find(s=>String(s.id)===String(missed.studentId) || s.name===missed.student);
-  const date=dmyToIso(document.getElementById('msd-date')?.value||'');
+  const dayName=document.getElementById('msd-day')?.value||'';
   const time=document.getElementById('msd-time')?.value||'';
-  if(!date || !time){ showToast('Please pick a date and start time.'); return; }
+  if(!dayName || !time){ showToast('Please pick a day and start time.'); return; }
+  const date=nextWeekdayOnOrAfter(new Date().toISOString().slice(0,10), dayName);
   // Re-validate the full 90-minute range at confirm — someone may have
   // booked into it since the dropdown was built.
   if(isTeacherBusyDuringRange(missed.teacher, date, time, DOUBLE_SESSION_DURATION_MINUTES, null) || isRoomFullDuringRange(date, time, DOUBLE_SESSION_DURATION_MINUTES, null)){
