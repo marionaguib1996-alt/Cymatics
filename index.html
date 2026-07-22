@@ -304,7 +304,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-48</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-49</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -11046,10 +11046,7 @@ function openScheduleMakeup(missedLessonId){
     <div style="margin-top:14px;padding-top:12px;border-top:1px dashed var(--border)">
       <div style="font-size:13px;font-weight:600;margin-bottom:8px">Or pick a custom day &amp; start time</div>
       <div class="teacher-log-grid">
-        <div class="form-field"><label for="msd-day">Day</label><select id="msd-day" onchange="updateDoubleSessionCustomSlots(${missedLessonId})">
-          <option value="">Choose a day</option>
-          ${['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'].map(d=>`<option value="${d}" ${d===(student?.lesson_day||'')?'selected':''}>${d}</option>`).join('')}
-        </select></div>
+        <div class="form-field"><label for="msd-date">Date</label><div style="display:flex;gap:4px"><input id="msd-date" type="text" placeholder="dd/mm/yyyy" maxlength="10" oninput="maskDateInput(this)" onchange="updateDoubleSessionCustomSlots(${missedLessonId})"><button type="button" class="btn btn-sm" onclick="openDatePicker('msd-date')">📅</button></div></div>
         <div class="form-field"><label for="msd-time">Start Time</label><select id="msd-time"><option value="">Pick a day first</option></select></div>
       </div>
       <div id="msd-note" style="margin-top:6px;font-size:12px;color:var(--text-muted)"></div>
@@ -11068,12 +11065,6 @@ function openScheduleMakeup(missedLessonId){
     <div id="ms-capacity-note" style="margin-top:6px;font-size:12px;color:var(--text-muted)"></div>
     <button class="btn btn-sm btn-gold" style="margin-top:10px" onclick="confirmSeparateDayMakeup(${missedLessonId})">Book Separate Makeup</button>
   `);
-  // The custom double-session day dropdown defaults to the student's own
-  // lesson day; populate its start times right away so the admin just
-  // picks a time rather than re-selecting the day first.
-  if(student?.lesson_day && typeof updateDoubleSessionCustomSlots==='function'){
-    updateDoubleSessionCustomSlots(missedLessonId);
-  }
 }
 
 function updateMakeupSeparateDaySlots(missedLessonId){
@@ -11214,72 +11205,63 @@ function confirmDoubleSessionMakeup(missedLessonId){
 function updateDoubleSessionCustomSlots(missedLessonId){
   const missed=(db.lessons||[]).find(l=>l.id===missedLessonId);
   if(!missed) return;
-  const dayEl=document.getElementById('msd-day');
+  const dateEl=document.getElementById('msd-date');
   const timeEl=document.getElementById('msd-time');
   const noteEl=document.getElementById('msd-note');
-  if(!dayEl || !timeEl) return;
-  const dayName=dayEl.value||'';
+  if(!dateEl || !timeEl) return;
+  const date=dmyToIso(dateEl.value||'');
   const teacherName=missed.teacher;
-  if(!dayName){ timeEl.innerHTML='<option value="">Pick a day first</option>'; if(noteEl) noteEl.textContent=''; return; }
-  // Resolve the chosen weekday to its next occurrence on the calendar.
-  const todayKey=new Date().toISOString().slice(0,10);
-  const date=nextWeekdayOnOrAfter(todayKey, dayName);
+  if(!date){ timeEl.innerHTML='<option value="">Pick a date first</option>'; if(noteEl) noteEl.textContent=''; return; }
+  if(date<new Date().toISOString().slice(0,10)){
+    timeEl.innerHTML='<option value="">Invalid date</option>';
+    if(noteEl) noteEl.textContent='Double sessions can\'t be booked in the past.';
+    return;
+  }
+  const dayIdx=parseDateUTC(date)?.getUTCDay();
+  const dayName=(dayIdx!==undefined && dayIdx!==null) ? WEEKDAY_NAMES[dayIdx] : '';
 
-  // Candidate start times come from the ACADEMY working hours for the day,
-  // not just the teacher's own configured slots — so every legitimate time
-  // is offered, including earlier ones. The academy's closing time is the
-  // hard ceiling: the whole 90-minute double session must end by then.
-  const range=(dayName==='Friday') ? null : ACADEMY_WORKING_HOURS[dayName];
+  // Candidate start times span the WHOLE academy day (opening → close),
+  // so every legitimate start from the beginning to the end of the day is
+  // offered. A slot qualifies as long as the teacher and a room are free
+  // at that start — the full 90 minutes is allowed to run a little past
+  // closing, per the booking preference.
   let slots=generateSlotsForDay(dayName)||[];
   if(!slots.length){
     timeEl.innerHTML='<option value="">Academy closed on this day</option>';
     if(noteEl) noteEl.textContent='The academy has no working hours on '+dayName+'.';
     return;
   }
-  // Closing time in minutes (end of the day's working range). Friday uses
-  // its own slot list, so derive the close from the last slot + a session.
-  const toMin=(t)=>{ const [h,m]=String(t).split(':').map(Number); return h*60+m; };
-  let closeMin;
-  if(range){ closeMin=toMin(range[1]); }
-  else { const lastFri=slots[slots.length-1]; closeMin=toMin(lastFri)+SESSION_DURATION_MINUTES; }
-
   const opts=[];
   slots.forEach(t=>{
-    // The full double session must finish by closing time.
-    if(toMin(t)+DOUBLE_SESSION_DURATION_MINUTES > closeMin) return;
-    const teacherBusy=isTeacherBusyDuringRange(teacherName, date, t, DOUBLE_SESSION_DURATION_MINUTES, null);
-    const roomFull=isRoomFullDuringRange(date, t, DOUBLE_SESSION_DURATION_MINUTES, null);
+    // Free = teacher not busy AND a room open at the start of the session.
+    const teacherBusy=isTeacherBusyDuringRange(teacherName, date, t, SESSION_DURATION_MINUTES, null);
+    const roomFull=isRoomFullDuringRange(date, t, SESSION_DURATION_MINUTES, null);
     if(!teacherBusy && !roomFull){
       opts.push(`<option value="${escapeAttr(t)}">${escapeHtml(formatTime12h(t))} – ${escapeHtml(formatTime12h(addSlotMinutes(t,DOUBLE_SESSION_DURATION_MINUTES)))}</option>`);
-    } else if(!teacherBusy){
-      const shifted=resolveShiftedBookableTime(date, t, DOUBLE_SESSION_DURATION_MINUTES, teacherName, null);
-      // A shifted start must ALSO still fit before closing.
-      if(shifted && toMin(shifted)+DOUBLE_SESSION_DURATION_MINUTES <= closeMin){
-        opts.push(`<option value="${escapeAttr(shifted)}">${escapeHtml(formatTime12h(shifted))} – ${escapeHtml(formatTime12h(addSlotMinutes(shifted,DOUBLE_SESSION_DURATION_MINUTES)))} (room frees up)</option>`);
-      }
     }
   });
   if(!opts.length){
-    timeEl.innerHTML='<option value="">No 90-min opening on this day</option>';
-    if(noteEl) noteEl.textContent=(teacherName||'The teacher')+' has no 90-minute opening on '+dayName+' before closing — every window is booked or at the room limit.';
+    timeEl.innerHTML='<option value="">No free start time on this day</option>';
+    if(noteEl) noteEl.textContent=(teacherName||'The teacher')+' has no free start time on '+dayName+' — every slot is booked or at the room limit.';
     return;
   }
   timeEl.innerHTML='<option value="">Choose a start time</option>'+opts.join('');
-  if(noteEl) noteEl.textContent='Next '+dayName+' ('+formatDateDMY(date)+'). Times fit a full 90-minute double session for '+(teacherName||'the teacher')+'.';
+  if(noteEl) noteEl.textContent='Free start times for '+(teacherName||'the teacher')+' on '+formatDateDMY(date)+'. The session runs 90 minutes from the start you pick.';
 }
 
 function confirmCustomDoubleSession(missedLessonId){
   const missed=(db.lessons||[]).find(l=>l.id===missedLessonId);
   if(!missed) return;
   const student=(db.students||[]).find(s=>String(s.id)===String(missed.studentId) || s.name===missed.student);
-  const dayName=document.getElementById('msd-day')?.value||'';
+  const date=dmyToIso(document.getElementById('msd-date')?.value||'');
   const time=document.getElementById('msd-time')?.value||'';
-  if(!dayName || !time){ showToast('Please pick a day and start time.'); return; }
-  const date=nextWeekdayOnOrAfter(new Date().toISOString().slice(0,10), dayName);
-  // Re-validate the full 90-minute range at confirm — someone may have
-  // booked into it since the dropdown was built.
-  if(isTeacherBusyDuringRange(missed.teacher, date, time, DOUBLE_SESSION_DURATION_MINUTES, null) || isRoomFullDuringRange(date, time, DOUBLE_SESSION_DURATION_MINUTES, null)){
-    showToast('That window just filled up — pick a different time.');
+  if(!date || !time){ showToast('Please pick a date and start time.'); return; }
+  // Re-validate the start slot at confirm — someone may have booked into
+  // it since the dropdown was built. Checks the session start (a room and
+  // the teacher must be free to begin), consistent with how the times are
+  // offered across the whole day.
+  if(isTeacherBusyDuringRange(missed.teacher, date, time, SESSION_DURATION_MINUTES, null) || isRoomFullDuringRange(date, time, SESSION_DURATION_MINUTES, null)){
+    showToast('That start time just filled up — pick a different time.');
     updateDoubleSessionCustomSlots(missedLessonId);
     return;
   }
