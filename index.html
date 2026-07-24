@@ -304,7 +304,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-49</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-51</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -388,17 +388,11 @@ input::placeholder{color:var(--text-dim)}
       <div class="form-field"><label for="s-plan">Payment plan</label>
         <select id="s-plan" onchange="updateStudentTimeSlotOptions()">
           <option value="trial">Trial Session (500 EGP)</option>
-          <option value="lesson-1">1 Lesson Left (500 EGP)</option>
-          <option value="lesson-2">2 Lessons Left (1,000 EGP)</option>
-          <option value="lesson-3">3 Lessons Left (1,500 EGP)</option>
-          <option value="monthly-4">Monthly — 4 weeks (2,000 EGP)</option>
-          <option value="monthly-5">Monthly — 5 weeks (2,500 EGP)</option>
+          <option value="monthly">Monthly — auto (500 EGP / session)</option>
+          <option value="group-monthly">Group Monthly — 1hr, auto (750 EGP / session)</option>
           <option value="weekly">Weekly session (600 EGP)</option>
           <option value="group">Group — 1hr (3,000 EGP)</option>
           <option value="group-trial">Group Trial — 1hr (750 EGP)</option>
-          <option value="group-1">Group · 1 Lesson Left — 1hr (750 EGP)</option>
-          <option value="group-2">Group · 2 Lessons Left — 1hr (1,500 EGP)</option>
-          <option value="group-3">Group · 3 Lessons Left — 1hr (2,250 EGP)</option>
         </select>
       </div>
     </div>
@@ -1189,8 +1183,59 @@ input::placeholder{color:var(--text-dim)}
 </div>
 
 <script>
-const PLAN_LABELS = {'trial':'Trial Session','lesson-1':'1 Lesson Left','lesson-2':'2 Lessons Left','lesson-3':'3 Lessons Left','monthly-4':'Monthly (4 wks)','monthly-5':'Monthly (5 wks)','weekly':'Weekly','group':'Group (1hr)','group-trial':'Group Trial','group-1':'Group · 1 Lesson Left','group-2':'Group · 2 Lessons Left','group-3':'Group · 3 Lessons Left'};
-const PLAN_AMOUNTS = {'trial':500,'lesson-1':500,'lesson-2':1000,'lesson-3':1500,'monthly-4':2000,'monthly-5':2500,'weekly':600,'group':3000,'group-trial':750,'group-1':750,'group-2':1500,'group-3':2250};
+// Instrument emojis — shown in the calendar next to a lesson when the
+// teacher covers more than one instrument, so it's obvious at a glance
+// which one a given session is (a teacher on only one instrument needs no
+// tag, since every one of their lessons is the same).
+const INSTRUMENT_EMOJI={
+  'guitar':'🎸','e-guitar':'🎸','electric guitar':'🎸','c-guitar':'🎸','classical guitar':'🎸',
+  'piano':'🎹','keyboard':'🎹',
+  'drums':'🥁','percussion':'🥁','tabla':'🪘','cajon':'🪘',
+  'vocals':'🎤','voice':'🎤','singing':'🎤',
+  'ukulele':'🪕','oud':'🪕','violin':'🎻','bass':'🎸',
+  'production':'🎛️','music production':'🎛️','flute':'🪈','saxophone':'🎷','trumpet':'🎺'
+};
+function instrumentEmoji(name){
+  if(!name) return '';
+  return INSTRUMENT_EMOJI[String(name).trim().toLowerCase()] || '🎵';
+}
+
+const PLAN_LABELS = {'trial':'Trial Session','monthly':'Monthly','group-monthly':'Group Monthly','lesson-1':'1 Lesson Left','lesson-2':'2 Lessons Left','lesson-3':'3 Lessons Left','monthly-4':'Monthly (4 wks)','monthly-5':'Monthly (5 wks)','weekly':'Weekly','group':'Group (1hr)','group-trial':'Group Trial','group-1':'Group · 1 Lesson Left','group-2':'Group · 2 Lessons Left','group-3':'Group · 3 Lessons Left'};
+const PLAN_AMOUNTS = {'trial':500,'monthly':2000,'group-monthly':3000,'lesson-1':500,'lesson-2':1000,'lesson-3':1500,'monthly-4':2000,'monthly-5':2500,'weekly':600,'group':3000,'group-trial':750,'group-1':750,'group-2':1500,'group-3':2250};
+
+// Plans a NEW student or renewal can be put on. The per-lesson-count
+// plans (lesson-1/2/3, group-1/2/3, monthly-4/5) are intentionally absent
+// here — existing students keep them until their next renewal, but going
+// forward the auto-calculating 'monthly' / 'group-monthly' replace them.
+const SELECTABLE_PLANS=['trial','monthly','group-monthly','weekly','group','group-trial'];
+// Build option HTML for a plan dropdown, always including the student's
+// CURRENT plan even if it's a legacy one (so it shows correctly selected
+// and isn't silently changed just by opening the editor).
+function planOptionsHtml(currentPlan){
+  const keys=SELECTABLE_PLANS.slice();
+  if(currentPlan && !keys.includes(currentPlan)) keys.push(currentPlan);
+  return keys.map(k=>`<option value="${k}" ${k===currentPlan?'selected':''}>${PLAN_LABELS[k]||k}</option>`).join('');
+}
+
+// Per-session rate by plan family: group sessions bill 750, everything
+// else 500. The auto monthly plans multiply this by however many sessions
+// the student actually has scheduled in the current month.
+function planPerSessionRate(plan){
+  return (plan==='group-monthly' || isGroupPlan(plan)) ? 750 : 500;
+}
+
+// How many sessions a monthly/group-monthly student has scheduled in the
+// CURRENT calendar month — the basis for their auto-calculated charge.
+function monthlyScheduledSessionCount(student){
+  if(!student) return 0;
+  const now=new Date();
+  const monthKey=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
+  return (db.lessons||[]).filter(l=>
+    (String(l.studentId)===String(student.id) || l.student===student.name) &&
+    (l.status_record||'active')!=='archived' &&
+    String(l.date||'').slice(0,7)===monthKey
+  ).length;
+}
 
 // A "Group" plan books a 1-hour lesson instead of the standard
 // 45-minute slot — since the app's scheduling granularity is fixed at
@@ -1206,7 +1251,7 @@ const PLAN_AMOUNTS = {'trial':500,'lesson-1':500,'lesson-2':1000,'lesson-3':1500
 // double session with its makeup). Same-ish name, different concept —
 // keeping these clearly distinct in naming avoids confusing the two.
 function isGroupPlan(plan){
-  return plan==='group' || plan==='group-trial' || plan==='group-1' || plan==='group-2' || plan==='group-3';
+  return plan==='group' || plan==='group-trial' || plan==='group-monthly' || plan==='group-1' || plan==='group-2' || plan==='group-3';
 }
 
 // Returns what a student actually owes — their plan's standard price,
@@ -1218,6 +1263,14 @@ function getStudentPlanAmount(student){
   if(student && student.customAmount!=null && student.customAmount!==''){
     const n=Number(student.customAmount);
     if(!Number.isNaN(n)) return n;
+  }
+  // Auto monthly plans: per-session rate × sessions scheduled this month.
+  // Before any sessions exist (e.g. mid-add), fall back to a 4-session
+  // estimate so the displayed price isn't misleadingly zero.
+  if(student && (student.plan==='monthly' || student.plan==='group-monthly')){
+    const n=monthlyScheduledSessionCount(student);
+    const rate=planPerSessionRate(student.plan);
+    return (n>0 ? n : 4) * rate;
   }
   return PLAN_AMOUNTS[student?.plan]||0;
 }
@@ -1433,6 +1486,14 @@ function confirmFreezeStudent(id){
     l.date>=todayKey
   );
   s.frozenLessonsRemaining=futureScheduled.length;
+  // Remember which of the paused lessons were make-ups, and what each was
+  // making up for. Deleting a booked make-up without recording this makes
+  // its original missed lesson count as "owed" again, and resuming would
+  // bring it back as a plain lesson — so the make-up would be both
+  // double-counted and lost.
+  s.frozenMakeupRefs=futureScheduled
+    .filter(l=>l.makeupForLessonId!=null)
+    .map(l=>l.makeupForLessonId);
   if(futureScheduled.length){
     const idsToRemove=new Set(futureScheduled.map(l=>l.id));
     db.lessons=(db.lessons||[]).filter(l=>!idsToRemove.has(l.id));
@@ -1463,13 +1524,29 @@ function resumeStudent(id){
   // the next occurrence of their lesson day on/after TODAY (the resume
   // date), not the old dates, since those already passed while frozen.
   const owed=s.frozenLessonsRemaining||0;
+  const makeupRefs=Array.isArray(s.frozenMakeupRefs) ? s.frozenMakeupRefs.slice() : [];
   s.frozenLessonsRemaining=0;
+  s.frozenMakeupRefs=[];
   let recreated=0;
   if(owed>0 && s.lesson_day && s.lessonTime){
     const now=new Date();
     const todayKey=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');
     const firstDate=nextWeekdayOnOrAfter(todayKey, s.lesson_day);
+    const beforeIds=new Set((db.lessons||[]).map(l=>l.id));
     recreated=scheduleWeeklyLessonsFrom(s, firstDate, owed);
+    // Re-attach the make-up linkage that freezing set aside, so a make-up
+    // booked before the pause resumes as a make-up (and its original
+    // missed lesson stays resolved rather than flipping back to "owed").
+    if(makeupRefs.length){
+      const fresh=(db.lessons||[]).filter(l=>!beforeIds.has(l.id))
+        .sort((a,b)=>String(a.date||'').localeCompare(String(b.date||'')));
+      makeupRefs.forEach((ref,i)=>{
+        if(fresh[i]){
+          fresh[i].makeupForLessonId=ref;
+          if(typeof syncLessonToSupabase==='function') syncLessonToSupabase(fresh[i]);
+        }
+      });
+    }
   }
 
   save();
@@ -2469,7 +2546,7 @@ function renderStudents(){
   const fd=(document.getElementById('student-filter-day')||{}).value||'';
 
   const weeklyGroup=['weekly','trial'];
-  const monthlyGroup=['monthly-4','monthly-5','lesson-1','lesson-2','lesson-3'];
+  const monthlyGroup=['monthly','group-monthly','monthly-4','monthly-5','lesson-1','lesson-2','lesson-3'];
   students=students.filter(s=>
     (!fn || s.name.toLowerCase().includes(fn)) &&
     (!ft || (s.teacher||'').toLowerCase().includes(ft)) &&
@@ -2564,7 +2641,7 @@ function editStudent(id){
        ${timeChoicesWithCurrent.length ? timeChoicesWithCurrent.map(t=>`<option value="${escapeAttr(t)}" ${t===s.lessonTime?'selected':''}>${escapeHtml(formatTime12h(t))}</option>`).join('') : '<option value="">No available slots</option>'}
      </select></div>
      <div class="form-field"><label for="es-plan">Payment Plan</label><select id="es-plan" onchange="onEditStudentDayChange(${s.id})">
-       ${Object.keys(PLAN_LABELS).map(k=>`<option value="${k}" ${k===s.plan?'selected':''}>${PLAN_LABELS[k]}</option>`).join('')}
+       ${planOptionsHtml(s.plan)}
      </select></div>
      <div class="form-field"><label for="es-custom-amount">Custom Amount (EGP)${s.plan==='weekly'?' / session':''}</label><input id="es-custom-amount" type="number" min="0" step="1" placeholder="Standard: ${PLAN_AMOUNTS[s.plan]||0}" value="${s.customAmount!=null?escapeAttr(s.customAmount):''}"><small style="color:var(--text-muted);display:block;margin-top:2px">Leave blank to use the standard plan price. Set a value here for a discount or special rate.</small></div>
      <div class="form-field"><label for="es-dob">Date of Birth</label><div style="display:flex;gap:4px"><input id="es-dob" type="text" placeholder="dd/mm/yyyy" maxlength="10" oninput="maskDateInput(this)" value="${escapeAttr(isoToDmy(s.dob))}"><button type="button" class="btn btn-sm" onclick="openDatePicker('es-dob')">📅</button></div></div>
@@ -2705,8 +2782,8 @@ function convertTrial(id){
      <div class="form-field"><label for="rn-time">Time Slot</label><select id="rn-time">
        ${timeChoicesWithCurrent.length ? timeChoicesWithCurrent.map(t=>`<option value="${escapeAttr(t)}" ${t===student.lessonTime?'selected':''}>${escapeHtml(formatTime12h(t))}</option>`).join('') : '<option value="">No available slots</option>'}
      </select></div>
-     <div class="form-field"><label for="rn-plan">Convert To</label><select id="rn-plan">
-       ${['monthly-4','monthly-5','weekly','lesson-1','lesson-2','lesson-3','group','group-1','group-2','group-3'].map(k=>`<option value="${k}">${PLAN_LABELS[k]}</option>`).join('')}
+     <div class="form-field"><label for="rn-plan">Convert To</label><select id="rn-plan" onchange="onRenewPlanChange(${id})">
+       ${planOptionsHtml('monthly')}
      </select></div>
    </div>
    <div style="text-align:right;margin-top:14px"><button class="btn btn-gold" onclick="confirmRenewal(${id})">Confirm Conversion</button></div>`);
@@ -2982,7 +3059,7 @@ function renderRenewalsDue(){
         <div class="unpaid-name">${escapeHtml(s.name)}</div>
         <div class="unpaid-meta">${escapeHtml(s.instrument||'')} ${s.instrument&&s.teacher?'·':''} ${escapeHtml(s.teacher||'')} · <span class="badge badge-red" style="font-size:10px">${label}</span></div>
       </div>
-      <button class="btn btn-sm btn-gold" onclick="convertTrial(${s.id})">Renew</button>
+      <button class="btn btn-sm btn-gold" onclick="renewStudentSubscription(${s.id})">Renew</button>
     </div>`;
   }).join('');
 }
@@ -4995,12 +5072,15 @@ function switchPage(page, btn){
     renderLessons();
   }
   if(page==='calendar' && typeof renderCalendarPage==='function'){
-    // Default the day selector to today's weekday when opening the tab, so
-    // the admin lands on today's schedule rather than always Sunday.
+    // Default the day selector to today's weekday only on the FIRST visit,
+    // so the admin lands on today's schedule initially — but a day they
+    // pick afterwards survives switching tabs and coming back, rather than
+    // being silently reset every time.
     const calDayEl=document.getElementById('cal-day');
-    if(calDayEl){
+    if(calDayEl && !window._calDayTouched){
       const todayWeekday=WEEKDAY_NAMES[new Date().getDay()];
       calDayEl.value=todayWeekday;
+      window._calDayTouched=true;
     }
     renderCalendarPage();
   }
@@ -9066,13 +9146,46 @@ function scheduleWeeklyLessonsFrom(student, firstDate, count){
 // Single source of truth for how many recurring lessons a plan schedules.
 // group/group-trial map to their base equivalents (4 weekly / 1 trial).
 function getPlanSessionCount(plan){
-  const sessionCounts={'trial':1,'group-trial':1,'monthly-4':4,'monthly-5':5,'weekly':1,'group':4,'lesson-1':1,'lesson-2':2,'lesson-3':3,'group-1':1,'group-2':2,'group-3':3};
+  // 'monthly'/'group-monthly' are auto-calculated from the remaining
+  // lesson-days in the month (see planSessionCountFrom); the 4 here is
+  // only a fallback for callers that don't supply a start date.
+  const sessionCounts={'trial':1,'group-trial':1,'monthly':4,'group-monthly':4,'monthly-4':4,'monthly-5':5,'weekly':1,'group':4,'lesson-1':1,'lesson-2':2,'lesson-3':3,'group-1':1,'group-2':2,'group-3':3};
   return sessionCounts[plan]||0;
 }
 
+// How many times a given weekday occurs from startDateKey (inclusive)
+// through the end of that date's month. Used by the auto-calculating
+// Monthly / Group Monthly plans, which bill per session for whatever
+// lesson-days actually remain in the current month.
+function weekdayOccurrencesLeftInMonth(startDateKey, dayName){
+  const start=parseDateUTC(startDateKey);
+  if(!start) return 0;
+  const idx=WEEKDAY_NAMES.indexOf(dayName);
+  if(idx<0) return 0;
+  const year=start.getUTCFullYear();
+  const month=start.getUTCMonth();
+  const monthEnd=new Date(Date.UTC(year, month+1, 0)); // last day of this month
+  // First occurrence on/after the start date.
+  const first=new Date(start);
+  const diff=(idx-first.getUTCDay()+7)%7;
+  first.setUTCDate(first.getUTCDate()+diff);
+  let count=0;
+  const cur=new Date(first);
+  while(cur<=monthEnd){ count++; cur.setUTCDate(cur.getUTCDate()+7); }
+  return count;
+}
+
+// Session count for the auto-calculating monthly plans, given a start
+// date. Non-auto plans fall back to their fixed getPlanSessionCount.
+function planSessionCountFrom(student, startDateKey){
+  if(student.plan==='monthly' || student.plan==='group-monthly'){
+    return weekdayOccurrencesLeftInMonth(startDateKey, student.lesson_day);
+  }
+  return getPlanSessionCount(student.plan);
+}
+
 function scheduleMonthlyLessons(student, startPreference){
-  const count=getPlanSessionCount(student.plan);
-  if(!count || !student.lesson_day) return 0;
+  if(!student.lesson_day) return 0;
   const now=new Date();
   const todayKey=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');
   // Normalize joined_date to a plain YYYY-MM-DD. It can arrive as a full
@@ -9089,6 +9202,10 @@ function scheduleMonthlyLessons(student, startPreference){
   const firstDate = startPreference==='next'
     ? nextWeekdayStrictlyAfter(startBase, student.lesson_day)
     : nextWeekdayOnOrAfter(startBase, student.lesson_day);
+  // For the auto monthly plans, the number of sessions is however many
+  // lesson-days remain this month starting from the first scheduled date.
+  const count=planSessionCountFrom(student, firstDate);
+  if(!count) return 0;
   return scheduleWeeklyLessonsFrom(student, firstDate, count);
 }
 
@@ -9118,11 +9235,27 @@ function renewStudentSubscription(id){
       <div class="form-field"><label for="rn-time">Time Slot</label><select id="rn-time">
         ${timeChoicesWithCurrent.length ? timeChoicesWithCurrent.map(t=>`<option value="${escapeAttr(t)}" ${t===student.lessonTime?'selected':''}>${escapeHtml(formatTime12h(t))}</option>`).join('') : '<option value="">No available slots</option>'}
       </select></div>
-      <div class="form-field"><label for="rn-plan">Plan</label><select id="rn-plan">
-        ${['trial','monthly-4','monthly-5','weekly','lesson-1','lesson-2','lesson-3','group','group-trial','group-1','group-2','group-3'].map(k=>`<option value="${k}" ${k===student.plan?'selected':''}>${PLAN_LABELS[k]}</option>`).join('')}
+      <div class="form-field"><label for="rn-plan">Plan</label><select id="rn-plan" onchange="onRenewPlanChange(${id})">
+        ${planOptionsHtml(student.plan)}
       </select></div>
+      <div class="form-field" id="rn-date-field" style="display:${student.plan==='weekly'?'block':'none'}">
+        <label for="rn-date">Session Date</label>
+        <div style="display:flex;gap:4px">
+          <input id="rn-date" type="text" placeholder="dd/mm/yyyy" maxlength="10" oninput="maskDateInput(this)">
+          <button type="button" class="btn btn-sm" onclick="openDatePicker('rn-date')">📅</button>
+        </div>
+      </div>
     </div>
     <div style="text-align:right;margin-top:14px"><button class="btn btn-gold" onclick="confirmRenewal(${id})">Confirm Renewal</button></div>`);
+}
+
+function onRenewPlanChange(id){
+  // A Weekly plan is a single session, so the exact date matters rather
+  // than "the next occurrence of their weekday" — expose a date field for
+  // it and hide it for the recurring/batch plans.
+  const plan=document.getElementById('rn-plan')?.value||'';
+  const field=document.getElementById('rn-date-field');
+  if(field) field.style.display = plan==='weekly' ? 'block' : 'none';
 }
 
 function onRenewTeacherChange(id){
@@ -9169,9 +9302,10 @@ function confirmRenewal(id){
   const rnDur=isGroupPlan(plan)?GROUP_SESSION_DURATION_MINUTES:SESSION_DURATION_MINUTES;
   if(isRoomFullDuringRange(rnTargetDate, lessonTime, rnDur, rnOwnLesson?.id||null)){ showToast('That slot is at the 3-room limit — pick another.'); return; }
 
-  const sessionCounts={'trial':1,'monthly-4':4,'monthly-5':5,'weekly':1,'lesson-1':1,'lesson-2':2,'lesson-3':3,'group':4,'group-trial':1,'group-1':1,'group-2':2,'group-3':3};
-  const count=sessionCounts[plan];
-  if(!count){ showToast('Please choose a valid plan'); return; }
+  const sessionCounts={'trial':1,'monthly':4,'group-monthly':4,'monthly-4':4,'monthly-5':5,'weekly':1,'lesson-1':1,'lesson-2':2,'lesson-3':3,'group':4,'group-trial':1,'group-1':1,'group-2':2,'group-3':3};
+  // For the auto monthly plans the real count is computed below, once the
+  // first new date is known. This fixed value is just a validity check.
+  if(!sessionCounts[plan]){ showToast('Please choose a valid plan'); return; }
 
   // Before changing the plan away from trial, mark the student's existing
   // (pre-conversion) lessons as having been trial sessions. The ledger's
@@ -9205,6 +9339,16 @@ function confirmRenewal(id){
   const lastDate=existingDates.length ? existingDates[existingDates.length-1] : todayKey;
 
   let firstNewDate=nextWeekdayStrictlyAfter(lastDate, lessonDay);
+  // A Weekly renewal books ONE session, so an explicitly chosen date wins
+  // over the computed next-occurrence — the whole point of exposing the
+  // field is that the admin can place that single session on any day.
+  if(plan==='weekly'){
+    const chosen=dmyToIso(document.getElementById('rn-date')?.value||'');
+    if(chosen){
+      if(chosen<todayKey){ showToast('That session date is in the past — pick another.'); return; }
+      firstNewDate=chosen;
+    }
+  }
   // A trial conversion should start the recurring schedule the week AFTER
   // the trial — i.e. one week on from the trial lesson, on the chosen
   // lesson day. Anchoring on the trial lesson's OWN date (lastDate) rather
@@ -9237,6 +9381,13 @@ function confirmRenewal(id){
       }
     }
   }
+
+  // Auto monthly plans bill and book per the lesson-days remaining in the
+  // month of the first new session; other plans use their fixed count.
+  const count=(plan==='monthly' || plan==='group-monthly')
+    ? weekdayOccurrencesLeftInMonth(firstNewDate, lessonDay)
+    : sessionCounts[plan];
+  if(!count){ showToast('No lesson-days remain this month for that plan — pick a Weekly session or a date next month.'); return; }
 
   const created=scheduleWeeklyLessonsFrom(student, firstNewDate, count);
 
@@ -10380,12 +10531,17 @@ function renderCalendarPage(){
       // A longer session (e.g. a 60-minute Group lesson) that started in
       // an earlier slot but is still running can overlap a lesson that's
       // directly booked at this slot's own start time — the teacher
-      // can't actually be in both places. That's just as real a conflict
-      // as two lessons sharing the exact same recorded time, but it was
-      // invisible before: this only ever got checked once booked.length
-      // was already 0, i.e. after conflicts among same-slot bookings had
-      // already been ruled out.
-      const overlappingContinuing=booked.length ? continuingLesson(t.name, slot) : null;
+      // can't actually be in both places.
+      //
+      // But "still running into this ROW" is not the same as "overlapping
+      // the booked LESSON". A Group session ending at 11:45 and a lesson
+      // starting at 11:45 both touch the 11:30 row, yet they're
+      // back-to-back, not concurrent. So compare against the booked
+      // lesson's own start time, not the row's nominal start.
+      const continuingForConflict = booked.length ? continuingLesson(t.name, slot) : null;
+      const overlappingContinuing = (continuingForConflict && booked.some(b =>
+        timeToMinutes(continuingForConflict.time) + lessonDuration(continuingForConflict) > timeToMinutes(b.time)
+      )) ? continuingForConflict : null;
 
       if(booked.length>1 || overlappingContinuing){
         // CONFLICT: more than one lesson booked for this teacher in this time
@@ -10405,12 +10561,19 @@ function renderCalendarPage(){
         const trialTag=isTrial ? ' 🎓' : '';
         const groupTag=l.isDoubleSession ? ' ⏱ 90min' : (isGroup ? ' 👥 1hr' : '');
         const makeupTag=l.makeupForLessonId ? ' (Make-Up)' : '';
+        // Only tag the instrument when this teacher covers more than one —
+        // for a single-instrument teacher every cell would carry the same
+        // emoji, which is noise rather than information.
+        const teacherInstruments=(t.instruments||[]).filter(Boolean);
+        const instTag=(teacherInstruments.length>1 && (l.instrument||matchedStudent?.instrument))
+          ? ' '+instrumentEmoji(l.instrument||matchedStudent?.instrument)
+          : '';
         // If this student is attending in what's normally someone else's
         // recurring slot this week, show that beneath their name.
         const originalHolder=originalSlotHolderName(l);
-        const nameBlock=`${escapeHtml(l.student||'Student')}${trialTag}${groupTag}${makeupTag}`+
+        const nameBlock=`${escapeHtml(l.student||'Student')}${instTag}${trialTag}${groupTag}${makeupTag}`+
           (originalHolder?`<br><span style="font-size:9px;font-weight:400;opacity:0.75">Originally ${escapeHtml(originalHolder)}</span>`:'');
-        const subTitle=originalHolder?` — in ${escapeHtml(originalHolder)}'s usual slot this week`:'';
+        const subTitle=(instTag?' — '+escapeHtml(l.instrument||matchedStudent?.instrument||''):'')+(originalHolder?` — in ${escapeHtml(originalHolder)}'s usual slot this week`:'');
         // Draggable so the admin can drop this lesson onto a free/frees-at
         // cell in the same teacher's column to change its time.
         const dragAttrs=`draggable="true" ondragstart="calendarDragStart(event,${l.id})"`;
@@ -12336,7 +12499,7 @@ function generateTeacherSchedulePhoto(teacherName, dayName, silent){
   ctx.font='bold 18px Arial, sans-serif';
   ctx.textAlign='center';
   ctx.textBaseline='middle';
-  ctx.fillText(teacherName+' — '+dayName, width/2, headerHeight/2);
+  ctx.fillText(teacherName+' — '+dayName+' ('+formatDateDMY(targetDate).slice(0,5)+')', width/2, headerHeight/2);
 
   // Rows
   rows.forEach((row,i)=>{
@@ -12383,7 +12546,7 @@ function generateTeacherSchedulePhoto(teacherName, dayName, silent){
   });
 
   const link=document.createElement('a');
-  link.download='Schedule_'+teacherName.replace(/\s+/g,'_')+'_'+dayName+'.png';
+  link.download='Schedule_'+teacherName.replace(/\s+/g,'_')+'_'+dayName+'_'+String(targetDate).replace(/-/g,'-')+'.png';
   link.href=canvas.toDataURL('image/png');
   link.click();
   showToast('Schedule photo downloaded');
