@@ -304,7 +304,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-53</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-54</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -10712,7 +10712,7 @@ function renderCalendarPage(){
               ${contNameBlock}
             </div>
             <div ondragover="calendarDragOverCell(event)" ondragleave="calendarDragLeaveCell(event)" ondrop="calendarDropOnCell(event,'${escapeAttr(t.name)}','${targetDate}','${trailingStart}')" title="Free from ${escapeHtml(formatTime12h(trailingStart))} — drop a lesson here to book it" style="background:#1b5e20;border:1px solid #2e7d32;flex:1;display:flex;align-items:center;justify-content:center;font-size:9px;color:rgba(165,214,167,0.75);text-align:center;padding:1px">
-              then free · ${escapeHtml(formatTime12h(trailingStart))}
+              free until ${escapeHtml(formatTime12h(slotEnd))}
             </div>
           </div>`;
         } else if(trailingLabel){
@@ -10723,7 +10723,7 @@ function renderCalendarPage(){
             <div onclick="editLesson(${continuing.id})" title="Click to edit — ${escapeHtml(continuing.student)}'s session continues from ${escapeHtml(formatTime12h(continuing.time))} to ${escapeHtml(continuingEndLabel)}" style="background:${contCellStyle.bg};padding:2px;font-size:10px;font-weight:700;text-align:center;color:${contCellStyle.color};border:${contCellStyle.border};border-bottom:none;cursor:pointer;flex:1;display:flex;align-items:center;justify-content:center">
               ${contNameBlock}
             </div>
-            <div title="Session ends ${escapeHtml(formatTime12h(trailingLabel))}; room not free until later" style="background:#2a2a2a;border:1px solid #444;flex:1;display:flex;align-items:center;justify-content:center;font-size:9px;color:rgba(200,200,200,0.6);text-align:center;padding:1px">
+            <div title="Session ends ${escapeHtml(formatTime12h(trailingLabel))}; room booked by another lesson until later" style="background:#7a2f2f;border:1px solid #9c3a3a;flex:1;display:flex;align-items:center;justify-content:center;font-size:9px;color:rgba(240,180,180,0.85);text-align:center;padding:1px">
               ends ${escapeHtml(formatTime12h(trailingLabel))}
             </div>
           </div>`;
