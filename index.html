@@ -304,7 +304,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-58</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-59</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -621,6 +621,7 @@ input::placeholder{color:var(--text-dim)}
     <select id="cal-teacher-download" style="min-width:180px"><option value="">Select Teacher</option></select>
     <button class="btn btn-gold" onclick="downloadTeacherSchedulePhoto()">📷 Download Schedule Photo</button>
     <button class="btn" onclick="downloadAllTeacherSchedulePhotos()">📷 All Teachers</button>
+    <button class="btn btn-danger" onclick="openTeacherAbsenceModal()">🚫 Mark Teacher Absent</button>
     <small id="cal-room-status" style="color:var(--text-muted)"></small>
   </div>
 </div>
@@ -3967,7 +3968,21 @@ function renderReports(){
    // A student whose make-ups are all booked or attended has nothing left
    // to schedule, so they drop off the dashboard entirely.
    let rows=db.students.filter(s=>(s.status||'active')!=='archived').map(s=>{
-      const owedLessons=db.lessons.filter(l=>(String(l.studentId)===String(s.id) || l.student===s.name) && isMakeupOwed(l) && (l.status_record||'active')!=='archived');
+      let owedLessons=db.lessons.filter(l=>(String(l.studentId)===String(s.id) || l.student===s.name) && isMakeupOwed(l) && (l.status_record||'active')!=='archived');
+      // A student who takes more than one instrument can exist as several
+      // records (Vocals with one teacher, Guitar with another). Matching a
+      // make-up to a record by NAME alone would count every make-up in
+      // every record. When a record has an instrument/teacher, keep only
+      // the owed lessons that match it — so each row counts its own
+      // instrument's make-ups. Lessons with no instrument recorded fall
+      // back to matching by name (legacy data).
+      if(s.instrument || s.teacher){
+        owedLessons=owedLessons.filter(l=>{
+          const instOk = !l.instrument || !s.instrument || l.instrument===s.instrument;
+          const teacherOk = !l.teacher || !s.teacher || l.teacher===s.teacher;
+          return instOk && teacherOk;
+        });
+      }
       const unbooked=owedLessons.filter(l=>!findMakeupLessonFor(l.id));
       return {s, unbooked};
    }).filter(r=>r.unbooked.length>0);
@@ -4019,8 +4034,9 @@ function renderReports(){
         const urgentClass=daysLeft<=7 ? 'badge-amber' : '';
         daysRemainingHtml=urgentClass ? `<span class="badge ${urgentClass}">${daysLeft} day${daysLeft===1?'':'s'}</span>` : `${daysLeft} day${daysLeft===1?'':'s'}`;
       }
+      const ids=unbooked.map(l=>l.id).join(',');
       return `<tr><td>${escapeHtml(s.name)}</td><td>${escapeHtml(s.instrument)}</td><td>${escapeHtml(s.teacher)}</td><td>${unbooked.length}</td>
-       <td>${daysRemainingHtml}</td><td>${actionsHtml}</td></tr>`;
+       <td>${daysRemainingHtml}</td><td><button class="btn btn-sm" style="margin-right:4px" onclick="showMakeupDetails(${s.id},'${escapeAttr(ids)}')">Details</button>${actionsHtml}</td></tr>`;
    }).join('') || '<tr><td colspan="6">No makeups remaining.</td></tr>';
  }
 
@@ -11302,6 +11318,39 @@ function resolveMakeupIfLinked(id){
 })();
 
 // --- Schedule Makeup modal ---
+function showMakeupDetails(studentId, idsCsv){
+  const student=(db.students||[]).find(s=>String(s.id)===String(studentId));
+  const ids=String(idsCsv||'').split(',').filter(Boolean).map(x=>Number(x));
+  const lessons=ids.map(id=>(db.lessons||[]).find(l=>l.id===id)).filter(Boolean)
+    .sort((a,b)=>String(a.date).localeCompare(String(b.date)));
+  const todayKey=new Date().toISOString().slice(0,10);
+  const statusLabel=(st)=> st==='teacher_absent' ? 'Teacher absent' : (st==='absent_excused' ? 'Excused absence' : st);
+  const rowsHtml=lessons.map(l=>{
+    const expired=isMakeupExpired(l);
+    let daysHtml;
+    if(expired){ daysHtml='<span class="badge badge-red">Expired</span>'; }
+    else {
+      const daysSince=Math.floor((new Date(todayKey)-new Date(l.date))/86400000);
+      const daysLeft=Math.max(0, MAKEUP_EXPIRY_DAYS-daysSince);
+      daysHtml=`<span class="badge ${daysLeft<=7?'badge-amber':''}">${daysLeft} day${daysLeft===1?'':'s'} left</span>`;
+    }
+    return `<tr>
+      <td>${escapeHtml(formatDateDMY(l.date))}</td>
+      <td>${escapeHtml(l.instrument||student?.instrument||'—')}</td>
+      <td>${escapeHtml(statusLabel(l.status))}</td>
+      <td>${daysHtml}</td>
+      <td><button class="btn btn-sm btn-gold" onclick="closeModal();openScheduleMakeup(${l.id})">Schedule</button></td>
+    </tr>`;
+  }).join('');
+  openModal('Make-Ups — '+escapeHtml(student?.name||''), `
+    <div class="teacher-row-meta" style="margin-bottom:12px">${lessons.length} make-up${lessons.length===1?'':'s'} still to schedule${student?.instrument?` · ${escapeHtml(student.instrument)}`:''}${student?.teacher?` with ${escapeHtml(student.teacher)}`:''}.</div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Missed Lesson</th><th>Instrument</th><th>Reason</th><th>Time Left</th><th></th></tr></thead>
+      <tbody>${rowsHtml||'<tr><td colspan="5">Nothing to schedule.</td></tr>'}</tbody>
+    </table></div>
+  `);
+}
+
 function openScheduleMakeup(missedLessonId){
   const missed=(db.lessons||[]).find(l=>l.id===missedLessonId);
   if(!missed) return;
@@ -12500,6 +12549,134 @@ async function syncPracticeSessionUpdateToSupabase(session){
 </script>
 
 <script>
+// ── Mark Teacher Absent (bulk, from Calendar) ─────────────────────────
+// Marks every scheduled lesson for a teacher on a chosen date (optionally
+// only within a time range) as teacher_absent, which owes each affected
+// student a make-up. Useful when a teacher can't come in for a whole day
+// or has to step out for an event during part of it.
+function openTeacherAbsenceModal(){
+  const teachers=(db.teacherProfiles||[]).filter(p=>(p.status||'active')!=='archived')
+    .map(p=>p.name).sort();
+  if(!teachers.length){ showToast('No active teachers to mark absent.'); return; }
+  // Default the date to the day currently shown on the calendar (its next
+  // occurrence), so the common "today's calendar" case is one step.
+  const calDay=document.getElementById('cal-day')?.value||'';
+  const defaultDate=calDay ? nextWeekdayOnOrAfter(new Date().toISOString().slice(0,10), calDay) : new Date().toISOString().slice(0,10);
+  openModal('Mark Teacher Absent', `
+    <div class="form-field"><label for="ta-teacher">Teacher</label><select id="ta-teacher">
+      ${teachers.map(t=>`<option value="${escapeAttr(t)}" ${t===calDay?'':''}>${escapeHtml(t)}</option>`).join('')}
+    </select></div>
+    <div class="form-field"><label for="ta-date">Date</label>
+      <div style="display:flex;gap:4px">
+        <input id="ta-date" type="text" placeholder="dd/mm/yyyy" maxlength="10" value="${escapeAttr(formatDateDMY(defaultDate))}" oninput="maskDateInput(this)">
+        <button type="button" class="btn btn-sm" onclick="openDatePicker('ta-date')">📅</button>
+      </div>
+    </div>
+    <div class="form-field"><label>Scope</label>
+      <label style="display:flex;align-items:center;gap:6px;font-weight:400;margin-bottom:4px"><input type="radio" name="ta-scope" value="day" checked onchange="onTeacherAbsenceScopeChange()"> Whole day</label>
+      <label style="display:flex;align-items:center;gap:6px;font-weight:400"><input type="radio" name="ta-scope" value="range" onchange="onTeacherAbsenceScopeChange()"> Only a time range (e.g. stepping out for an event)</label>
+    </div>
+    <div id="ta-range-fields" style="display:none">
+      <div class="teacher-log-grid">
+        <div class="form-field"><label for="ta-from">From</label><input id="ta-from" type="text" placeholder="HH:MM (24h)" maxlength="5"></div>
+        <div class="form-field"><label for="ta-to">To</label><input id="ta-to" type="text" placeholder="HH:MM (24h)" maxlength="5"></div>
+      </div>
+      <div class="teacher-row-meta" style="margin-top:4px">Any lesson that overlaps this window will be marked absent.</div>
+    </div>
+    <div id="ta-preview" style="margin-top:8px;font-size:12px;color:var(--text-muted)"></div>
+    <div style="text-align:right;margin-top:14px">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-danger" onclick="confirmTeacherAbsence()">Mark Absent</button>
+    </div>
+  `);
+  updateTeacherAbsencePreview();
+  ['ta-teacher','ta-date','ta-from','ta-to'].forEach(id=>{
+    const el=document.getElementById(id); if(el) el.addEventListener('input', updateTeacherAbsencePreview);
+    if(el) el.addEventListener('change', updateTeacherAbsencePreview);
+  });
+}
+
+function onTeacherAbsenceScopeChange(){
+  const scope=(document.querySelector('input[name="ta-scope"]:checked')||{}).value||'day';
+  const rf=document.getElementById('ta-range-fields');
+  if(rf) rf.style.display = scope==='range' ? 'block' : 'none';
+  updateTeacherAbsencePreview();
+}
+
+// Collect the scheduled lessons a pending absence would affect.
+function teacherAbsenceAffectedLessons(){
+  const teacher=document.getElementById('ta-teacher')?.value||'';
+  const date=dmyToIso(document.getElementById('ta-date')?.value||'');
+  if(!teacher || !date) return [];
+  const scope=(document.querySelector('input[name="ta-scope"]:checked')||{}).value||'day';
+  let fromMin=null, toMin=null;
+  if(scope==='range'){
+    const f=document.getElementById('ta-from')?.value||'';
+    const t=document.getElementById('ta-to')?.value||'';
+    if(!/^\d{1,2}:\d{2}$/.test(f) || !/^\d{1,2}:\d{2}$/.test(t)) return [];
+    fromMin=timeToMinutes(f); toMin=timeToMinutes(t);
+    if(toMin<=fromMin) return [];
+  }
+  return (db.lessons||[]).filter(l=>{
+    if(l.date!==date) return false;
+    if((l.teacher||'')!==teacher) return false;
+    if(l.status!=='scheduled') return false;
+    if((l.status_record||'active')==='archived') return false;
+    if(fromMin!=null){
+      const start=timeToMinutes(l.time||'00:00');
+      const end=start+getLessonDurationMinutes(l);
+      // overlap test: lesson [start,end) intersects [fromMin,toMin)
+      if(!(start<toMin && fromMin<end)) return false;
+    }
+    return true;
+  });
+}
+
+function updateTeacherAbsencePreview(){
+  const el=document.getElementById('ta-preview');
+  if(!el) return;
+  const affected=teacherAbsenceAffectedLessons();
+  if(!affected.length){ el.textContent='No scheduled lessons match — nothing would change.'; return; }
+  el.innerHTML=`<b>${affected.length}</b> lesson${affected.length===1?'':'s'} will be marked teacher-absent (each owes a make-up): `+
+    affected.slice(0,6).map(l=>escapeHtml((l.student||'')+' '+formatTime12h(l.time||''))).join(', ')+
+    (affected.length>6?', …':'');
+}
+
+async function confirmTeacherAbsence(){
+  const teacher=document.getElementById('ta-teacher')?.value||'';
+  const date=dmyToIso(document.getElementById('ta-date')?.value||'');
+  if(!teacher){ showToast('Pick a teacher.'); return; }
+  if(!date){ showToast('Enter a valid date.'); return; }
+  const scope=(document.querySelector('input[name="ta-scope"]:checked')||{}).value||'day';
+  if(scope==='range'){
+    const f=document.getElementById('ta-from')?.value||'';
+    const t=document.getElementById('ta-to')?.value||'';
+    if(!/^\d{1,2}:\d{2}$/.test(f) || !/^\d{1,2}:\d{2}$/.test(t)){ showToast('Enter a valid time range (HH:MM).'); return; }
+    if(timeToMinutes(t)<=timeToMinutes(f)){ showToast('"To" must be after "From".'); return; }
+  }
+  const affected=teacherAbsenceAffectedLessons();
+  if(!affected.length){ showToast('No scheduled lessons match — nothing to mark.'); return; }
+
+  let changed=0;
+  affected.forEach(l=>{
+    l.status='teacher_absent';
+    changed++;
+    if(typeof createLessonLog==='function'){
+      // Keep the per-lesson log/status in sync if such a helper exists.
+      if(typeof syncLessonLogFromLesson==='function') syncLessonLogFromLesson(l.id);
+    }
+    if(window.syncLessonUpdateToSupabase) syncLessonUpdateToSupabase(l);
+  });
+
+  save();
+  closeModal();
+  if(typeof renderCalendarPage==='function') renderCalendarPage();
+  if(typeof renderReports==='function') renderReports();
+  if(typeof renderOverview==='function') renderOverview();
+  if(typeof renderLessons==='function') renderLessons();
+  showToast(changed+' lesson'+(changed===1?'':'s')+' marked teacher-absent — make-ups now owed');
+}
+
 // Phase 27 — Download Teacher Schedule Photo
 
 function downloadTeacherSchedulePhoto(){
