@@ -304,7 +304,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-52</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-53</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -391,7 +391,6 @@ input::placeholder{color:var(--text-dim)}
           <option value="monthly">Monthly — auto (500 EGP / session)</option>
           <option value="weekly">Weekly session (600 EGP)</option>
           <option value="group-monthly">Group Monthly — 1hr, auto (750 EGP / session)</option>
-          <option value="group">Group — 1hr (3,000 EGP)</option>
           <option value="group-trial">Group Trial — 1hr (750 EGP)</option>
           <option value="weekly-group">Weekly Group Session — 1hr (750 EGP)</option>
         </select>
@@ -1208,7 +1207,7 @@ const PLAN_AMOUNTS = {'trial':500,'monthly':2000,'group-monthly':3000,'weekly':6
 // plans (lesson-1/2/3, group-1/2/3, monthly-4/5) are intentionally absent
 // here — existing students keep them until their next renewal, but going
 // forward the auto-calculating 'monthly' / 'group-monthly' replace them.
-const SELECTABLE_PLANS=['trial','monthly','weekly','group-monthly','group','group-trial','weekly-group'];
+const SELECTABLE_PLANS=['trial','monthly','weekly','group-monthly','group-trial','weekly-group'];
 // Build option HTML for a plan dropdown, always including the student's
 // CURRENT plan even if it's a legacy one (so it shows correctly selected
 // and isn't silently changed just by opening the editor).
@@ -10674,11 +10673,19 @@ function renderCalendarPage(){
         // definition) and academy-wide room capacity (a different
         // teacher's booking could still be using the last free room).
         let trailingStart=null;
+        let trailingLabel=null;   // shown when the tail time is real but not bookable
         if(continuingEndMin<slotEndMin){
           const candidate=String(Math.floor(continuingEndMin/60)).padStart(2,'0')+':'+String(continuingEndMin%60).padStart(2,'0');
           const stillTeacherBusy=isTeacherBusyDuringRange(t.name, targetDate, candidate, SESSION_DURATION_MINUTES, null);
           const stillRoomFull=isRoomFullDuringRange(targetDate, candidate, SESSION_DURATION_MINUTES, null);
-          if(!stillTeacherBusy && !stillRoomFull) trailingStart=candidate;
+          if(!stillTeacherBusy && !stillRoomFull){
+            trailingStart=candidate; // genuinely bookable
+          } else {
+            // The session still ends here, so the row shouldn't look fully
+            // occupied — show the real end time as a neutral strip even
+            // though it can't be booked (teacher or last room busy).
+            trailingLabel=candidate;
+          }
         }
         const continuingEndLabel=formatTime12h(String(Math.floor(continuingEndMin/60)).padStart(2,'0')+':'+String(continuingEndMin%60).padStart(2,'0'));
         // Match the exact same look as the cell where this lesson began —
@@ -10706,6 +10713,18 @@ function renderCalendarPage(){
             </div>
             <div ondragover="calendarDragOverCell(event)" ondragleave="calendarDragLeaveCell(event)" ondrop="calendarDropOnCell(event,'${escapeAttr(t.name)}','${targetDate}','${trailingStart}')" title="Free from ${escapeHtml(formatTime12h(trailingStart))} — drop a lesson here to book it" style="background:#1b5e20;border:1px solid #2e7d32;flex:1;display:flex;align-items:center;justify-content:center;font-size:9px;color:rgba(165,214,167,0.75);text-align:center;padding:1px">
               then free · ${escapeHtml(formatTime12h(trailingStart))}
+            </div>
+          </div>`;
+        } else if(trailingLabel){
+          // Session ends part-way through this row, but the freed time
+          // isn't bookable (teacher or the last room is busy then). Still
+          // split the cell so it doesn't read as fully occupied.
+          html+=`<div style="min-height:52px;display:flex;flex-direction:column">
+            <div onclick="editLesson(${continuing.id})" title="Click to edit — ${escapeHtml(continuing.student)}'s session continues from ${escapeHtml(formatTime12h(continuing.time))} to ${escapeHtml(continuingEndLabel)}" style="background:${contCellStyle.bg};padding:2px;font-size:10px;font-weight:700;text-align:center;color:${contCellStyle.color};border:${contCellStyle.border};border-bottom:none;cursor:pointer;flex:1;display:flex;align-items:center;justify-content:center">
+              ${contNameBlock}
+            </div>
+            <div title="Session ends ${escapeHtml(formatTime12h(trailingLabel))}; room not free until later" style="background:#2a2a2a;border:1px solid #444;flex:1;display:flex;align-items:center;justify-content:center;font-size:9px;color:rgba(200,200,200,0.6);text-align:center;padding:1px">
+              ends ${escapeHtml(formatTime12h(trailingLabel))}
             </div>
           </div>`;
         } else {
