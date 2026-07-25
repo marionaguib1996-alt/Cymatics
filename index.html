@@ -304,7 +304,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-56</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-57</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -680,7 +680,7 @@ input::placeholder{color:var(--text-dim)}
   <div class="card">
     <div class="card-title">Makeup Dashboard</div>
     <div class="table-wrap"><table>
-      <thead><tr><th>Student</th><th>Instrument</th><th>Teacher</th><th>Makeups Owed</th><th>Days Remaining</th><th>Actions</th></tr></thead>
+      <thead><tr><th>Student</th><th>Instrument</th><th>Teacher</th><th>Makeups Remaining</th><th>Days Remaining</th><th>Actions</th></tr></thead>
       <tbody id="report-makeups"></tbody>
     </table></div>
   </div>
@@ -3942,9 +3942,9 @@ function renderReports(){
           daysRemainingHtml=urgentClass ? `<span class="badge ${urgentClass}">${daysLeft} day${daysLeft===1?'':'s'}</span>` : `${daysLeft} day${daysLeft===1?'':'s'}`;
         }
       }
-      return `<tr><td>${escapeHtml(s.name)}</td><td>${escapeHtml(s.instrument)}</td><td>${escapeHtml(s.teacher)}</td><td>${owed}</td>
+      return `<tr><td>${escapeHtml(s.name)}</td><td>${escapeHtml(s.instrument)}</td><td>${escapeHtml(s.teacher)}</td><td>${unbooked.length}</td>
        <td>${daysRemainingHtml}</td><td>${actionsHtml}</td></tr>`;
-   }).join('') || '<tr><td colspan="6">No makeups owed.</td></tr>';
+   }).join('') || '<tr><td colspan="6">No makeups remaining.</td></tr>';
  }
 
  // ── Teacher Absences (days the teacher was absent, selected month) ─────
