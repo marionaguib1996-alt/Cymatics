@@ -304,7 +304,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-63</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-64</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1300,7 +1300,7 @@ function getStudentPlanAmount(student){
 // everything else 500/lesson. Named plan totals fall out of this rule
 // (monthly-4 x4 = 2000, monthly-5 x5 = 2500, group x4 = 3000, group-trial = 750).
 function whatsAppPerLessonRate(plan){
-  return (plan==='group' || plan==='group-trial') ? 750 : 500;
+  return isGroupPlan(plan) ? 750 : 500;
 }
 
 // Single source of truth for the price shown in WhatsApp messages, based on
@@ -3089,13 +3089,6 @@ function renderOverview(){
   if(typeof renderOverviewConflicts==='function') renderOverviewConflicts();
 }
 
-// ── Renewals Due ──────────────────────────────────────────────────────
-// Every plan is a fixed batch of lessons; once the last scheduled lesson
-// is used up, the student has no future lessons until they renew. This
-// surfaces students whose final scheduled lesson is within the next 7
-// days (or already passed with nothing after it), so renewal stops
-// depending on the admin noticing. Frozen and archived students are
-// excluded — they're intentionally not scheduled.
 // A student has "finished the current month" when every one of their
 // lessons dated in this month is attended — none still scheduled — and
 // they attended at least one. They've completed what they paid for, so
@@ -3115,53 +3108,112 @@ function studentFinishedMonth(student, monthKey){
   return anyAttended;
 }
 
+// ── Renewals Due ──────────────────────────────────────────────────────
+// A student appears here once they've attended their last logged lesson
+// for the current month (studentFinishedMonth) — only Monthly and Group
+// Monthly students qualify, since those are the auto-calculating plans
+// this applies to. The payment shown is for NEXT month: the number of
+// times their lesson weekday occurs in that month, times the per-session
+// rate — e.g. July has 5 Fridays so a Friday student owes 5 lessons that
+// month, August has 4 so they'd owe 4 the month after.
 function renderRenewalsDue(){
   const host=document.getElementById('renewals-due-list');
   if(!host) return;
-  const todayKey=new Date().toISOString().slice(0,10);
   const now=new Date();
   const monthKey=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
-  // Next month label for the "payment needed" hint.
-  const nextMonthDate=new Date(now.getFullYear(), now.getMonth()+1, 1);
-  const nextMonthLabel=nextMonthDate.toLocaleString('en-US',{month:'long'});
+  const nextMonthKey=(typeof getNextMonthString==='function') ? getNextMonthString() : monthKey;
+  const nextMonthName=(typeof formatMonthName==='function') ? formatMonthName(nextMonthKey) : nextMonthKey;
   const rows=[];
   (db.students||[]).forEach(s=>{
     if((s.status||'active')==='archived' || s.frozen) return;
-    if(isWeeklyPlan(s.plan)) return;            // open-ended single sessions, never "run out"
-    if(s.plan==='trial' || s.plan==='group-trial') return; // a trial isn't a renewable batch
-    const own=(db.lessons||[]).filter(l=>(String(l.studentId)===String(s.id) || l.student===s.name)
-      && (l.status_record||'active')!=='archived');
-    // Any lesson still coming up? (scheduled and dated today or later)
-    const hasUpcoming=own.some(l=>l.status==='scheduled' && (l.date||'')>=todayKey);
-    if(hasUpcoming) return; // batch still has sessions left — not due yet
-    // Require a real history so a brand-new record with nothing booked
-    // doesn't show up as a renewal.
-    const past=own.filter(l=>l.status!=='scheduled' || (l.date||'')<todayKey);
-    if(!past.length) return;
-    const lastDate=past.map(l=>l.date).filter(Boolean).sort().slice(-1)[0]||null;
-    const finishedThisMonth=studentFinishedMonth(s, monthKey);
-    rows.push({s, lastDate, finishedThisMonth});
+    if(s.plan!=='monthly' && s.plan!=='group-monthly') return; // only the two auto monthly plans
+    if(!studentFinishedMonth(s, monthKey)) return; // last logged session this month must be attended
+    if(!s.lesson_day) return; // can't compute next month's occurrences without one
+    const dayNumbers=(typeof getWeekdayDatesInMonth==='function') ? getWeekdayDatesInMonth(nextMonthKey, s.lesson_day) : [];
+    const lessonCount=dayNumbers.length;
+    const rate=(typeof whatsAppPerLessonRate==='function') ? whatsAppPerLessonRate(s.plan) : (s.plan==='group-monthly'?750:500);
+    let amount;
+    if(s.customAmount!=null && s.customAmount!==''){
+      amount=Number(s.customAmount)||0;
+    } else {
+      amount=lessonCount*rate;
+    }
+    rows.push({s, lessonCount, amount});
   });
-  rows.sort((a,b)=>String(a.lastDate||'').localeCompare(String(b.lastDate||'')));
+  rows.sort((a,b)=>(a.s.name||'').localeCompare(b.s.name||''));
   if(!rows.length){
-    host.innerHTML='<div class="empty"><div class="empty-icon">✅</div><div class="empty-text">No renewals due — every active student still has upcoming sessions.</div></div>';
+    host.innerHTML='<div class="empty"><div class="empty-icon">✅</div><div class="empty-text">No renewals due — no monthly students have finished this month\'s sessions yet.</div></div>';
     return;
   }
-  host.innerHTML=rows.map(({s,lastDate,finishedThisMonth})=>{
-    const label = lastDate ? 'Last lesson '+formatLedgerDate(lastDate) : 'No upcoming lessons';
-    const nextAmt=getStudentPlanAmount(s);
-    const amtLabel = isWeeklyPlan(s.plan) ? egp(nextAmt)+'/session' : egp(nextAmt);
+  host.innerHTML=rows.map(({s,lessonCount,amount})=>{
     return `<div class="unpaid-item">
       <div>
         <div class="unpaid-name">${escapeHtml(s.name)}</div>
-        <div class="unpaid-meta">${escapeHtml(s.instrument||'')} ${s.instrument&&s.teacher?'·':''} ${escapeHtml(s.teacher||'')} · <span class="badge badge-red" style="font-size:10px">${label}</span></div>
+        <div class="unpaid-meta">${escapeHtml(s.instrument||'')} ${s.instrument&&s.teacher?'·':''} ${escapeHtml(s.teacher||'')} · <span class="badge badge-red" style="font-size:10px">Finished this month</span></div>
       </div>
       <div style="display:flex;align-items:center;gap:10px">
-        <span style="font-size:12px;color:var(--text-muted)">${escapeHtml(nextMonthLabel)}: <b style="color:var(--gold)">${amtLabel}</b></span>
+        <span style="font-size:12px;color:var(--text-muted)">${escapeHtml(nextMonthName)}: <b style="color:var(--gold)">${lessonCount} lesson${lessonCount===1?'':'s'} · ${egp(amount)}</b></span>
+        <button class="btn btn-sm" onclick="sendRenewalReminder(${s.id})" title="Opens WhatsApp with the next-month payment reminder">📱 Reminder</button>
         <button class="btn btn-sm btn-gold" onclick="renewStudentSubscription(${s.id})">🔁 Renew</button>
       </div>
     </div>`;
   }).join('');
+}
+
+// Sends the exact next-month payment reminder for a student on the
+// Renewals Due list. Distinct from the general sendPaymentReminder in
+// that it always reflects the SAME numbers shown on the dashboard row
+// (next month's weekday occurrence count x per-session rate), and does
+// not touch the schedule — booking next month's lessons is the separate
+// "Renew" action.
+function sendRenewalReminder(studentId){
+  try{
+    const student=(db.students||[]).find(s=>s.id===studentId);
+    if(!student){ showToast('Student not found.'); return; }
+
+    const phone=toWhatsAppNumber(student.phone1||student.phone2);
+    if(!phone){
+      showToast('No phone number on file for '+(student.name||'this student')+' — opening Edit Student so you can add one.');
+      if(typeof editStudent==='function') editStudent(studentId);
+      return;
+    }
+    if(!student.lesson_day){
+      showToast('No regular lesson day set for '+(student.name||'this student')+' — opening Edit Student so you can set one.');
+      if(typeof editStudent==='function') editStudent(studentId);
+      return;
+    }
+
+    const month=getNextMonthString();
+    const monthName=formatMonthName(month);
+    const dayNumbers=getWeekdayDatesInMonth(month, student.lesson_day);
+    const lessonCount=dayNumbers.length;
+    const dateList=dayNumbers.map(ordinalDay).join(', ');
+
+    let amount;
+    if(student.customAmount!=null && student.customAmount!==''){
+      amount=Number(student.customAmount)||0;
+    } else {
+      const rate=whatsAppPerLessonRate(student.plan);
+      amount=lessonCount>0 ? lessonCount*rate : rate;
+    }
+    const firstName=student.first_name||(student.name||'').split(' ')[0]||student.name;
+
+    const ePiano=String.fromCodePoint(0x1F3B9), eMic=String.fromCodePoint(0x1F3A4), eSparkle=String.fromCodePoint(0x1F4AB);
+    const message='Hello '+firstName+'!\n'+
+      'Hope you\'re having a blast at Cymatics!\n'+
+      'Just a little reminder that your payment for '+monthName+' sessions ('+lessonCount+' lessons on the '+dateList+') is due Today '+ePiano+eMic+'\n'+
+      'It\'s '+Math.round(amount)+' EGP for the month — keeping things up to date means you won\'t miss a single beat of the fun! \n'+
+      'Instapay: 01277336092 -Mario Naguib\n'+
+      'Can\'t wait to see you at the next session! '+eSparkle;
+
+    const win=window.open('https://wa.me/'+phone+'?text='+encodeURIComponent(message), '_blank');
+    if(!win){
+      showToast('Your browser blocked the WhatsApp popup — allow popups for this site, then try again.');
+    }
+  }catch(err){
+    console.error('sendRenewalReminder failed:', err);
+    showToast('Could not open the reminder — '+(err.message||'unexpected error')+'. Check the browser console for details.');
+  }
 }
 
 // ── Conflict Sweep ────────────────────────────────────────────────────
