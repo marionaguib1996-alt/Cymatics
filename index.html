@@ -304,7 +304,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-61</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-62</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -2653,7 +2653,7 @@ function renderStudents(){
         <button class="btn btn-sm" onclick="sendPaymentReminder(${s.id})" title="Opens WhatsApp with a pre-filled reminder for next month's payment">📱 Remind</button>
         ${(s.plan==='trial'||s.plan==='group-trial') ? `<button class="btn btn-sm" onclick="sendTrialConversionMessage(${s.id})" title="Opens WhatsApp with a friendly 'lock in your spot' follow-up for a trial student">🎶 Trial Follow-up</button>` : ''}
         ${(s.plan==='trial'||s.plan==='group-trial') ? `<button class="btn btn-sm btn-gold" onclick="convertTrial(${s.id})">Convert</button>` : ''}
-        ${(s.plan!=='trial'&&s.plan!=='group-trial') ? `<button class="btn btn-sm btn-gold" onclick="renewStudentSubscription(${s.id})">Renew</button>` : ''}
+        ${(s.plan!=='trial'&&s.plan!=='group-trial') ? `<button class="btn btn-sm btn-gold" onclick="renewStudentSubscription(${s.id})">🔁 Renew</button>` : ''}
         <button class="btn btn-sm" onclick="editStudent(${s.id})">Edit</button>
         <button class="btn btn-sm btn-gold" onclick="openAdminStudentProfile('${jsString(s.id)}','${jsString(s.name)}')">Profile</button>
         <button class="btn btn-sm" onclick="toggleStudentMoreMenu(event, ${s.id})" title="More actions">⋯</button>
@@ -3015,6 +3015,10 @@ function renderOverview(){
   monthStudents.forEach(s=>{
     const key=s.id+'_'+month;
     const paid=!!db.payments[key];
+    // A student who has finished all of this month's lessons has been
+    // served for what they paid — they move to Renewals (next-month
+    // payment) and are not counted as owing for the current month.
+    if(!paid && studentFinishedMonth(s, month)) return;
     if(!isWeeklyPlan(s.plan)){
       const amt=getStudentPlanAmount(s);
       if(paid)collected+=amt; else{outstanding+=amt;unpaid.push(s);}
@@ -3092,10 +3096,34 @@ function renderOverview(){
 // days (or already passed with nothing after it), so renewal stops
 // depending on the admin noticing. Frozen and archived students are
 // excluded — they're intentionally not scheduled.
+// A student has "finished the current month" when every one of their
+// lessons dated in this month is attended — none still scheduled — and
+// they attended at least one. They've completed what they paid for, so
+// they move off the current-month unpaid list and onto Renewals (where
+// next month's payment is shown). Make-ups count as lessons here too.
+function studentFinishedMonth(student, monthKey){
+  if(!student) return false;
+  const monthLessons=(db.lessons||[]).filter(l=>
+    (String(l.studentId)===String(student.id) || l.student===student.name) &&
+    (l.status_record||'active')!=='archived' &&
+    String(l.date||l.month||'').slice(0,7)===monthKey
+  );
+  if(!monthLessons.length) return false;
+  const anyScheduled=monthLessons.some(l=>l.status==='scheduled');
+  if(anyScheduled) return false;
+  const anyAttended=monthLessons.some(l=>l.status==='attended');
+  return anyAttended;
+}
+
 function renderRenewalsDue(){
   const host=document.getElementById('renewals-due-list');
   if(!host) return;
   const todayKey=new Date().toISOString().slice(0,10);
+  const now=new Date();
+  const monthKey=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
+  // Next month label for the "payment needed" hint.
+  const nextMonthDate=new Date(now.getFullYear(), now.getMonth()+1, 1);
+  const nextMonthLabel=nextMonthDate.toLocaleString('en-US',{month:'long'});
   const rows=[];
   (db.students||[]).forEach(s=>{
     if((s.status||'active')==='archived' || s.frozen) return;
@@ -3106,27 +3134,32 @@ function renderRenewalsDue(){
     // Any lesson still coming up? (scheduled and dated today or later)
     const hasUpcoming=own.some(l=>l.status==='scheduled' && (l.date||'')>=todayKey);
     if(hasUpcoming) return; // batch still has sessions left — not due yet
-    // Renewal is due only once every session has passed. Require a real
-    // history (at least one non-scheduled/attended-type lesson) so a brand
-    // new record with nothing booked doesn't show up as a renewal.
+    // Require a real history so a brand-new record with nothing booked
+    // doesn't show up as a renewal.
     const past=own.filter(l=>l.status!=='scheduled' || (l.date||'')<todayKey);
     if(!past.length) return;
     const lastDate=past.map(l=>l.date).filter(Boolean).sort().slice(-1)[0]||null;
-    rows.push({s, lastDate});
+    const finishedThisMonth=studentFinishedMonth(s, monthKey);
+    rows.push({s, lastDate, finishedThisMonth});
   });
   rows.sort((a,b)=>String(a.lastDate||'').localeCompare(String(b.lastDate||'')));
   if(!rows.length){
     host.innerHTML='<div class="empty"><div class="empty-icon">✅</div><div class="empty-text">No renewals due — every active student still has upcoming sessions.</div></div>';
     return;
   }
-  host.innerHTML=rows.map(({s,lastDate})=>{
+  host.innerHTML=rows.map(({s,lastDate,finishedThisMonth})=>{
     const label = lastDate ? 'Last lesson '+formatLedgerDate(lastDate) : 'No upcoming lessons';
+    const nextAmt=getStudentPlanAmount(s);
+    const amtLabel = isWeeklyPlan(s.plan) ? egp(nextAmt)+'/session' : egp(nextAmt);
     return `<div class="unpaid-item">
       <div>
         <div class="unpaid-name">${escapeHtml(s.name)}</div>
         <div class="unpaid-meta">${escapeHtml(s.instrument||'')} ${s.instrument&&s.teacher?'·':''} ${escapeHtml(s.teacher||'')} · <span class="badge badge-red" style="font-size:10px">${label}</span></div>
       </div>
-      <button class="btn btn-sm btn-gold" onclick="renewStudentSubscription(${s.id})">Renew</button>
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-size:12px;color:var(--text-muted)">${escapeHtml(nextMonthLabel)}: <b style="color:var(--gold)">${amtLabel}</b></span>
+        <button class="btn btn-sm btn-gold" onclick="renewStudentSubscription(${s.id})">🔁 Renew</button>
+      </div>
     </div>`;
   }).join('');
 }
