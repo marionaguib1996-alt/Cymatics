@@ -304,7 +304,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-62</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-63</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -3693,12 +3693,17 @@ function checkBatchCompletedUnpaid(l){
 function attendedLessonIsUnpaid(lesson){
   if(!lesson) return false;
   const student=(db.students||[]).find(s=>String(s.id)===String(lesson.studentId) || s.name===lesson.student);
-  if(student && isWeeklyPlan(student.plan)) return false;
-  const month=String(lesson.date||lesson.month||'').slice(0,7);
-  const sid=lesson.studentId!=null ? lesson.studentId : (student?.id);
-  if(sid==null || !month) return false;
-  const paidThatMonth=!!db.payments[sid+'_'+month];
-  return !paidThatMonth;
+  if(!student) return false;
+  if(isWeeklyPlan(student.plan)) return false; // billed per session, not monthly
+  // Mirror the STUDENT's own paid status, read with the exact same key the
+  // "Mark paid" toggle and the overview use (currentMonth()). Deriving a
+  // month from the lesson's date instead could point at a different month
+  // than the student was marked paid for, wrongly flagging a paid student
+  // as unpaid the moment their lesson was marked attended.
+  const month=(typeof currentMonth==='function' && currentMonth()) ? currentMonth() : String(lesson.date||lesson.month||'').slice(0,7);
+  if(!month) return false;
+  const paid=!!db.payments[student.id+'_'+month];
+  return !paid;
 }
 
 function markLessonAttended(id){
