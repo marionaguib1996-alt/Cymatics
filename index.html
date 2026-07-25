@@ -304,7 +304,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-59</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-61</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -3592,13 +3592,21 @@ function saveEditLesson(id){
  const t=document.getElementById('el-teacher')?.value||'';
  const i=document.getElementById('el-instrument')?.value||'';
  const s=document.getElementById('el-status')?.value||l.status;
- const unpaid=!!document.getElementById('el-unpaid')?.checked;
+ const prevStatus=l.status;
+ let unpaid=!!document.getElementById('el-unpaid')?.checked;
  const payrollAmountRaw=document.getElementById('el-payroll-amount')?.value;
  const customPayrollAmount=(payrollAmountRaw==null||payrollAmountRaw==='')?null:Number(payrollAmountRaw);
  const notes=document.getElementById('el-notes')?.value||'';
 
- l.date=d; l.time=tm; l.teacher=t; l.instrument=i; l.status=s; l.unpaid=unpaid; l.customPayrollAmount=customPayrollAmount; l.notes=notes;
+ l.date=d; l.time=tm; l.teacher=t; l.instrument=i; l.status=s; l.customPayrollAmount=customPayrollAmount; l.notes=notes;
  l.month=String(d||'').slice(0,7) || l.month;
+ // Newly marking this lesson attended (and not manually flagged unpaid):
+ // default the unpaid flag from the month's payment status, so an
+ // attended lesson for an unpaid month is recorded as "Attended (Unpaid)".
+ if(s==='attended' && prevStatus!=='attended' && !unpaid){
+   unpaid=attendedLessonIsUnpaid(l);
+ }
+ l.unpaid=unpaid;
  save();
  closeModal();
  renderLessons(); renderTeachers(); renderOverview();
@@ -3645,11 +3653,30 @@ function checkBatchCompletedUnpaid(l){
   }
 }
 
+// When a lesson is marked attended, it counts as UNPAID unless the
+// student has been marked paid for that lesson's own month. (Weekly /
+// per-session plans are billed per session, not by month, so they're not
+// judged against the monthly paid flag.)
+function attendedLessonIsUnpaid(lesson){
+  if(!lesson) return false;
+  const student=(db.students||[]).find(s=>String(s.id)===String(lesson.studentId) || s.name===lesson.student);
+  if(student && isWeeklyPlan(student.plan)) return false;
+  const month=String(lesson.date||lesson.month||'').slice(0,7);
+  const sid=lesson.studentId!=null ? lesson.studentId : (student?.id);
+  if(sid==null || !month) return false;
+  const paidThatMonth=!!db.payments[sid+'_'+month];
+  return !paidThatMonth;
+}
+
 function markLessonAttended(id){
  const l=db.lessons.find(x=>x.id===id);
  if(!l) return;
+ const wasAttendedUnpaid = l.status==='attended' && l.unpaid;
  l.status='attended';
- l.unpaid=false;
+ // "Mark Paid" on an already attended-unpaid lesson clears the flag.
+ // A fresh mark-attended sets it based on the month's payment status:
+ // unpaid unless the student is already marked paid for that month.
+ l.unpaid = wasAttendedUnpaid ? false : attendedLessonIsUnpaid(l);
  save();
  renderLessons();
  renderTeachers();
@@ -3658,7 +3685,7 @@ function markLessonAttended(id){
  if(typeof syncLessonLogFromLesson==='function') syncLessonLogFromLesson(id);
  if(typeof renderTeacherWorkspace==='function') renderTeacherWorkspace();
  checkBatchCompletedUnpaid(l);
- showToast('Marked attended ✓');
+ showToast(wasAttendedUnpaid ? 'Marked paid ✓' : (l.unpaid ? 'Marked attended — unpaid' : 'Marked attended ✓'));
 }
 
 function showHistory(studentId){
@@ -10482,6 +10509,7 @@ function renderCalendarPage(){
   // Anchor to the actual next real-world occurrence of the selected weekday —
   // computed early so it's available for the teacher filter below too.
   const targetDate=nextOccurrenceOfWeekday(dayName);
+  window._calCurrentDate=targetDate; // for features that default to the shown day
 
   // A teacher normally shows up only if they have configured slots for this
   // day — but a makeup session can deliberately override that (booked on a
@@ -12558,19 +12586,20 @@ function openTeacherAbsenceModal(){
   const teachers=(db.teacherProfiles||[]).filter(p=>(p.status||'active')!=='archived')
     .map(p=>p.name).sort();
   if(!teachers.length){ showToast('No active teachers to mark absent.'); return; }
-  // Default the date to the day currently shown on the calendar (its next
-  // occurrence), so the common "today's calendar" case is one step.
   const calDay=document.getElementById('cal-day')?.value||'';
-  const defaultDate=calDay ? nextWeekdayOnOrAfter(new Date().toISOString().slice(0,10), calDay) : new Date().toISOString().slice(0,10);
+  const defaultDate=window._calCurrentDate || (calDay ? nextWeekdayOnOrAfter(new Date().toISOString().slice(0,10), calDay) : new Date().toISOString().slice(0,10));
+  window._absenceDates = defaultDate ? [defaultDate] : [];
   openModal('Mark Teacher Absent', `
-    <div class="form-field"><label for="ta-teacher">Teacher</label><select id="ta-teacher">
-      ${teachers.map(t=>`<option value="${escapeAttr(t)}" ${t===calDay?'':''}>${escapeHtml(t)}</option>`).join('')}
+    <div class="form-field"><label for="ta-teacher">Teacher</label><select id="ta-teacher" onchange="updateTeacherAbsencePreview()">
+      ${teachers.map(t=>`<option value="${escapeAttr(t)}">${escapeHtml(t)}</option>`).join('')}
     </select></div>
-    <div class="form-field"><label for="ta-date">Date</label>
+    <div class="form-field"><label for="ta-date">Add day(s)</label>
       <div style="display:flex;gap:4px">
         <input id="ta-date" type="text" placeholder="dd/mm/yyyy" maxlength="10" value="${escapeAttr(formatDateDMY(defaultDate))}" oninput="maskDateInput(this)">
         <button type="button" class="btn btn-sm" onclick="openDatePicker('ta-date')">📅</button>
+        <button type="button" class="btn btn-sm btn-gold" onclick="addAbsenceDate()">+ Add</button>
       </div>
+      <div id="ta-date-chips" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px"></div>
     </div>
     <div class="form-field"><label>Scope</label>
       <label style="display:flex;align-items:center;gap:6px;font-weight:400;margin-bottom:4px"><input type="radio" name="ta-scope" value="day" checked onchange="onTeacherAbsenceScopeChange()"> Whole day</label>
@@ -12578,22 +12607,48 @@ function openTeacherAbsenceModal(){
     </div>
     <div id="ta-range-fields" style="display:none">
       <div class="teacher-log-grid">
-        <div class="form-field"><label for="ta-from">From</label><input id="ta-from" type="text" placeholder="HH:MM (24h)" maxlength="5"></div>
-        <div class="form-field"><label for="ta-to">To</label><input id="ta-to" type="text" placeholder="HH:MM (24h)" maxlength="5"></div>
+        <div class="form-field"><label for="ta-from">From</label><input id="ta-from" type="text" placeholder="HH:MM (24h)" maxlength="5" oninput="updateTeacherAbsencePreview()"></div>
+        <div class="form-field"><label for="ta-to">To</label><input id="ta-to" type="text" placeholder="HH:MM (24h)" maxlength="5" oninput="updateTeacherAbsencePreview()"></div>
       </div>
-      <div class="teacher-row-meta" style="margin-top:4px">Any lesson that overlaps this window will be marked absent.</div>
+      <div class="teacher-row-meta" style="margin-top:4px">Any lesson that overlaps this window (on each selected day) will be marked absent.</div>
     </div>
+    <div class="form-field wide"><label for="ta-reason">Reason (optional)</label><input id="ta-reason" type="text" placeholder="e.g. Sick leave, personal event"></div>
     <div id="ta-preview" style="margin-top:8px;font-size:12px;color:var(--text-muted)"></div>
     <div style="text-align:right;margin-top:14px">
       <button class="btn" onclick="closeModal()">Cancel</button>
       <button class="btn btn-danger" onclick="confirmTeacherAbsence()">Mark Absent</button>
     </div>
   `);
+  renderAbsenceDateChips();
   updateTeacherAbsencePreview();
-  ['ta-teacher','ta-date','ta-from','ta-to'].forEach(id=>{
-    const el=document.getElementById(id); if(el) el.addEventListener('input', updateTeacherAbsencePreview);
-    if(el) el.addEventListener('change', updateTeacherAbsencePreview);
-  });
+}
+
+// Add the date currently in the input to the selected-days list.
+function addAbsenceDate(){
+  const iso=dmyToIso(document.getElementById('ta-date')?.value||'');
+  if(!iso){ showToast('Enter a valid date first.'); return; }
+  window._absenceDates = window._absenceDates || [];
+  if(!window._absenceDates.includes(iso)){
+    window._absenceDates.push(iso);
+    window._absenceDates.sort();
+  }
+  document.getElementById('ta-date').value='';
+  renderAbsenceDateChips();
+  updateTeacherAbsencePreview();
+}
+
+function removeAbsenceDate(iso){
+  window._absenceDates=(window._absenceDates||[]).filter(d=>d!==iso);
+  renderAbsenceDateChips();
+  updateTeacherAbsencePreview();
+}
+
+function renderAbsenceDateChips(){
+  const host=document.getElementById('ta-date-chips');
+  if(!host) return;
+  const dates=window._absenceDates||[];
+  if(!dates.length){ host.innerHTML='<span style="font-size:12px;color:var(--text-muted)">No days added yet.</span>'; return; }
+  host.innerHTML=dates.map(d=>`<span class="badge badge-blue" style="display:inline-flex;align-items:center;gap:6px">${escapeHtml(formatDateDMY(d))} <span style="cursor:pointer;font-weight:700" onclick="removeAbsenceDate('${d}')">✕</span></span>`).join('');
 }
 
 function onTeacherAbsenceScopeChange(){
@@ -12603,11 +12658,12 @@ function onTeacherAbsenceScopeChange(){
   updateTeacherAbsencePreview();
 }
 
-// Collect the scheduled lessons a pending absence would affect.
+// Collect the scheduled lessons a pending absence would affect across ALL
+// selected days (optionally within a time range on each day).
 function teacherAbsenceAffectedLessons(){
   const teacher=document.getElementById('ta-teacher')?.value||'';
-  const date=dmyToIso(document.getElementById('ta-date')?.value||'');
-  if(!teacher || !date) return [];
+  const dates=window._absenceDates||[];
+  if(!teacher || !dates.length) return [];
   const scope=(document.querySelector('input[name="ta-scope"]:checked')||{}).value||'day';
   let fromMin=null, toMin=null;
   if(scope==='range'){
@@ -12618,14 +12674,13 @@ function teacherAbsenceAffectedLessons(){
     if(toMin<=fromMin) return [];
   }
   return (db.lessons||[]).filter(l=>{
-    if(l.date!==date) return false;
+    if(!dates.includes(l.date)) return false;
     if((l.teacher||'')!==teacher) return false;
     if(l.status!=='scheduled') return false;
     if((l.status_record||'active')==='archived') return false;
     if(fromMin!=null){
       const start=timeToMinutes(l.time||'00:00');
       const end=start+getLessonDurationMinutes(l);
-      // overlap test: lesson [start,end) intersects [fromMin,toMin)
       if(!(start<toMin && fromMin<end)) return false;
     }
     return true;
@@ -12636,17 +12691,17 @@ function updateTeacherAbsencePreview(){
   const el=document.getElementById('ta-preview');
   if(!el) return;
   const affected=teacherAbsenceAffectedLessons();
-  if(!affected.length){ el.textContent='No scheduled lessons match — nothing would change.'; return; }
-  el.innerHTML=`<b>${affected.length}</b> lesson${affected.length===1?'':'s'} will be marked teacher-absent (each owes a make-up): `+
-    affected.slice(0,6).map(l=>escapeHtml((l.student||'')+' '+formatTime12h(l.time||''))).join(', ')+
+  if(!affected.length){ el.textContent='No scheduled lessons match — add day(s) with lessons for this teacher.'; return; }
+  el.innerHTML=`<b>${affected.length}</b> lesson${affected.length===1?'':'s'} across ${(window._absenceDates||[]).length} day${(window._absenceDates||[]).length===1?'':'s'} will be marked teacher-absent (each owes a make-up): `+
+    affected.slice(0,6).map(l=>escapeHtml((l.student||'')+' '+formatDateDMY(l.date)+' '+formatTime12h(l.time||''))).join('; ')+
     (affected.length>6?', …':'');
 }
 
 async function confirmTeacherAbsence(){
   const teacher=document.getElementById('ta-teacher')?.value||'';
-  const date=dmyToIso(document.getElementById('ta-date')?.value||'');
+  const dates=window._absenceDates||[];
   if(!teacher){ showToast('Pick a teacher.'); return; }
-  if(!date){ showToast('Enter a valid date.'); return; }
+  if(!dates.length){ showToast('Add at least one day.'); return; }
   const scope=(document.querySelector('input[name="ta-scope"]:checked')||{}).value||'day';
   if(scope==='range'){
     const f=document.getElementById('ta-from')?.value||'';
@@ -12654,17 +12709,16 @@ async function confirmTeacherAbsence(){
     if(!/^\d{1,2}:\d{2}$/.test(f) || !/^\d{1,2}:\d{2}$/.test(t)){ showToast('Enter a valid time range (HH:MM).'); return; }
     if(timeToMinutes(t)<=timeToMinutes(f)){ showToast('"To" must be after "From".'); return; }
   }
+  const reason=(document.getElementById('ta-reason')?.value||'').trim();
   const affected=teacherAbsenceAffectedLessons();
   if(!affected.length){ showToast('No scheduled lessons match — nothing to mark.'); return; }
 
   let changed=0;
   affected.forEach(l=>{
     l.status='teacher_absent';
+    if(reason) l.absenceReason=reason;
     changed++;
-    if(typeof createLessonLog==='function'){
-      // Keep the per-lesson log/status in sync if such a helper exists.
-      if(typeof syncLessonLogFromLesson==='function') syncLessonLogFromLesson(l.id);
-    }
+    if(typeof syncLessonLogFromLesson==='function') syncLessonLogFromLesson(l.id);
     if(window.syncLessonUpdateToSupabase) syncLessonUpdateToSupabase(l);
   });
 
