@@ -304,7 +304,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-55</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-56</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -10437,7 +10437,7 @@ function renderCalendarPage(){
   // still coming. attended/absent_paid/scheduled all represent a slot
   // that IS or WAS actually used, so those still correctly occupy it.
   const lessonsByTeacher={};
-  (db.lessons||[]).filter(l=>l.date===targetDate && (l.status_record||'active')!=='archived' && l.status!=='absent_excused' && l.status!=='teacher_absent').forEach(l=>{
+  (db.lessons||[]).filter(l=>l.date===targetDate && (l.status_record||'active')!=='archived' && l.status!=='absent_excused' && l.status!=='teacher_absent' && !lessonBelongsToFrozenStudent(l)).forEach(l=>{
     if(!lessonsByTeacher[l.teacher]) lessonsByTeacher[l.teacher]=[];
     lessonsByTeacher[l.teacher].push(l);
   });
@@ -11014,6 +11014,17 @@ function markMakeupExpired(lessonId){
 
 // Date-specific room capacity check (distinct from the weekly-recurring-slot check —
 // a makeup is a one-off booking on an arbitrary date, not a recurring weekly assignment)
+// A lesson belonging to a frozen (paused) student isn't actually being
+// held — the student isn't attending — so it must not count toward room
+// capacity or teacher-availability. Freezing normally removes future
+// lessons, but a lingering record (or a not-yet-cleaned one) shouldn't
+// block the slot for everyone else.
+function lessonBelongsToFrozenStudent(l){
+  if(!l) return false;
+  const s=(db.students||[]).find(st=>String(st.id)===String(l.studentId) || st.name===l.student);
+  return !!(s && s.frozen);
+}
+
 function getLessonsAtDateTime(date, time, excludeLessonId){
   const candidateMinutes=timeToMinutes(time);
   return (db.lessons||[]).filter(l=>{
@@ -11025,6 +11036,7 @@ function getLessonsAtDateTime(date, time, excludeLessonId){
     // still counting a lesson that everyone already knows isn't
     // happening, making a room look "Full" when it genuinely wasn't.
     if(l.status==='absent_excused' || l.status==='teacher_absent') return false;
+    if(lessonBelongsToFrozenStudent(l)) return false; // paused student
     if(excludeLessonId && l.id===excludeLessonId) return false;
     if(!l.time) return false;
     const duration=getLessonDurationMinutes(l);
@@ -11071,6 +11083,7 @@ function isRoomFullDuringRange(date, startTime, durationMinutes, excludeLessonId
   (db.lessons||[]).forEach(l=>{
     if(l.date!==date || !l.time || (l.status_record||'active')==='archived') return;
     if(l.status==='absent_excused' || l.status==='teacher_absent') return;
+    if(lessonBelongsToFrozenStudent(l)) return; // paused student
     if(excludeLessonId && l.id===excludeLessonId) return;
     const m=timeToMinutes(l.time);
     if(m>rangeStart && m<rangeEnd) candidates.add(m);
@@ -11098,6 +11111,7 @@ function isTeacherBusyDuringRange(teacherName, date, startTime, durationMinutes,
   return (db.lessons||[]).some(l=>{
     if(l.date!==date || !l.time || (l.status_record||'active')==='archived') return false;
     if(l.status==='absent_excused' || l.status==='teacher_absent') return false;
+    if(lessonBelongsToFrozenStudent(l)) return false; // paused student
     if(excludeLessonId && l.id===excludeLessonId) return false;
     if((l.teacher||'').toLowerCase()!==teacherName.toLowerCase()) return false;
     const duration=getLessonDurationMinutes(l);
@@ -11119,6 +11133,7 @@ function nextRoomBookableTime(date, time, durationMinutes){
   (db.lessons||[]).forEach(l=>{
     if(l.date!==date || !l.time || (l.status_record||'active')==='archived') return;
     if(l.status==='absent_excused' || l.status==='teacher_absent') return;
+    if(lessonBelongsToFrozenStudent(l)) return; // paused student
     const duration=getLessonDurationMinutes(l);
     const end=timeToMinutes(l.time)+duration;
     if(end>startMin) candidates.add(end);
@@ -12024,6 +12039,7 @@ function isInstrumentBusyAtDateTime(date, time, instrument, excludeLessonId, exc
   const lessonCount=(db.lessons||[]).filter(l=>{
     if(l.date!==date || l.instrument!==instrument || (l.status_record||'active')==='archived') return false;
     if(l.status==='absent_excused' || l.status==='teacher_absent') return false;
+    if(lessonBelongsToFrozenStudent(l)) return false; // paused student
     if(excludeLessonId && l.id===excludeLessonId) return false;
     if(!l.time) return false;
     const duration=getLessonDurationMinutes(l);
