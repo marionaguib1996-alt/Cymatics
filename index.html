@@ -304,7 +304,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-57</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-58</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -679,6 +679,20 @@ input::placeholder{color:var(--text-dim)}
 
   <div class="card">
     <div class="card-title">Makeup Dashboard</div>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;align-items:center">
+      <input id="makeup-search" placeholder="Search student..." oninput="renderReports()" style="max-width:200px">
+      <select id="makeup-teacher-filter" onchange="renderReports()" style="max-width:170px"><option value="">All teachers</option></select>
+      <select id="makeup-day-filter" onchange="renderReports()" style="max-width:150px">
+        <option value="">All days</option>
+        <option value="Sunday">Sunday</option><option value="Monday">Monday</option><option value="Tuesday">Tuesday</option><option value="Wednesday">Wednesday</option><option value="Thursday">Thursday</option><option value="Friday">Friday</option><option value="Saturday">Saturday</option>
+      </select>
+      <select id="makeup-sort" onchange="renderReports()" style="max-width:180px">
+        <option value="urgency">Sort: Most urgent</option>
+        <option value="remaining">Sort: Most remaining</option>
+        <option value="name">Sort: Name (A–Z)</option>
+        <option value="teacher">Sort: Teacher</option>
+      </select>
+    </div>
     <div class="table-wrap"><table>
       <thead><tr><th>Student</th><th>Instrument</th><th>Teacher</th><th>Makeups Remaining</th><th>Days Remaining</th><th>Actions</th></tr></thead>
       <tbody id="report-makeups"></tbody>
@@ -1596,14 +1610,41 @@ async function confirmRefund(studentId){
     processedBy: session.name||session.email||'Admin'
   };
   db.refunds.push(refund);
+
+  // A refund compensates the student with money in place of the sessions
+  // they were owed, so clear their outstanding make-ups: mark each owed
+  // lesson resolved, and archive any make-up sessions already booked for
+  // them. This removes them from the Makeup Dashboard.
+  let clearedMakeups=0;
+  const archivedMakeupIds=[];
+  (db.lessons||[]).forEach(l=>{
+    const isThisStudent=(String(l.studentId)===String(s.id) || l.student===s.name);
+    if(!isThisStudent) return;
+    if(isMakeupOwed(l)){
+      l.makeupResolved=true;
+      clearedMakeups++;
+      // Archive a booked-but-not-yet-attended make-up for this owed lesson.
+      const booked=findMakeupLessonFor(l.id);
+      if(booked && booked.status==='scheduled'){
+        booked.status_record='archived';
+        archivedMakeupIds.push(booked.id);
+      }
+      if(window.syncLessonUpdateToSupabase) syncLessonUpdateToSupabase(l);
+    }
+  });
+
   save();
   closeModal();
   renderStudents();
   if(typeof renderReports==='function') renderReports();
   if(typeof renderOverview==='function') renderOverview();
-  showToast('Refund recorded');
+  if(typeof renderLessons==='function') renderLessons();
+  showToast(clearedMakeups ? ('Refund recorded — '+clearedMakeups+' make-up'+(clearedMakeups===1?'':'s')+' cleared') : 'Refund recorded');
 
   if(window.supabaseClientV1){
+    if(typeof syncLessonArchiveToSupabase==='function'){
+      archivedMakeupIds.forEach(lid=>syncLessonArchiveToSupabase(lid,'archived',false));
+    }
     const {error}=await window.supabaseClientV1.from('refunds').insert([{
       student_id: refund.studentId, student_name: refund.studentName,
       amount: refund.amount, reason: refund.reason, refund_date: refund.date,
@@ -3917,30 +3958,66 @@ function renderReports(){
  const rm=document.getElementById('report-makeups');
  if(rm){
    const todayKey=new Date().toISOString().slice(0,10);
-   rm.innerHTML=db.students.filter(s=>(s.status||'active')!=='archived').map(s=>{
+   const search=(document.getElementById('makeup-search')?.value||'').toLowerCase();
+   const teacherFilter=document.getElementById('makeup-teacher-filter')?.value||'';
+   const dayFilter=document.getElementById('makeup-day-filter')?.value||'';
+   const sortBy=document.getElementById('makeup-sort')?.value||'urgency';
+
+   // Build rows for students who still have UNBOOKED make-ups to arrange.
+   // A student whose make-ups are all booked or attended has nothing left
+   // to schedule, so they drop off the dashboard entirely.
+   let rows=db.students.filter(s=>(s.status||'active')!=='archived').map(s=>{
       const owedLessons=db.lessons.filter(l=>(String(l.studentId)===String(s.id) || l.student===s.name) && isMakeupOwed(l) && (l.status_record||'active')!=='archived');
-      const owed=owedLessons.length;
       const unbooked=owedLessons.filter(l=>!findMakeupLessonFor(l.id));
-      return {s,owed,unbooked};
-   }).filter(r=>r.owed>0).map(({s,owed,unbooked})=>{
+      return {s, unbooked};
+   }).filter(r=>r.unbooked.length>0);
+
+   // Populate the teacher filter dropdown from the teachers who currently
+   // appear on the dashboard (preserving the current selection).
+   const teacherSel=document.getElementById('makeup-teacher-filter');
+   if(teacherSel){
+     const teachers=[...new Set(rows.map(r=>r.s.teacher).filter(Boolean))].sort();
+     const cur=teacherSel.value;
+     teacherSel.innerHTML='<option value="">All teachers</option>'+teachers.map(t=>`<option value="${escapeAttr(t)}">${escapeHtml(t)}</option>`).join('');
+     if(cur && teachers.includes(cur)) teacherSel.value=cur;
+   }
+
+   // Apply search / teacher / day filters.
+   rows=rows.filter(({s})=>
+     (!search || (s.name||'').toLowerCase().includes(search)) &&
+     (!teacherFilter || s.teacher===teacherFilter) &&
+     (!dayFilter || s.lesson_day===dayFilter)
+   );
+
+   // Compute the soonest expiry (fewest days left) per student for sorting.
+   const daysLeftOf=(r)=>{
+     const next=r.unbooked.slice().sort((a,b)=>String(a.date).localeCompare(String(b.date)))[0];
+     if(!next) return Infinity;
+     if(isMakeupExpired(next)) return -1; // expired sorts most urgent
+     const daysSince=Math.floor((new Date(todayKey)-new Date(next.date))/86400000);
+     return Math.max(0, MAKEUP_EXPIRY_DAYS-daysSince);
+   };
+   rows.sort((a,b)=>{
+     if(sortBy==='name') return (a.s.name||'').localeCompare(b.s.name||'');
+     if(sortBy==='teacher') return (a.s.teacher||'').localeCompare(b.s.teacher||'') || (a.s.name||'').localeCompare(b.s.name||'');
+     if(sortBy==='remaining') return b.unbooked.length-a.unbooked.length || (a.s.name||'').localeCompare(b.s.name||'');
+     return daysLeftOf(a)-daysLeftOf(b); // urgency (default)
+   });
+
+   rm.innerHTML=rows.map(({s,unbooked})=>{
+      const next=unbooked.slice().sort((a,b)=>String(a.date).localeCompare(String(b.date)))[0];
+      const expired=isMakeupExpired(next);
       let actionsHtml, daysRemainingHtml;
-      if(!unbooked.length){
-        actionsHtml='<span class="badge badge-blue">Booked</span>';
-        daysRemainingHtml='—';
+      actionsHtml=`<button class="btn btn-sm btn-gold" onclick="openScheduleMakeup(${next.id})">${expired?'Schedule Anyway':'Schedule'}</button>`;
+      if(expired){
+        actionsHtml=`<span class="badge badge-red" style="margin-right:4px" title="Original lesson was ${escapeAttr(formatDateDMY(next.date))} — over ${MAKEUP_EXPIRY_DAYS} days ago">⏰ Expired</span>`+actionsHtml+
+          ` <button class="btn btn-sm btn-danger" onclick="markMakeupExpired(${next.id})">Close Out</button>`;
+        daysRemainingHtml='<span class="badge badge-red">Expired</span>';
       } else {
-        const next=unbooked[0];
-        const expired=isMakeupExpired(next);
-        actionsHtml=`<button class="btn btn-sm btn-gold" onclick="openScheduleMakeup(${next.id})">${expired?'Schedule Anyway':'Schedule'}</button>`;
-        if(expired){
-          actionsHtml=`<span class="badge badge-red" style="margin-right:4px" title="Original lesson was ${escapeAttr(formatDateDMY(next.date))} — over ${MAKEUP_EXPIRY_DAYS} days ago">⏰ Expired</span>`+actionsHtml+
-            ` <button class="btn btn-sm btn-danger" onclick="markMakeupExpired(${next.id})">Close Out</button>`;
-          daysRemainingHtml='<span class="badge badge-red">Expired</span>';
-        } else {
-          const daysSince=Math.floor((new Date(todayKey)-new Date(next.date))/86400000);
-          const daysLeft=Math.max(0, MAKEUP_EXPIRY_DAYS-daysSince);
-          const urgentClass=daysLeft<=7 ? 'badge-amber' : '';
-          daysRemainingHtml=urgentClass ? `<span class="badge ${urgentClass}">${daysLeft} day${daysLeft===1?'':'s'}</span>` : `${daysLeft} day${daysLeft===1?'':'s'}`;
-        }
+        const daysSince=Math.floor((new Date(todayKey)-new Date(next.date))/86400000);
+        const daysLeft=Math.max(0, MAKEUP_EXPIRY_DAYS-daysSince);
+        const urgentClass=daysLeft<=7 ? 'badge-amber' : '';
+        daysRemainingHtml=urgentClass ? `<span class="badge ${urgentClass}">${daysLeft} day${daysLeft===1?'':'s'}</span>` : `${daysLeft} day${daysLeft===1?'':'s'}`;
       }
       return `<tr><td>${escapeHtml(s.name)}</td><td>${escapeHtml(s.instrument)}</td><td>${escapeHtml(s.teacher)}</td><td>${unbooked.length}</td>
        <td>${daysRemainingHtml}</td><td>${actionsHtml}</td></tr>`;
