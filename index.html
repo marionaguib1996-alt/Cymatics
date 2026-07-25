@@ -304,7 +304,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-51</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-52</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -389,10 +389,11 @@ input::placeholder{color:var(--text-dim)}
         <select id="s-plan" onchange="updateStudentTimeSlotOptions()">
           <option value="trial">Trial Session (500 EGP)</option>
           <option value="monthly">Monthly — auto (500 EGP / session)</option>
-          <option value="group-monthly">Group Monthly — 1hr, auto (750 EGP / session)</option>
           <option value="weekly">Weekly session (600 EGP)</option>
+          <option value="group-monthly">Group Monthly — 1hr, auto (750 EGP / session)</option>
           <option value="group">Group — 1hr (3,000 EGP)</option>
           <option value="group-trial">Group Trial — 1hr (750 EGP)</option>
+          <option value="weekly-group">Weekly Group Session — 1hr (750 EGP)</option>
         </select>
       </div>
     </div>
@@ -1200,14 +1201,14 @@ function instrumentEmoji(name){
   return INSTRUMENT_EMOJI[String(name).trim().toLowerCase()] || '🎵';
 }
 
-const PLAN_LABELS = {'trial':'Trial Session','monthly':'Monthly','group-monthly':'Group Monthly','lesson-1':'1 Lesson Left','lesson-2':'2 Lessons Left','lesson-3':'3 Lessons Left','monthly-4':'Monthly (4 wks)','monthly-5':'Monthly (5 wks)','weekly':'Weekly','group':'Group (1hr)','group-trial':'Group Trial','group-1':'Group · 1 Lesson Left','group-2':'Group · 2 Lessons Left','group-3':'Group · 3 Lessons Left'};
-const PLAN_AMOUNTS = {'trial':500,'monthly':2000,'group-monthly':3000,'lesson-1':500,'lesson-2':1000,'lesson-3':1500,'monthly-4':2000,'monthly-5':2500,'weekly':600,'group':3000,'group-trial':750,'group-1':750,'group-2':1500,'group-3':2250};
+const PLAN_LABELS = {'trial':'Trial Session','monthly':'Monthly','group-monthly':'Group Monthly','weekly':'Weekly','weekly-group':'Weekly Group Session','group':'Group (1hr)','group-trial':'Group Trial','lesson-1':'1 Lesson Left','lesson-2':'2 Lessons Left','lesson-3':'3 Lessons Left','monthly-4':'Monthly (4 wks)','monthly-5':'Monthly (5 wks)','group-1':'Group · 1 Lesson Left','group-2':'Group · 2 Lessons Left','group-3':'Group · 3 Lessons Left'};
+const PLAN_AMOUNTS = {'trial':500,'monthly':2000,'group-monthly':3000,'weekly':600,'weekly-group':750,'lesson-1':500,'lesson-2':1000,'lesson-3':1500,'monthly-4':2000,'monthly-5':2500,'group':3000,'group-trial':750,'group-1':750,'group-2':1500,'group-3':2250};
 
 // Plans a NEW student or renewal can be put on. The per-lesson-count
 // plans (lesson-1/2/3, group-1/2/3, monthly-4/5) are intentionally absent
 // here — existing students keep them until their next renewal, but going
 // forward the auto-calculating 'monthly' / 'group-monthly' replace them.
-const SELECTABLE_PLANS=['trial','monthly','group-monthly','weekly','group','group-trial'];
+const SELECTABLE_PLANS=['trial','monthly','weekly','group-monthly','group','group-trial','weekly-group'];
 // Build option HTML for a plan dropdown, always including the student's
 // CURRENT plan even if it's a legacy one (so it shows correctly selected
 // and isn't silently changed just by opening the editor).
@@ -1251,7 +1252,13 @@ function monthlyScheduledSessionCount(student){
 // double session with its makeup). Same-ish name, different concept —
 // keeping these clearly distinct in naming avoids confusing the two.
 function isGroupPlan(plan){
-  return plan==='group' || plan==='group-trial' || plan==='group-monthly' || plan==='group-1' || plan==='group-2' || plan==='group-3';
+  return plan==='group' || plan==='group-trial' || plan==='group-monthly' || plan==='weekly-group' || plan==='group-1' || plan==='group-2' || plan==='group-3';
+}
+
+// Single-session, per-session-priced plans with a selectable session date:
+// the regular Weekly and the new Weekly Group Session.
+function isWeeklyPlan(plan){
+  return plan==='weekly' || plan==='weekly-group';
 }
 
 // Returns what a student actually owes — their plan's standard price,
@@ -2572,7 +2579,7 @@ function renderStudents(){
     const activeStudents=db.students.filter(s=>(s.status||'active')!=='archived' && !s.frozen);
     const paid=activeStudents.filter(s=>db.payments[s.id+'_'+month]).length;
     const unpaid=activeStudents.length-paid;
-    const weekly=activeStudents.filter(s=>s.plan==='weekly'||s.plan==='trial').length;
+    const weekly=activeStudents.filter(s=>isWeeklyPlan(s.plan)||s.plan==='trial').length;
     const monthly=activeStudents.length-weekly;
     const flagged=activeStudents.filter(s=>getStudentHealthFlags(s).level!=='ok').length;
     sum.innerHTML=`<div class="metric"><div class="metric-label">Students</div><div class="metric-value">${countUniquePeople(activeStudents)}</div></div>
@@ -2586,7 +2593,7 @@ function renderStudents(){
     const key=s.id+'_'+currentMonth();
     const paid=!!db.payments[key];
     const method=(db.paymentMethods||{})[key];
-    const amt=s.plan==='weekly'?egp(getStudentPlanAmount(s))+' / session':egp(getStudentPlanAmount(s));
+    const amt=isWeeklyPlan(s.plan)?egp(getStudentPlanAmount(s))+' / session':egp(getStudentPlanAmount(s));
     const linkedCourses=getLinkedCourses(s);
     const linkedBadge=linkedCourses.length ? ` <span class="badge badge-purple" style="cursor:help" title="Also enrolled in: ${escapeAttr(linkedCourses.map(c=>c.instrument+' with '+c.teacher).join(', '))}">🔗 +${linkedCourses.length}</span>` : '';
     const frozenBadge=s.frozen ? ` <span class="badge badge-blue" style="cursor:help" title="${escapeAttr('Frozen since '+(s.frozenSince?formatDateDMY(s.frozenSince):'—')+(s.frozenReason?': '+s.frozenReason:''))}">❄️ Frozen</span>` : '';
@@ -2643,7 +2650,7 @@ function editStudent(id){
      <div class="form-field"><label for="es-plan">Payment Plan</label><select id="es-plan" onchange="onEditStudentDayChange(${s.id})">
        ${planOptionsHtml(s.plan)}
      </select></div>
-     <div class="form-field"><label for="es-custom-amount">Custom Amount (EGP)${s.plan==='weekly'?' / session':''}</label><input id="es-custom-amount" type="number" min="0" step="1" placeholder="Standard: ${PLAN_AMOUNTS[s.plan]||0}" value="${s.customAmount!=null?escapeAttr(s.customAmount):''}"><small style="color:var(--text-muted);display:block;margin-top:2px">Leave blank to use the standard plan price. Set a value here for a discount or special rate.</small></div>
+     <div class="form-field"><label for="es-custom-amount">Custom Amount (EGP)${isWeeklyPlan(s.plan)?' / session':''}</label><input id="es-custom-amount" type="number" min="0" step="1" placeholder="Standard: ${PLAN_AMOUNTS[s.plan]||0}" value="${s.customAmount!=null?escapeAttr(s.customAmount):''}"><small style="color:var(--text-muted);display:block;margin-top:2px">Leave blank to use the standard plan price. Set a value here for a discount or special rate.</small></div>
      <div class="form-field"><label for="es-dob">Date of Birth</label><div style="display:flex;gap:4px"><input id="es-dob" type="text" placeholder="dd/mm/yyyy" maxlength="10" oninput="maskDateInput(this)" value="${escapeAttr(isoToDmy(s.dob))}"><button type="button" class="btn btn-sm" onclick="openDatePicker('es-dob')">📅</button></div></div>
      <div class="form-field"><label for="es-joined">Starting Date</label><div style="display:flex;gap:4px"><input id="es-joined" type="text" placeholder="dd/mm/yyyy" maxlength="10" oninput="maskDateInput(this)" value="${escapeAttr(isoToDmy(s.joined_date))}"><button type="button" class="btn btn-sm" onclick="openDatePicker('es-joined')">📅</button></div></div>
      <div class="form-field"><label for="es-phone1">Phone</label><input id="es-phone1" value="${escapeAttr(s.phone1)}"></div>
@@ -2683,7 +2690,7 @@ function saveEditStudent(id){
  const teacherVal=document.getElementById('es-teacher')?.value||'';
  if(!teacherVal){showToast('Please select a teacher'); return;}
 
- const oldDay=s.lesson_day, oldTime=s.lessonTime, oldTeacher=s.teacher, oldPlan=s.plan;
+ const oldDay=s.lesson_day, oldTime=s.lessonTime, oldTeacher=s.teacher, oldPlan=s.plan, oldName=s.name;
 
  s.first_name=first_name;
  s.last_name=last_name;
@@ -2748,9 +2755,28 @@ function saveEditStudent(id){
    }
  }
 
+ // Propagate attribute changes (instrument, teacher, display name) onto the
+ // student's own future scheduled lessons, even when the slot itself didn't
+ // change and so the reschedule branch above didn't run. Without this,
+ // editing just a student's instrument leaves their upcoming lessons showing
+ // the old one until a manual rebuild.
+ (db.lessons||[]).forEach(l=>{
+   const isThisStudent=(String(l.studentId)===String(s.id) || l.student===oldName);
+   if(!isThisStudent) return;
+   if((l.status||'')==='scheduled' && (l.date||'')>=todayKey){
+     l.instrument=s.instrument;
+     l.teacher=s.teacher;
+   }
+   // Keep the denormalized student name on ALL of this student's lessons
+   // current (past and future), so history stays attributed correctly.
+   l.student=s.name;
+   if(window.syncLessonUpdateToSupabase) syncLessonUpdateToSupabase(l);
+ });
+
  save();
  closeModal();
  refresh({students:true,lessons:true,overview:true});
+ if(typeof renderCalendarPage==='function') renderCalendarPage();
  renderDatabase();
  if(window.syncStudentUpdateToSupabase) syncStudentUpdateToSupabase(s);
  showToast(countAdjustMsg ? 'Student updated'+countAdjustMsg : (rescheduledCount ? 'Student updated — '+rescheduledCount+' lesson(s) rescheduled to the new slot' : 'Student updated'));
@@ -2948,7 +2974,7 @@ function renderOverview(){
   monthStudents.forEach(s=>{
     const key=s.id+'_'+month;
     const paid=!!db.payments[key];
-    if(s.plan!=='weekly'){
+    if(!isWeeklyPlan(s.plan)){
       const amt=getStudentPlanAmount(s);
       if(paid)collected+=amt; else{outstanding+=amt;unpaid.push(s);}
     } else {
@@ -3010,7 +3036,7 @@ function renderOverview(){
   else{upEl.innerHTML=unpaid.map(s=>`<div class="unpaid-item">
     <div><div class="unpaid-name">${s.name}</div><div class="unpaid-meta">${s.instrument||''} ${s.instrument&&s.teacher?'·':''} ${s.teacher||''}</div></div>
     <div style="display:flex;align-items:center;gap:10px">
-      <span style="font-size:13px;font-weight:600;color:var(--red-text)">${s.plan==='weekly'?egp(getStudentPlanAmount(s))+'/session':egp(getStudentPlanAmount(s))}</span>
+      <span style="font-size:13px;font-weight:600;color:var(--red-text)">${isWeeklyPlan(s.plan)?egp(getStudentPlanAmount(s))+'/session':egp(getStudentPlanAmount(s))}</span>
       <button class="btn btn-sm btn-gold" onclick="togglePayment(${s.id})">Mark paid</button>
     </div>
   </div>`).join('');}
@@ -3032,7 +3058,7 @@ function renderRenewalsDue(){
   const rows=[];
   (db.students||[]).forEach(s=>{
     if((s.status||'active')==='archived' || s.frozen) return;
-    if(s.plan==='weekly') return;               // open-ended, never "runs out"
+    if(isWeeklyPlan(s.plan)) return;            // open-ended single sessions, never "run out"
     if(s.plan==='trial' || s.plan==='group-trial') return; // a trial isn't a renewable batch
     const own=(db.lessons||[]).filter(l=>(String(l.studentId)===String(s.id) || l.student===s.name)
       && (l.status_record||'active')!=='archived');
@@ -3456,7 +3482,15 @@ function editLesson(id){
      <div class="form-field"><label for="el-date">Date</label><div style="display:flex;gap:4px"><input id="el-date" type="text" placeholder="dd/mm/yyyy" maxlength="10" oninput="maskDateInput(this)" onchange="updateEditLessonTimeOptions(${l.id})" value="${escapeAttr(isoToDmy(l.date))}"><button type="button" class="btn btn-sm" onclick="openDatePicker('el-date')">📅</button></div></div>
      ${timeField}
      <div class="form-field"><label for="el-teacher">Teacher</label><input id="el-teacher" value="${escapeAttr(l.teacher)}"></div>
-     <div class="form-field"><label for="el-instrument">Instrument</label><input id="el-instrument" value="${escapeAttr(l.instrument)}"></div>
+     <div class="form-field"><label for="el-instrument">Instrument</label><select id="el-instrument">
+       ${(() => {
+         const prof=db.teacherProfiles.find(t=>t.name===l.teacher);
+         let insts=(prof?.instruments||[]).filter(Boolean);
+         if(l.instrument && !insts.includes(l.instrument)) insts=[l.instrument, ...insts];
+         if(!insts.length && l.instrument) insts=[l.instrument];
+         return insts.map(inst=>`<option value="${escapeAttr(inst)}" ${inst===l.instrument?'selected':''}>${escapeHtml(inst)}</option>`).join('');
+       })()}
+     </select></div>
      <div class="form-field"><label for="el-status">Status</label><select id="el-status">
        ${VALID_STATUSES.map(st=>`<option value="${st}" ${st===l.status?'selected':''}>${escapeHtml(STATUS_LABELS[st]||st)}</option>`).join('')}
      </select></div>
@@ -3527,6 +3561,7 @@ function saveEditLesson(id){
  save();
  closeModal();
  renderLessons(); renderTeachers(); renderOverview();
+ if(typeof renderCalendarPage==='function') renderCalendarPage();
  if(typeof syncLessonLogFromLesson==='function') syncLessonLogFromLesson(id);
  if(typeof syncLessonUpdateToSupabase==='function') syncLessonUpdateToSupabase(l);
  if(typeof renderTeacherWorkspace==='function') renderTeacherWorkspace();
@@ -7093,7 +7128,7 @@ window.addEventListener('load', function(){
 
       if(paid) paidCount++;
 
-      if(s.plan!=='weekly'){
+      if(!isWeeklyPlan(s.plan)){
          const amt=getStudentPlanAmount(s);
          if(paid) collected+=amt;
          else outstanding+=amt;
@@ -7230,7 +7265,7 @@ window.addEventListener('load', function(){
    (db.students||[]).forEach(s=>{
       const paid=!!db.payments[s.id+'_'+month];
       const amt=getStudentPlanAmount(s);
-      if(s.plan!=='weekly'){ if(paid) collected+=amt; else outstanding+=amt; }
+      if(!isWeeklyPlan(s.plan)){ if(paid) collected+=amt; else outstanding+=amt; }
       else if(paid){ collected+=amt; }
    });
 
@@ -7312,7 +7347,7 @@ window.addEventListener('load', function(){
       if(paid) paidStudents++;
       const amt=getStudentPlanAmount(s);
 
-      if(s.plan!=='weekly'){
+      if(!isWeeklyPlan(s.plan)){
         if(paid) collected+=amt;
         else outstanding+=amt;
       } else if(paid){
@@ -9149,7 +9184,7 @@ function getPlanSessionCount(plan){
   // 'monthly'/'group-monthly' are auto-calculated from the remaining
   // lesson-days in the month (see planSessionCountFrom); the 4 here is
   // only a fallback for callers that don't supply a start date.
-  const sessionCounts={'trial':1,'group-trial':1,'monthly':4,'group-monthly':4,'monthly-4':4,'monthly-5':5,'weekly':1,'group':4,'lesson-1':1,'lesson-2':2,'lesson-3':3,'group-1':1,'group-2':2,'group-3':3};
+  const sessionCounts={'trial':1,'group-trial':1,'monthly':4,'group-monthly':4,'monthly-4':4,'monthly-5':5,'weekly':1,'weekly-group':1,'group':4,'lesson-1':1,'lesson-2':2,'lesson-3':3,'group-1':1,'group-2':2,'group-3':3};
   return sessionCounts[plan]||0;
 }
 
@@ -9238,7 +9273,7 @@ function renewStudentSubscription(id){
       <div class="form-field"><label for="rn-plan">Plan</label><select id="rn-plan" onchange="onRenewPlanChange(${id})">
         ${planOptionsHtml(student.plan)}
       </select></div>
-      <div class="form-field" id="rn-date-field" style="display:${student.plan==='weekly'?'block':'none'}">
+      <div class="form-field" id="rn-date-field" style="display:${isWeeklyPlan(student.plan)?'block':'none'}">
         <label for="rn-date">Session Date</label>
         <div style="display:flex;gap:4px">
           <input id="rn-date" type="text" placeholder="dd/mm/yyyy" maxlength="10" oninput="maskDateInput(this)">
@@ -9255,7 +9290,7 @@ function onRenewPlanChange(id){
   // it and hide it for the recurring/batch plans.
   const plan=document.getElementById('rn-plan')?.value||'';
   const field=document.getElementById('rn-date-field');
-  if(field) field.style.display = plan==='weekly' ? 'block' : 'none';
+  if(field) field.style.display = isWeeklyPlan(plan) ? 'block' : 'none';
 }
 
 function onRenewTeacherChange(id){
@@ -9302,7 +9337,7 @@ function confirmRenewal(id){
   const rnDur=isGroupPlan(plan)?GROUP_SESSION_DURATION_MINUTES:SESSION_DURATION_MINUTES;
   if(isRoomFullDuringRange(rnTargetDate, lessonTime, rnDur, rnOwnLesson?.id||null)){ showToast('That slot is at the 3-room limit — pick another.'); return; }
 
-  const sessionCounts={'trial':1,'monthly':4,'group-monthly':4,'monthly-4':4,'monthly-5':5,'weekly':1,'lesson-1':1,'lesson-2':2,'lesson-3':3,'group':4,'group-trial':1,'group-1':1,'group-2':2,'group-3':3};
+  const sessionCounts={'trial':1,'monthly':4,'group-monthly':4,'monthly-4':4,'monthly-5':5,'weekly':1,'weekly-group':1,'lesson-1':1,'lesson-2':2,'lesson-3':3,'group':4,'group-trial':1,'group-1':1,'group-2':2,'group-3':3};
   // For the auto monthly plans the real count is computed below, once the
   // first new date is known. This fixed value is just a validity check.
   if(!sessionCounts[plan]){ showToast('Please choose a valid plan'); return; }
@@ -9342,7 +9377,7 @@ function confirmRenewal(id){
   // A Weekly renewal books ONE session, so an explicitly chosen date wins
   // over the computed next-occurrence — the whole point of exposing the
   // field is that the admin can place that single session on any day.
-  if(plan==='weekly'){
+  if(isWeeklyPlan(plan)){
     const chosen=dmyToIso(document.getElementById('rn-date')?.value||'');
     if(chosen){
       if(chosen<todayKey){ showToast('That session date is in the past — pick another.'); return; }
@@ -11503,6 +11538,7 @@ function realCurrentMonth(){
 
 function getStudentPortalPlanLabel(plan){
   if(plan==='weekly') return 'Weekly';
+  if(plan==='weekly-group') return 'Weekly Group';
   if(plan==='trial') return 'Trial Session';
   return 'Monthly';
 }
@@ -11518,7 +11554,7 @@ function renderStudentPortalPayments(){
 
   const thisMonth=realCurrentMonth();
   const paidThisMonth=!!db.payments[student.id+'_'+thisMonth];
-  const amount=student.plan==='weekly' ? egp(getStudentPlanAmount(student))+' / session' : egp(getStudentPlanAmount(student));
+  const amount=isWeeklyPlan(student.plan) ? egp(getStudentPlanAmount(student))+' / session' : egp(getStudentPlanAmount(student));
   const thisMonthLabel=(MONTHS.find(m=>m.key===thisMonth)||{}).label||thisMonth;
 
   // Payment history starting from the student's first recorded payment, through last month
