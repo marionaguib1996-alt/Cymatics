@@ -304,7 +304,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-64</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-65</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -451,8 +451,13 @@ input::placeholder{color:var(--text-dim)}
 <div id="page-renewals" class="page">
   <div class="card">
     <div class="card-title">Renewals Due</div>
-    <div class="teacher-row-meta" style="margin-bottom:12px">Students who have finished all their scheduled sessions (last lesson already passed) and need to renew for a new batch. Renew to book their next sessions.</div>
+    <div class="teacher-row-meta" style="margin-bottom:12px">Monthly and Group Monthly students who have attended their last logged session for the current month. Shows the payment due for next month.</div>
     <div id="renewals-due-list"></div>
+  </div>
+  <div class="card">
+    <div class="card-title">Trial Follow-up</div>
+    <div class="teacher-row-meta" style="margin-bottom:12px">Students who attended their trial session but haven't converted yet.</div>
+    <div id="trial-followup-list"></div>
   </div>
 </div>
 
@@ -1709,9 +1714,10 @@ function sendTrialConversionMessage(studentId){
     const eMusicNote=String.fromCodePoint(0x1F3B5), eRaisedHands=String.fromCodePoint(0x1F64C);
     const eFire=String.fromCodePoint(0x1F525), eMultiNotes=String.fromCodePoint(0x1F3B6);
 
-    const message='Hey '+firstName+'! '+eSmile+eMultiNotes+' We hope you had an awesome first session at Cymatics and enjoyed the vibes! '+eGuitar+eSparkles+'  '+
-      'If you\'d like to keep the music going at your agreed time, just send over the payment of '+Math.round(price)+' EGP by tonight to lock in your spot '+eMusicNote+'  '+
-      'You can use InstaPay on 01277336092 (Mario Naguib), and don\'t forget to send us a quick screenshot to confirm '+eRaisedHands+'  '+
+    const message='Hey '+firstName+'! '+eSmile+eMultiNotes+'\n'+
+      'We hope you had an awesome first session at Cymatics and enjoyed the vibes! '+eGuitar+eSparkles+'\n'+
+      'If you\'d like to keep the music going at your agreed time, just send over the payment of '+Math.round(price)+' EGP by tonight to lock in your spot '+eMusicNote+'\n'+
+      'You can use InstaPay on 01277336092 (Mario Naguib), and don\'t forget to send us a quick screenshot to confirm '+eRaisedHands+'\n'+
       'Can\'t wait to have you back for the next session! '+eMultiNotes+eFire;
 
     const win=window.open('https://wa.me/'+phone+'?text='+encodeURIComponent(message), '_blank');
@@ -2650,10 +2656,8 @@ function renderStudents(){
       <td><span class="badge ${paid?'badge-green':'badge-red'}">${paid?'✓ Paid':'✗ Unpaid'}</span>${paid && method ? ` <span class="badge" style="opacity:0.8">${escapeHtml(method)}</span>` : ''}</td>
       <td><button class='btn btn-sm' onclick='showHistory(${s.id})'>History</button></td><td><div class="actions">
         <button class="btn btn-sm" onclick="togglePayment(${s.id})">${paid?'Mark unpaid':'Mark paid'}</button>
-        <button class="btn btn-sm" onclick="sendPaymentReminder(${s.id})" title="Opens WhatsApp with a pre-filled reminder for next month's payment">📱 Remind</button>
         ${(s.plan==='trial'||s.plan==='group-trial') ? `<button class="btn btn-sm" onclick="sendTrialConversionMessage(${s.id})" title="Opens WhatsApp with a friendly 'lock in your spot' follow-up for a trial student">🎶 Trial Follow-up</button>` : ''}
         ${(s.plan==='trial'||s.plan==='group-trial') ? `<button class="btn btn-sm btn-gold" onclick="convertTrial(${s.id})">Convert</button>` : ''}
-        ${(s.plan!=='trial'&&s.plan!=='group-trial') ? `<button class="btn btn-sm btn-gold" onclick="renewStudentSubscription(${s.id})">🔁 Renew</button>` : ''}
         <button class="btn btn-sm" onclick="editStudent(${s.id})">Edit</button>
         <button class="btn btn-sm btn-gold" onclick="openAdminStudentProfile('${jsString(s.id)}','${jsString(s.name)}')">Profile</button>
         <button class="btn btn-sm" onclick="toggleStudentMoreMenu(event, ${s.id})" title="More actions">⋯</button>
@@ -3096,14 +3100,19 @@ function renderOverview(){
 // next month's payment is shown). Make-ups count as lessons here too.
 function studentFinishedMonth(student, monthKey){
   if(!student) return false;
+  const todayKey=new Date().toISOString().slice(0,10);
   const monthLessons=(db.lessons||[]).filter(l=>
     (String(l.studentId)===String(student.id) || l.student===student.name) &&
     (l.status_record||'active')!=='archived' &&
     String(l.date||l.month||'').slice(0,7)===monthKey
   );
   if(!monthLessons.length) return false;
-  const anyScheduled=monthLessons.some(l=>l.status==='scheduled');
-  if(anyScheduled) return false;
+  // Only an UPCOMING scheduled lesson (today or later) counts as unfinished.
+  // A stale scheduled lesson dated in the past — never updated, perhaps
+  // left behind by a reschedule — shouldn't block someone whose actual
+  // last session (today's) was already attended.
+  const anyUpcomingScheduled=monthLessons.some(l=>l.status==='scheduled' && (l.date||'')>=todayKey);
+  if(anyUpcomingScheduled) return false;
   const anyAttended=monthLessons.some(l=>l.status==='attended');
   return anyAttended;
 }
@@ -3214,6 +3223,43 @@ function sendRenewalReminder(studentId){
     console.error('sendRenewalReminder failed:', err);
     showToast('Could not open the reminder — '+(err.message||'unexpected error')+'. Check the browser console for details.');
   }
+}
+
+// ── Trial Follow-up ────────────────────────────────────────────────────
+// Students still on a trial/group-trial plan who have actually attended
+// their trial session but haven't converted to a paid plan yet. Only a
+// WhatsApp reminder action here — converting them is a separate,
+// deliberate action taken from the Students tab (Convert button), not a
+// one-click here to avoid accidentally locking in a plan.
+function renderTrialFollowUp(){
+  const host=document.getElementById('trial-followup-list');
+  if(!host) return;
+  const rows=[];
+  (db.students||[]).forEach(s=>{
+    if((s.status||'active')==='archived' || s.frozen) return;
+    if(s.plan!=='trial' && s.plan!=='group-trial') return;
+    const attendedTrial=(db.lessons||[]).find(l=>
+      (String(l.studentId)===String(s.id) || l.student===s.name) &&
+      (l.status_record||'active')!=='archived' &&
+      l.status==='attended'
+    );
+    if(!attendedTrial) return; // trial hasn't happened yet
+    rows.push({s, trialDate: attendedTrial.date});
+  });
+  rows.sort((a,b)=>String(a.trialDate||'').localeCompare(String(b.trialDate||'')));
+  if(!rows.length){
+    host.innerHTML='<div class="empty"><div class="empty-icon">✅</div><div class="empty-text">No trial follow-ups pending.</div></div>';
+    return;
+  }
+  host.innerHTML=rows.map(({s,trialDate})=>{
+    return `<div class="unpaid-item">
+      <div>
+        <div class="unpaid-name">${escapeHtml(s.name)}</div>
+        <div class="unpaid-meta">${escapeHtml(s.instrument||'')} ${s.instrument&&s.teacher?'·':''} ${escapeHtml(s.teacher||'')} · <span class="badge badge-red" style="font-size:10px">Trial ${trialDate?formatDateDMY(trialDate):''}</span></div>
+      </div>
+      <button class="btn btn-sm" onclick="sendTrialConversionMessage(${s.id})" title="Opens WhatsApp with the trial follow-up reminder">📱 Reminder</button>
+    </div>`;
+  }).join('');
 }
 
 // ── Conflict Sweep ────────────────────────────────────────────────────
@@ -5333,6 +5379,7 @@ function switchPage(page, btn){
   if(page==='reports')renderReports();
   if(page==='profiles'){refreshInstrumentSelectors(); renderProfiles(); renderInstrumentPage(); if(typeof renderAddProfileTimeSlots==='function') renderAddProfileTimeSlots();}
   if(page==='renewals' && typeof renderRenewalsDue==='function') renderRenewalsDue();
+  if(page==='renewals' && typeof renderTrialFollowUp==='function') renderTrialFollowUp();
   if(page==='instruments')renderInstrumentPage();
   if(page==='database')renderDatabase(); if(page==='cloud'){}
   if(page==='notes' && typeof renderNotesPage==='function')renderNotesPage();
