@@ -304,7 +304,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-71</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-72</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1299,19 +1299,25 @@ function isMonthlyPlan(plan){
 // (Students page, Database, Overview revenue, Student Profile, etc.)
 // stays consistent rather than each needing its own override check.
 function getStudentPlanAmount(student){
-  if(student && student.customAmount!=null && student.customAmount!==''){
-    const n=Number(student.customAmount);
-    if(!Number.isNaN(n)) return n;
-  }
-  // Auto monthly plans: per-session rate × sessions scheduled this month.
-  // Before any sessions exist (e.g. mid-add), fall back to a 4-session
-  // estimate so the displayed price isn't misleadingly zero.
-  if(student && (student.plan==='monthly' || student.plan==='group-monthly')){
+  if(!student) return 0;
+  // The right session count for THIS billing cycle, by plan type — needed
+  // whether a custom per-lesson rate applies or the standard rate does.
+  let sessionCount;
+  if(student.plan==='monthly' || student.plan==='group-monthly'){
     const n=monthlyScheduledSessionCount(student);
-    const rate=planPerSessionRate(student.plan);
-    return (n>0 ? n : 4) * rate;
+    sessionCount = n>0 ? n : 4; // fallback estimate before lessons exist
+  } else {
+    sessionCount = (typeof getPlanSessionCount==='function' ? getPlanSessionCount(student.plan) : 0) || 1;
   }
-  return PLAN_AMOUNTS[student?.plan]||0;
+  if(student.customAmount!=null && student.customAmount!==''){
+    const rate=Number(student.customAmount);
+    if(!Number.isNaN(rate)) return rate*sessionCount;
+  }
+  if(student.plan==='monthly' || student.plan==='group-monthly'){
+    const rate=planPerSessionRate(student.plan);
+    return sessionCount*rate;
+  }
+  return PLAN_AMOUNTS[student.plan]||0;
 }
 
 // Per-lesson rate for WhatsApp message pricing. Group plans bill 750/lesson,
@@ -2736,7 +2742,8 @@ function editStudent(id){
      <div class="form-field"><label for="es-plan">Payment Plan</label><select id="es-plan" onchange="onEditStudentDayChange(${s.id})">
        ${planOptionsHtml(s.plan)}
      </select></div>
-     <div class="form-field"><label for="es-custom-amount">Custom Amount (EGP)${isWeeklyPlan(s.plan)?' / session':''}</label><input id="es-custom-amount" type="number" min="0" step="1" placeholder="Standard: ${PLAN_AMOUNTS[s.plan]||0}" value="${s.customAmount!=null?escapeAttr(s.customAmount):''}"><small style="color:var(--text-muted);display:block;margin-top:2px">Leave blank to use the standard plan price. Set a value here for a discount or special rate.</small></div>
+     <div class="form-field"><label for="es-custom-amount">Custom Amount — per lesson (EGP)</label><input id="es-custom-amount" type="number" min="0" step="1" placeholder="Standard: ${whatsAppPerLessonRate(s.plan)}/lesson" value="${s.customAmount!=null?escapeAttr(s.customAmount):''}"><small style="color:var(--text-muted);display:block;margin-top:2px">Leave blank for the standard per-lesson rate. Set a value for a standing discount — multiplied by however many lessons fall in each billing cycle.</small></div>
+     <div class="form-field"><label for="es-custom-pay">Custom Pay — next renewal only (EGP)</label><input id="es-custom-pay" type="number" min="0" step="1" placeholder="e.g. couldn't reschedule a make-up" value="${s.customPay!=null?escapeAttr(s.customPay):''}"><small style="color:var(--text-muted);display:block;margin-top:2px">A one-time flat total for the NEXT renewal only (e.g. adjusting for a make-up that couldn't be rescheduled). Clears itself automatically once that renewal is processed.</small></div>
      <div class="form-field"><label for="es-dob">Date of Birth</label><div style="display:flex;gap:4px"><input id="es-dob" type="text" placeholder="dd/mm/yyyy" maxlength="10" oninput="maskDateInput(this)" value="${escapeAttr(isoToDmy(s.dob))}"><button type="button" class="btn btn-sm" onclick="openDatePicker('es-dob')">📅</button></div></div>
      <div class="form-field"><label for="es-joined">Starting Date</label><div style="display:flex;gap:4px"><input id="es-joined" type="text" placeholder="dd/mm/yyyy" maxlength="10" oninput="maskDateInput(this)" value="${escapeAttr(isoToDmy(s.joined_date))}"><button type="button" class="btn btn-sm" onclick="openDatePicker('es-joined')">📅</button></div></div>
      <div class="form-field"><label for="es-phone1">Phone</label><input id="es-phone1" value="${escapeAttr(s.phone1)}"></div>
@@ -2791,6 +2798,8 @@ function saveEditStudent(id){
  s.plan=document.getElementById('es-plan')?.value||s.plan;
  const customAmountRaw=document.getElementById('es-custom-amount')?.value;
  s.customAmount=(customAmountRaw==null||customAmountRaw==='')?null:Number(customAmountRaw);
+ const customPayRaw=document.getElementById('es-custom-pay')?.value;
+ s.customPay=(customPayRaw==null||customPayRaw==='')?null:Number(customPayRaw);
  s.dob=dmyToIso(document.getElementById('es-dob')?.value||'');
  s.joined_date=dmyToIso(document.getElementById('es-joined')?.value||'');
 
@@ -3197,8 +3206,14 @@ function renderRenewalsDue(){
     const dayNumbers=(typeof getWeekdayDatesInMonth==='function') ? getWeekdayDatesInMonth(nextMonthKey, s.lesson_day) : [];
     const lessonCount=dayNumbers.length;
     const rate=(typeof whatsAppPerLessonRate==='function') ? whatsAppPerLessonRate(s.plan) : (s.plan==='group-monthly'?750:500);
-    let amount;
-    if(s.customAmount!=null && s.customAmount!==''){
+    let amount, isCustomPay=false;
+    if(s.customPay!=null && s.customPay!==''){
+      // Custom Pay is a one-time flat override for THIS renewal only (e.g.
+      // a make-up that couldn't be rescheduled) — takes priority over both
+      // the per-lesson Custom Amount and the standard rate.
+      amount=Number(s.customPay)||0;
+      isCustomPay=true;
+    } else if(s.customAmount!=null && s.customAmount!==''){
       // A Custom Amount is a PER-LESSON rate (e.g. a discounted rate), not
       // a flat total — it must scale with however many lessons actually
       // fall in the month being billed, the same as the standard rate does.
@@ -3208,22 +3223,25 @@ function renderRenewalsDue(){
       amount=lessonCount*rate;
     }
     const remindedAt=db.remindersSent[s.id+'_renewal_'+nextMonthKey]||null;
-    rows.push({s, lessonCount, amount, remindedAt});
+    rows.push({s, lessonCount, amount, remindedAt, isCustomPay});
   });
   rows.sort((a,b)=>(a.s.name||'').localeCompare(b.s.name||''));
   if(!rows.length){
     host.innerHTML='<div class="empty"><div class="empty-icon">✅</div><div class="empty-text">No renewals due — no monthly students have finished this month\'s sessions yet.</div></div>';
     return;
   }
-  host.innerHTML=rows.map(({s,lessonCount,amount,remindedAt})=>{
+  host.innerHTML=rows.map(({s,lessonCount,amount,remindedAt,isCustomPay})=>{
     const remindedBadge = remindedAt
       ? `<span class="badge badge-blue" style="font-size:10px" title="Reminded ${escapeAttr(new Date(remindedAt).toLocaleString())}">✓ Reminded ${escapeHtml(timeAgoLabel(remindedAt))}</span>`
       : '';
     const reminderBtnLabel = remindedAt ? '📱 Remind Again' : '📱 Reminder';
+    const customPayBadge = isCustomPay
+      ? '<span class="badge badge-amber" style="font-size:10px" title="A one-time Custom Pay amount is set for this renewal">✎ Custom Pay</span>'
+      : '';
     return `<div class="unpaid-item">
       <div>
         <div class="unpaid-name">${escapeHtml(s.name)}</div>
-        <div class="unpaid-meta">${escapeHtml(s.instrument||'')} ${s.instrument&&s.teacher?'·':''} ${escapeHtml(s.teacher||'')} · <span class="badge badge-red" style="font-size:10px">Finished this month</span> ${remindedBadge}</div>
+        <div class="unpaid-meta">${escapeHtml(s.instrument||'')} ${s.instrument&&s.teacher?'·':''} ${escapeHtml(s.teacher||'')} · <span class="badge badge-red" style="font-size:10px">Finished this month</span> ${remindedBadge} ${customPayBadge}</div>
       </div>
       <div style="display:flex;align-items:center;gap:10px">
         <span style="font-size:12px;color:var(--text-muted)">${escapeHtml(nextMonthName)}: <b style="color:var(--gold)">${lessonCount} lesson${lessonCount===1?'':'s'} · ${egp(amount)}</b></span>
@@ -3264,7 +3282,11 @@ function sendRenewalReminder(studentId){
     const dateList=dayNumbers.map(ordinalDay).join(', ');
 
     let amount;
-    if(student.customAmount!=null && student.customAmount!==''){
+    if(student.customPay!=null && student.customPay!==''){
+      // Custom Pay is a one-time flat total for THIS renewal only — takes
+      // priority over both Custom Amount and the standard rate.
+      amount=Number(student.customPay)||0;
+    } else if(student.customAmount!=null && student.customAmount!==''){
       // Custom Amount is a per-lesson rate — scale it by this month's
       // lesson count, same as the standard rate, so the price quoted to
       // the student matches the lesson count in the same message.
@@ -9786,6 +9808,12 @@ function confirmRenewal(id){
       if(db.paymentMethods) delete db.paymentMethods[key];
       if(typeof syncPaymentToggleToSupabase==='function') syncPaymentToggleToSupabase(student.id, m, false, null);
     });
+    // Custom Pay is a one-time override for THIS renewal only — clear it
+    // now that the renewal has actually been processed, so it doesn't
+    // silently carry forward and apply to a future cycle too.
+    if(student.customPay!=null){
+      student.customPay=null;
+    }
   }
 
   save();
