@@ -304,7 +304,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-72</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-73</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -3859,40 +3859,16 @@ function saveEditLesson(id){
  showToast('Lesson updated');
 }
 
+// NOTE: this used to force the student's current-month payment status to
+// false the moment their last scheduled lesson was marked attended, so
+// they'd show up needing to pay again. That's now handled correctly and
+// non-destructively by the Renewals Due list (studentFinishedMonth), which
+// doesn't touch a payment record that's already correct — so a student who
+// legitimately paid and finished their sessions stays marked paid. The
+// actual reset for a NEW cycle happens in confirmRenewal once a fresh
+// batch is actually scheduled, not retroactively on the old one.
 function checkBatchCompletedUnpaid(l){
-  if(!l) return;
-  const remaining=(db.lessons||[]).filter(x=>
-    (String(x.studentId)===String(l.studentId) || x.student===l.student) &&
-    x.status==='scheduled' &&
-    (x.status_record||'active')!=='archived'
-  );
-  if(remaining.length) return; // more sessions left in this batch — nothing to do yet
-
-  const student=(db.students||[]).find(s=>String(s.id)===String(l.studentId) || s.name===l.student);
-  if(!student) return;
-
-  const nowKey=realCurrentMonth();
-  if(db.payments[student.id+'_'+nowKey]!==false){
-    db.payments[student.id+'_'+nowKey]=false;
-    save();
-    if(window.supabaseClientV1){
-      const payload={student_id: student.id, student_name: student.name, month: nowKey, paid: false};
-      window.supabaseClientV1.from('payments').select('id').eq('student_id', student.id).eq('month', nowKey)
-        .then(({data,error})=>{
-          if(error){ console.warn('Payment reset lookup failed:', error.message); return; }
-          if(data && data.length){
-            return window.supabaseClientV1.from('payments').update(payload).eq('id', data[0].id);
-          } else {
-            return window.supabaseClientV1.from('payments').insert([payload]);
-          }
-        })
-        .then(res=>{ if(res && res.error) console.warn('Payment reset sync failed:', res.error.message); })
-        .catch(err=>console.warn('Payment reset sync failed:', err.message));
-    }
-    renderStudents();
-    renderOverview();
-    showToast(student.name+' finished their last scheduled session — marked unpaid for renewal');
-  }
+  // Intentionally a no-op now — see note above.
 }
 
 // When a lesson is marked attended, it counts as UNPAID unless the
