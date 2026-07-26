@@ -304,7 +304,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-69</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-70</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1396,8 +1396,18 @@ function formatMonthName(monthStr){
 function toWhatsAppNumber(phone){
   let digits=String(phone||'').replace(/\D/g,'');
   if(!digits) return '';
-  if(digits.startsWith('0')) digits='20'+digits.slice(1);
-  else if(!digits.startsWith('20')) digits='20'+digits;
+  // A bare Egyptian LOCAL number (e.g. 01012345678): strip the domestic
+  // trunk '0' and prepend Egypt's country code.
+  if(digits.startsWith('0')) return '20'+digits.slice(1);
+  // Already has Egypt's country code.
+  if(digits.startsWith('20') && digits.length>=11) return digits;
+  // A bare 10-digit number with no leading 0 is almost always an Egyptian
+  // mobile typed without it (e.g. 1012345678) — add the country code.
+  if(digits.length===10) return '20'+digits;
+  // Otherwise this already looks like a full international number with
+  // its own country code (e.g. +234... Nigeria, +86... China) — leave it
+  // untouched. Forcing Egypt's '20' onto it produces an invalid number,
+  // which was the reported bug for these numbers.
   return digits;
 }
 
@@ -1741,7 +1751,11 @@ function sendTrialConversionMessage(studentId){
     const win=window.open('https://api.whatsapp.com/send?phone='+phone+'&text='+encodeURIComponent(message), '_blank');
     if(!win){
       showToast('Your browser blocked the WhatsApp popup — allow popups for this site, then try again.');
+      return;
     }
+    db.remindersSent[studentId+'_trial']=new Date().toISOString();
+    save();
+    if(typeof renderTrialFollowUp==='function') renderTrialFollowUp();
   }catch(err){
     console.error('sendTrialConversionMessage failed:', err);
     showToast('Could not open the message — '+(err.message||'unexpected error')+'. Check the browser console for details.');
@@ -1844,7 +1858,7 @@ sel.value=(MONTHS.find(m=>m.key===currentKey)||MONTHS[0]).key;
 function currentMonth(){return document.getElementById('global-month').value;}
 
 // State
-let db = JSON.parse(localStorage.getItem('musicacademy_db')||'{"students":[],"payments":{},"expenses":[],"lessons":[],"lessonLogs":[]}'); db.lessons=db.lessons||[]; db.lessonLogs=db.lessonLogs||[]; db.instruments=db.instruments||[]; db.teacherProfiles=db.teacherProfiles||[]; db.payrollPaid=db.payrollPaid||{}; db.practiceSessions=db.practiceSessions||[]; db.paymentMethods=db.paymentMethods||{}; db.resources=db.resources||[]; db.refunds=db.refunds||[]; db.otherRevenue=db.otherRevenue||[]; db.wishlists=db.wishlists||{};
+let db = JSON.parse(localStorage.getItem('musicacademy_db')||'{"students":[],"payments":{},"expenses":[],"lessons":[],"lessonLogs":[]}'); db.lessons=db.lessons||[]; db.lessonLogs=db.lessonLogs||[]; db.instruments=db.instruments||[]; db.teacherProfiles=db.teacherProfiles||[]; db.payrollPaid=db.payrollPaid||{}; db.practiceSessions=db.practiceSessions||[]; db.paymentMethods=db.paymentMethods||{}; db.resources=db.resources||[]; db.refunds=db.refunds||[]; db.otherRevenue=db.otherRevenue||[]; db.wishlists=db.wishlists||{}; db.remindersSent=db.remindersSent||{};
 function save(){try{localStorage.setItem('musicacademy_db',JSON.stringify(db));}catch(e){console.error('save() failed:',e);}}
 
 // Updates the "Last Sync" label on the Cloud tab. Previously this was
@@ -3152,6 +3166,21 @@ function studentFinishedMonth(student, monthKey){
 // times their lesson weekday occurs in that month, times the per-session
 // rate — e.g. July has 5 Fridays so a Friday student owes 5 lessons that
 // month, August has 4 so they'd owe 4 the month after.
+// Short relative-time label for a past ISO timestamp, e.g. "2h ago",
+// "just now", "3d ago" — used for the "already reminded" badges.
+function timeAgoLabel(isoString){
+  if(!isoString) return '';
+  const then=new Date(isoString).getTime();
+  if(Number.isNaN(then)) return '';
+  const diffMin=Math.floor((Date.now()-then)/60000);
+  if(diffMin<1) return 'just now';
+  if(diffMin<60) return diffMin+'m ago';
+  const diffHr=Math.floor(diffMin/60);
+  if(diffHr<24) return diffHr+'h ago';
+  const diffDay=Math.floor(diffHr/24);
+  return diffDay+'d ago';
+}
+
 function renderRenewalsDue(){
   const host=document.getElementById('renewals-due-list');
   if(!host) return;
@@ -3174,22 +3203,27 @@ function renderRenewalsDue(){
     } else {
       amount=lessonCount*rate;
     }
-    rows.push({s, lessonCount, amount});
+    const remindedAt=db.remindersSent[s.id+'_renewal_'+nextMonthKey]||null;
+    rows.push({s, lessonCount, amount, remindedAt});
   });
   rows.sort((a,b)=>(a.s.name||'').localeCompare(b.s.name||''));
   if(!rows.length){
     host.innerHTML='<div class="empty"><div class="empty-icon">✅</div><div class="empty-text">No renewals due — no monthly students have finished this month\'s sessions yet.</div></div>';
     return;
   }
-  host.innerHTML=rows.map(({s,lessonCount,amount})=>{
+  host.innerHTML=rows.map(({s,lessonCount,amount,remindedAt})=>{
+    const remindedBadge = remindedAt
+      ? `<span class="badge badge-blue" style="font-size:10px" title="Reminded ${escapeAttr(new Date(remindedAt).toLocaleString())}">✓ Reminded ${escapeHtml(timeAgoLabel(remindedAt))}</span>`
+      : '';
+    const reminderBtnLabel = remindedAt ? '📱 Remind Again' : '📱 Reminder';
     return `<div class="unpaid-item">
       <div>
         <div class="unpaid-name">${escapeHtml(s.name)}</div>
-        <div class="unpaid-meta">${escapeHtml(s.instrument||'')} ${s.instrument&&s.teacher?'·':''} ${escapeHtml(s.teacher||'')} · <span class="badge badge-red" style="font-size:10px">Finished this month</span></div>
+        <div class="unpaid-meta">${escapeHtml(s.instrument||'')} ${s.instrument&&s.teacher?'·':''} ${escapeHtml(s.teacher||'')} · <span class="badge badge-red" style="font-size:10px">Finished this month</span> ${remindedBadge}</div>
       </div>
       <div style="display:flex;align-items:center;gap:10px">
         <span style="font-size:12px;color:var(--text-muted)">${escapeHtml(nextMonthName)}: <b style="color:var(--gold)">${lessonCount} lesson${lessonCount===1?'':'s'} · ${egp(amount)}</b></span>
-        <button class="btn btn-sm" onclick="sendRenewalReminder(${s.id})" title="Opens WhatsApp with the next-month payment reminder">📱 Reminder</button>
+        <button class="btn btn-sm" onclick="sendRenewalReminder(${s.id})" title="Opens WhatsApp with the next-month payment reminder">${reminderBtnLabel}</button>
         <button class="btn btn-sm btn-gold" onclick="renewStudentSubscription(${s.id})">🔁 Renew</button>
       </div>
     </div>`;
@@ -3254,7 +3288,13 @@ function sendRenewalReminder(studentId){
     const win=window.open('https://api.whatsapp.com/send?phone='+phone+'&text='+encodeURIComponent(message), '_blank');
     if(!win){
       showToast('Your browser blocked the WhatsApp popup — allow popups for this site, then try again.');
+      return;
     }
+    // Record the reminder so the Renewals list can show it was already
+    // sent this cycle, and the button can warn before sending it twice.
+    db.remindersSent[studentId+'_renewal_'+month]=new Date().toISOString();
+    save();
+    if(typeof renderRenewalsDue==='function') renderRenewalsDue();
   }catch(err){
     console.error('sendRenewalReminder failed:', err);
     showToast('Could not open the reminder — '+(err.message||'unexpected error')+'. Check the browser console for details.');
@@ -3280,20 +3320,25 @@ function renderTrialFollowUp(){
       l.status==='attended'
     );
     if(!attendedTrial) return; // trial hasn't happened yet
-    rows.push({s, trialDate: attendedTrial.date});
+    const remindedAt=db.remindersSent[s.id+'_trial']||null;
+    rows.push({s, trialDate: attendedTrial.date, remindedAt});
   });
   rows.sort((a,b)=>String(a.trialDate||'').localeCompare(String(b.trialDate||'')));
   if(!rows.length){
     host.innerHTML='<div class="empty"><div class="empty-icon">✅</div><div class="empty-text">No trial follow-ups pending.</div></div>';
     return;
   }
-  host.innerHTML=rows.map(({s,trialDate})=>{
+  host.innerHTML=rows.map(({s,trialDate,remindedAt})=>{
+    const remindedBadge = remindedAt
+      ? `<span class="badge badge-blue" style="font-size:10px" title="Reminded ${escapeAttr(new Date(remindedAt).toLocaleString())}">✓ Reminded ${escapeHtml(timeAgoLabel(remindedAt))}</span>`
+      : '';
+    const reminderBtnLabel = remindedAt ? '📱 Remind Again' : '📱 Reminder';
     return `<div class="unpaid-item">
       <div>
         <div class="unpaid-name">${escapeHtml(s.name)}</div>
-        <div class="unpaid-meta">${escapeHtml(s.instrument||'')} ${s.instrument&&s.teacher?'·':''} ${escapeHtml(s.teacher||'')} · <span class="badge badge-red" style="font-size:10px">Trial ${trialDate?formatDateDMY(trialDate):''}</span></div>
+        <div class="unpaid-meta">${escapeHtml(s.instrument||'')} ${s.instrument&&s.teacher?'·':''} ${escapeHtml(s.teacher||'')} · <span class="badge badge-red" style="font-size:10px">Trial ${trialDate?formatDateDMY(trialDate):''}</span> ${remindedBadge}</div>
       </div>
-      <button class="btn btn-sm" onclick="sendTrialConversionMessage(${s.id})" title="Opens WhatsApp with the trial follow-up reminder">📱 Reminder</button>
+      <button class="btn btn-sm" onclick="sendTrialConversionMessage(${s.id})" title="Opens WhatsApp with the trial follow-up reminder">${reminderBtnLabel}</button>
     </div>`;
   }).join('');
 }
@@ -4301,11 +4346,7 @@ function renderReports(){
      const phone=(s.phone1||s.phone||'').trim();
      let followUp='<span style="color:var(--text-muted)">No phone</span>';
      if(phone){
-       // Normalize to an international wa.me number: strip non-digits, and
-       // turn a leading Egyptian 0 into the 20 country code.
-       let digits=phone.replace(/[^0-9]/g,'');
-       if(digits.startsWith('0')) digits='20'+digits.slice(1);
-       else if(!digits.startsWith('20') && digits.length===10) digits='20'+digits;
+       const digits=toWhatsAppNumber(phone);
        const eNote=String.fromCodePoint(0x1F3B5);
        const msg=encodeURIComponent('Hi '+(s.first_name||s.name||'')+'! We loved having you at your trial session at Cymatics. Would you like to continue with regular lessons? We would be happy to reserve your spot '+eNote);
        // api.whatsapp.com instead of wa.me — see the note in sendPaymentReminder.
