@@ -304,7 +304,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-68</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-69</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1790,17 +1790,17 @@ function sendPaymentReminder(studentId){
 
     // Emojis built at runtime from code points — the source stays pure
     // ASCII so no file-encoding or hosting step can corrupt them.
-    // Emojis chosen from the Basic Multilingual Plane (single UTF-16 code
-    // unit) rather than the colorful-but-surrogate-pair emoji (like a piano
-    // or microphone) that some WhatsApp Desktop/Windows installs fail to
-    // render, showing tofu boxes instead. These render everywhere.
-    const eClock=String.fromCodePoint(0x23F0), eSparkle=String.fromCodePoint(0x2728), eStar=String.fromCodePoint(0x2B50);
+    // Emojis built at runtime from code points so the source stays pure
+    // ASCII (immune to any file-encoding/hosting corruption). These render
+    // correctly now that links go through api.whatsapp.com rather than the
+    // wa.me redirector, which was corrupting multi-byte characters.
+    const ePiano=String.fromCodePoint(0x1F3B9), eMic=String.fromCodePoint(0x1F3A4), eSparkle=String.fromCodePoint(0x1F4AB);
     const message='Hello '+firstName+' ! \n'+
       'Hope you\'re having a blast at Cymatics!\n'+
-      'Just a little reminder that your payment for '+monthName+' sessions ('+lessonCount+' lessons on the '+dateList+') is due Today '+eClock+eSparkle+'\n'+
+      'Just a little reminder that your payment for '+monthName+' sessions ('+lessonCount+' lessons on the '+dateList+') is due Today '+ePiano+eMic+'\n'+
       'It\'s '+Math.round(price)+' EGP for the month - keeping things up to date means you won\'t miss a single beat of the fun! \n'+
       'Instapay : 01277336092 - Mario Naguib\n'+
-      'Can\'t wait to see you at the next session! '+eStar;
+      'Can\'t wait to see you at the next session! '+eSparkle;
 
     // Using api.whatsapp.com's direct /send endpoint instead of the wa.me
     // short-link redirector — wa.me's own redirect step appears to mangle
@@ -3234,17 +3234,17 @@ function sendRenewalReminder(studentId){
     }
     const firstName=student.first_name||(student.name||'').split(' ')[0]||student.name;
 
-    // Emojis chosen from the Basic Multilingual Plane (single UTF-16 code
-    // unit) rather than the colorful-but-surrogate-pair emoji (like a piano
-    // or microphone) that some WhatsApp Desktop/Windows installs fail to
-    // render, showing tofu boxes instead. These render everywhere.
-    const eClock=String.fromCodePoint(0x23F0), eSparkle=String.fromCodePoint(0x2728), eStar=String.fromCodePoint(0x2B50);
+    // Emojis built at runtime from code points so the source stays pure
+    // ASCII (immune to any file-encoding/hosting corruption). These render
+    // correctly now that links go through api.whatsapp.com rather than the
+    // wa.me redirector, which was corrupting multi-byte characters.
+    const ePiano=String.fromCodePoint(0x1F3B9), eMic=String.fromCodePoint(0x1F3A4), eSparkle=String.fromCodePoint(0x1F4AB);
     const message='Hello '+firstName+'!\n'+
       'Hope you\'re having a blast at Cymatics!\n'+
-      'Just a little reminder that your payment for '+monthName+' sessions ('+lessonCount+' lessons on the '+dateList+') is due Today '+eClock+eSparkle+'\n'+
+      'Just a little reminder that your payment for '+monthName+' sessions ('+lessonCount+' lessons on the '+dateList+') is due Today '+ePiano+eMic+'\n'+
       'It\'s '+Math.round(amount)+' EGP for the month — keeping things up to date means you won\'t miss a single beat of the fun! \n'+
       'Instapay: 01277336092 -Mario Naguib\n'+
-      'Can\'t wait to see you at the next session! '+eStar;
+      'Can\'t wait to see you at the next session! '+eSparkle;
 
     // Using api.whatsapp.com's direct /send endpoint instead of the wa.me
     // short-link redirector — wa.me's own redirect step appears to mangle
