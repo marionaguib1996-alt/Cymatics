@@ -304,7 +304,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-77</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-79</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1741,7 +1741,13 @@ function sendTrialConversionMessage(studentId){
     const pricing=getWhatsAppLessonPricing(student, conversionPlan);
     const price=pricing.price;
 
-    const firstName=student.first_name||(student.name||'').split(' ')[0]||student.name;
+    // When only a PARENT number is on file the message is going to the
+    // parent, not the student — so greet them generically rather than
+    // addressing the parent by the child's first name.
+    const usingParentNumber=!String(student.phone1||'').trim() && !!String(student.phone2||'').trim();
+    const firstName=usingParentNumber
+      ? 'Dear'
+      : (student.first_name||(student.name||'').split(' ')[0]||student.name);
 
     // Emojis from code points so the source stays pure ASCII (immune to any
     // file-encoding/hosting corruption).
@@ -1813,7 +1819,13 @@ function sendPaymentReminder(studentId){
       const rate=whatsAppPerLessonRate(student.plan);
       price = lessonCount>0 ? lessonCount*rate : rate;
     }
-    const firstName=student.first_name||(student.name||'').split(' ')[0]||student.name;
+    // When only a PARENT number is on file the message is going to the
+    // parent, not the student — so greet them generically rather than
+    // addressing the parent by the child's first name.
+    const usingParentNumber=!String(student.phone1||'').trim() && !!String(student.phone2||'').trim();
+    const firstName=usingParentNumber
+      ? 'Dear'
+      : (student.first_name||(student.name||'').split(' ')[0]||student.name);
 
     // Emojis built at runtime from code points — the source stays pure
     // ASCII so no file-encoding or hosting step can corrupt them.
@@ -3211,6 +3223,64 @@ function timeAgoLabel(isoString){
   return diffDay+'d ago';
 }
 
+// Sessions a student paid for but won't receive because the TEACHER was
+// absent and no make-up was booked. Deliberately excludes 'absent_excused'
+// (the STUDENT missed the session) — a student's own absence doesn't earn
+// a refund. Each of these deducts one session from next month's bill
+// instead of being made up.
+function teacherAbsenceDeductions(student){
+  if(!student) return [];
+  return (db.lessons||[]).filter(l=>
+    (String(l.studentId)===String(student.id) || l.student===student.name) &&
+    (l.status_record||'active')!=='archived' &&
+    l.status==='teacher_absent' &&
+    !l.makeupResolved &&
+    !(typeof findMakeupLessonFor==='function' && findMakeupLessonFor(l.id))
+  );
+}
+
+// "31st of July" — used when referring to a session that already passed.
+function dateWithMonthLabel(dateKey){
+  const parts=String(dateKey||'').slice(0,10).split('-');
+  if(parts.length!==3) return dateKey||'';
+  const day=Number(parts[2]);
+  const monthName=(typeof formatMonthName==='function') ? formatMonthName(parts[0]+'-'+parts[1]) : parts[1];
+  return (typeof ordinalDay==='function'?ordinalDay(day):day)+' of '+monthName;
+}
+
+// How to refer to an upcoming absence: just the weekday when it's still
+// inside the current (Friday-to-Thursday) week, otherwise the full date —
+// "next Friday" is only meaningful if it really is this coming week.
+function upcomingAbsenceWhenLabel(dateKey){
+  const todayKey=new Date().toISOString().slice(0,10);
+  const weekStart=(typeof getFridayWeekStart==='function') ? getFridayWeekStart(todayKey) : todayKey;
+  const weekEnd=(typeof addDaysToDateStringLocal==='function') ? addDaysToDateStringLocal(weekStart,7) : null;
+  const withinThisWeek = weekEnd ? (dateKey>=weekStart && dateKey<weekEnd) : false;
+  if(withinThisWeek){
+    const d=(typeof parseDateUTC==='function') ? parseDateUTC(dateKey) : null;
+    const dayName=d ? WEEKDAY_NAMES[d.getUTCDay()] : '';
+    if(dayName) return 'next '+dayName;
+  }
+  return 'on the '+dateWithMonthLabel(dateKey);
+}
+
+// One note line per deducted session, worded by whether the missed
+// session is still upcoming or already passed.
+function buildDeductionNotes(student, deductions){
+  const eSmile=String.fromCodePoint(0x263A);
+  const todayKey=new Date().toISOString().slice(0,10);
+  return (deductions||[]).map(l=>{
+    if((l.date||'')>=todayKey){
+      const teacherName=l.teacher||student.teacher||'';
+      const prof=(db.teacherProfiles||[]).find(p=>p.name===teacherName);
+      const title=prof?.title||'Mr';
+      const first=String(teacherName).trim().split(' ')[0]||teacherName;
+      return 'Kindly note that the payment is deducted as '+title+' '+first+' won\'t be available '+upcomingAbsenceWhenLabel(l.date)+' to give a session '+eSmile;
+    }
+    return 'Kindly note that the payment is deducted as The session on '+dateWithMonthLabel(l.date)+' wasn\'t made-up '+eSmile;
+  });
+}
+
 function renderRenewalsDue(){
   const host=document.getElementById('renewals-due-list');
   if(!host) return;
@@ -3235,6 +3305,10 @@ function renderRenewalsDue(){
     }
     const lessonCount=dayNumbers.length;
     const rate=(typeof whatsAppPerLessonRate==='function') ? whatsAppPerLessonRate(s.plan) : (s.plan==='group-monthly'?750:500);
+    // Sessions already paid for that the student won't receive (teacher
+    // absent, no make-up booked) come off next month's bill.
+    const deductions=(typeof teacherAbsenceDeductions==='function') ? teacherAbsenceDeductions(s) : [];
+    const billableCount=Math.max(0, lessonCount-deductions.length);
     let amount, isCustomPay=false;
     if(s.customPay!=null && s.customPay!==''){
       // Custom Pay is a one-time flat override for THIS renewal only (e.g.
@@ -3247,19 +3321,19 @@ function renderRenewalsDue(){
       // a flat total — it must scale with however many lessons actually
       // fall in the month being billed, the same as the standard rate does.
       const customRate=Number(s.customAmount)||0;
-      amount=lessonCount*customRate;
+      amount=billableCount*customRate;
     } else {
-      amount=lessonCount*rate;
+      amount=billableCount*rate;
     }
     const remindedAt=db.remindersSent[s.id+'_renewal_'+nextMonthKey]||null;
-    rows.push({s, lessonCount, amount, remindedAt, isCustomPay});
+    rows.push({s, lessonCount, amount, remindedAt, isCustomPay, deductionCount:deductions.length});
   });
   rows.sort((a,b)=>(a.s.name||'').localeCompare(b.s.name||''));
   if(!rows.length){
     host.innerHTML='<div class="empty"><div class="empty-icon">✅</div><div class="empty-text">No renewals due — no monthly students have finished this month\'s sessions yet.</div></div>';
     return;
   }
-  host.innerHTML=rows.map(({s,lessonCount,amount,remindedAt,isCustomPay})=>{
+  host.innerHTML=rows.map(({s,lessonCount,amount,remindedAt,isCustomPay,deductionCount})=>{
     const remindedBadge = remindedAt
       ? `<span class="badge badge-blue" style="font-size:10px" title="Reminded ${escapeAttr(new Date(remindedAt).toLocaleString())}">✓ Reminded ${escapeHtml(timeAgoLabel(remindedAt))}</span>`
       : '';
@@ -3267,10 +3341,13 @@ function renderRenewalsDue(){
     const customPayBadge = isCustomPay
       ? '<span class="badge badge-amber" style="font-size:10px" title="A one-time Custom Pay amount is set for this renewal">✎ Custom Pay</span>'
       : '';
+    const deductionBadge = (deductionCount>0 && !isCustomPay)
+      ? `<span class="badge badge-amber" style="font-size:10px" title="${deductionCount} session${deductionCount===1?'':'s'} deducted — teacher absent, no make-up booked">− ${deductionCount} deducted</span>`
+      : '';
     return `<div class="unpaid-item">
       <div>
         <div class="unpaid-name">${escapeHtml(s.name)}</div>
-        <div class="unpaid-meta">${escapeHtml(s.instrument||'')} ${s.instrument&&s.teacher?'·':''} ${escapeHtml(s.teacher||'')} · <span class="badge badge-red" style="font-size:10px">Finished this month</span> ${remindedBadge} ${customPayBadge}</div>
+        <div class="unpaid-meta">${escapeHtml(s.instrument||'')} ${s.instrument&&s.teacher?'·':''} ${escapeHtml(s.teacher||'')}${s.lesson_day?' · '+escapeHtml(s.lesson_day):''}${s.lessonTime?' '+escapeHtml(formatTime12h(s.lessonTime)):''} · <span class="badge badge-red" style="font-size:10px">Finished this month</span> ${remindedBadge} ${customPayBadge} ${deductionBadge}</div>
       </div>
       <div style="display:flex;align-items:center;gap:10px">
         <span style="font-size:12px;color:var(--text-muted)">${escapeHtml(nextMonthName)}: <b style="color:var(--gold)">${lessonCount} lesson${lessonCount===1?'':'s'} · ${egp(amount)}</b></span>
@@ -3320,6 +3397,9 @@ function sendRenewalReminder(studentId){
     const lessonCount=dayNumbers.length;
     const dateList=dayNumbers.map(ordinalDay).join(', ');
 
+    const deductions=(typeof teacherAbsenceDeductions==='function') ? teacherAbsenceDeductions(student) : [];
+    const billableCount=Math.max(0, lessonCount-deductions.length);
+
     let amount;
     if(student.customPay!=null && student.customPay!==''){
       // Custom Pay is a one-time flat total for THIS renewal only — takes
@@ -3327,15 +3407,21 @@ function sendRenewalReminder(studentId){
       amount=Number(student.customPay)||0;
     } else if(student.customAmount!=null && student.customAmount!==''){
       // Custom Amount is a per-lesson rate — scale it by this month's
-      // lesson count, same as the standard rate, so the price quoted to
-      // the student matches the lesson count in the same message.
+      // billable lesson count, same as the standard rate, so the price
+      // quoted to the student matches the lesson count in the same message.
       const customRate=Number(student.customAmount)||0;
-      amount=lessonCount>0 ? lessonCount*customRate : customRate;
+      amount=billableCount*customRate;
     } else {
       const rate=whatsAppPerLessonRate(student.plan);
-      amount=lessonCount>0 ? lessonCount*rate : rate;
+      amount=billableCount*rate;
     }
-    const firstName=student.first_name||(student.name||'').split(' ')[0]||student.name;
+    // When only a PARENT number is on file the message is going to the
+    // parent, not the student — so greet them generically rather than
+    // addressing the parent by the child's first name.
+    const usingParentNumber=!String(student.phone1||'').trim() && !!String(student.phone2||'').trim();
+    const firstName=usingParentNumber
+      ? 'Dear'
+      : (student.first_name||(student.name||'').split(' ')[0]||student.name);
 
     // Optional line explaining any date(s) dropped from the count because
     // the teacher is already marked absent that day — only appears when
@@ -3348,9 +3434,14 @@ function sendRenewalReminder(studentId){
       const excludedDateList=excludedDays.map(ordinalDay).join(', ');
       const eSmile=String.fromCodePoint(0x263A);
       absenceNote = excludedDays.length===1
-        ? 'Kindly note that there is no session on '+excludedDateList+' as '+teacherTitle+' '+teacherFirstName+' won\'t be available to give the session at the time '+eSmile+'\n'
-        : 'Kindly note that there are no sessions on '+excludedDateList+' as '+teacherTitle+' '+teacherFirstName+' won\'t be available to give the session at the time '+eSmile+'\n';
+        ? '\n\nKindly note that there is no session on '+excludedDateList+' as '+teacherTitle+' '+teacherFirstName+' won\'t be available to give the session at the time '+eSmile
+        : '\n\nKindly note that there are no sessions on '+excludedDateList+' as '+teacherTitle+' '+teacherFirstName+' won\'t be available to give the session at the time '+eSmile;
     }
+
+    // Deduction notes — one per unreceived session, each on its own line
+    // after a blank line, matching the note spacing above.
+    const deductionNotes=(typeof buildDeductionNotes==='function') ? buildDeductionNotes(student, deductions) : [];
+    const deductionNoteBlock=deductionNotes.map(n=>'\n\n'+n).join('');
 
     // Emojis built at runtime from code points so the source stays pure
     // ASCII (immune to any file-encoding/hosting corruption). These render
@@ -3359,11 +3450,15 @@ function sendRenewalReminder(studentId){
     const ePiano=String.fromCodePoint(0x1F3B9), eMic=String.fromCodePoint(0x1F3A4), eSparkle=String.fromCodePoint(0x1F4AB);
     const message='Hello '+firstName+'!\n'+
       'Hope you\'re having a blast at Cymatics!\n'+
+      '\n'+
       'Just a little reminder that your payment for '+monthName+' sessions ('+lessonCount+' lessons on the '+dateList+') is due Today '+ePiano+eMic+'\n'+
-      absenceNote+
-      'It\'s '+Math.round(amount)+' EGP for the month — keeping things up to date means you won\'t miss a single beat of the fun! \n'+
+      'It\'s '+Math.round(amount)+' EGP for the month — keeping things up to date means you won\'t miss a single beat of the fun!\n'+
+      '\n'+
       'Instapay: 01277336092 -Mario Naguib\n'+
-      'Can\'t wait to see you at the next session! '+eSparkle;
+      '\n'+
+      'Can\'t wait to see you at the next session! '+eSparkle+
+      absenceNote+
+      deductionNoteBlock;
 
     // Using api.whatsapp.com's direct /send endpoint instead of the wa.me
     // short-link redirector — wa.me's own redirect step appears to mangle
@@ -3421,7 +3516,7 @@ function renderTrialFollowUp(){
     return `<div class="unpaid-item">
       <div>
         <div class="unpaid-name">${escapeHtml(s.name)}</div>
-        <div class="unpaid-meta">${escapeHtml(s.instrument||'')} ${s.instrument&&s.teacher?'·':''} ${escapeHtml(s.teacher||'')} · <span class="badge badge-red" style="font-size:10px">Trial ${trialDate?formatDateDMY(trialDate):''}</span> ${remindedBadge}</div>
+        <div class="unpaid-meta">${escapeHtml(s.instrument||'')} ${s.instrument&&s.teacher?'·':''} ${escapeHtml(s.teacher||'')}${s.lesson_day?' · '+escapeHtml(s.lesson_day):''}${s.lessonTime?' '+escapeHtml(formatTime12h(s.lessonTime)):''} · <span class="badge badge-red" style="font-size:10px">Trial ${trialDate?formatDateDMY(trialDate):''}</span> ${remindedBadge}</div>
       </div>
       <button class="btn btn-sm" onclick="sendTrialConversionMessage(${s.id})" title="Opens WhatsApp with the trial follow-up reminder">${reminderBtnLabel}</button>
     </div>`;
@@ -6030,6 +6125,27 @@ async function _autoLoadFromCloudImpl(){
        save();
      }
    }catch(wishErr){ /* silent — non-critical */ }
+
+   // Teacher absences — must round-trip to the cloud because they now
+   // affect renewal lesson counts, prices and reminder notes. Kept in its
+   // own try/catch (like the tables above) so a not-yet-created table
+   // can't fail the whole load.
+   try{
+     const {data:absRows,error:eAbs}=await client.from('teacher_absences').select('*');
+     if(eAbs){ /* table may not exist yet — silent */ }
+     else if(absRows){
+       db.teacherAbsences=absRows.map(r=>({
+         id: r.absence_key || r.id,
+         teacher: r.teacher||'',
+         date: r.date||'',
+         scope: r.scope||'day',
+         fromTime: r.from_time||null,
+         toTime: r.to_time||null,
+         reason: r.reason||null
+       }));
+       save();
+     }
+   }catch(absErr){ /* silent — non-critical */ }
 
    // Independent for the same reason as resources above — a newer,
    // less critical feature shouldn't be able to fail the main load.
@@ -12268,6 +12384,33 @@ function toggleWishlistItemDone(student, itemId){
 
 // Sync a student's whole wishlist as one row (upsert by student_code).
 // Degrades silently if the wishlists table/columns aren't present yet.
+async function syncTeacherAbsenceToSupabase(absence){
+  try{
+    if(!window.supabaseClientV1 || !absence) return;
+    const payload={
+      absence_key: String(absence.id),
+      teacher: absence.teacher||'',
+      date: absence.date||'',
+      scope: absence.scope||'day',
+      from_time: absence.fromTime||null,
+      to_time: absence.toTime||null,
+      reason: absence.reason||null
+    };
+    const {error}=await window.supabaseClientV1.from('teacher_absences')
+      .upsert(payload, {onConflict:'absence_key'});
+    if(error) console.warn('Teacher absence sync failed:', error.message);
+  }catch(err){ console.warn('Teacher absence sync failed:', err.message); }
+}
+
+async function syncTeacherAbsenceDeleteToSupabase(absenceId){
+  try{
+    if(!window.supabaseClientV1 || absenceId==null) return;
+    const {error}=await window.supabaseClientV1.from('teacher_absences')
+      .delete().eq('absence_key', String(absenceId));
+    if(error) console.warn('Teacher absence delete sync failed:', error.message);
+  }catch(err){ console.warn('Teacher absence delete sync failed:', err.message); }
+}
+
 async function syncWishlistToSupabase(student){
   try{
     if(!window.supabaseClientV1 || !student) return;
@@ -13145,11 +13288,13 @@ async function confirmTeacherAbsence(){
   // purely from the calendar, before any lesson record exists — know to
   // exclude a date this teacher won't be there for.
   dates.forEach(date=>{
-    db.teacherAbsences.push({
+    const absence={
       id: Date.now()+Math.random(),
       teacher, date, scope, fromTime, toTime, reason: reason||null,
       createdAt: new Date().toISOString()
-    });
+    };
+    db.teacherAbsences.push(absence);
+    if(typeof syncTeacherAbsenceToSupabase==='function') syncTeacherAbsenceToSupabase(absence);
   });
 
   save();
@@ -13220,25 +13365,40 @@ function generateTeacherSchedulePhoto(teacherName, dayName, silent){
   // extra 45-minute block.
   const allSlotInfo=effectiveSlots.map(slot=>{
     const slotEnd=addSlotMinutes(slot.time, slot.duration);
-    const lesson=(db.lessons||[]).find(l=>
+    const activeLessons=(db.lessons||[]).filter(l=>
       l.date===targetDate &&
       l.teacher===teacherName &&
-      l.time>=slot.time && l.time<slotEnd &&
       (l.status_record||'active')!=='archived' &&
-      l.status!=='absent_excused' && l.status!=='teacher_absent'
+      l.status!=='absent_excused' && l.status!=='teacher_absent' && l.status!=='absent_paid'
     );
-    const matchedStudent=lesson ? (db.students||[]).find(s=>String(s.id)===String(lesson.studentId) || s.name===lesson.student) : null;
+    // A lesson that STARTS inside this slot owns it.
+    const lesson=activeLessons.find(l=>l.time>=slot.time && l.time<slotEnd);
+    // Otherwise, a longer lesson that began in an EARLIER slot may still
+    // be running through this one — the teacher is busy, so this slot
+    // must not render as free. (A 60-minute group session at 6:00pm
+    // covers the 6:15pm slot entirely.)
+    const continuing = lesson ? null : activeLessons.find(l=>{
+      if(l.time>=slot.time) return false;
+      const endMin=timeToMinutes(l.time)+getLessonDurationMinutes(l);
+      return endMin>timeToMinutes(slot.time);
+    });
+    const shown=lesson||continuing;
+    const matchedStudent=shown ? (db.students||[]).find(s=>String(s.id)===String(shown.studentId) || s.name===shown.student) : null;
     return {
       time:slot.time,
       timeEnd:slotEnd,
-      studentName:lesson?lesson.student:(slot.occupiedBy||null),
-      paid:lesson ? paidSet.has(String(matchedStudent?matchedStudent.id:lesson.studentId)) : false,
+      studentName:shown?shown.student:(slot.occupiedBy||null),
+      paid:shown ? paidSet.has(String(matchedStudent?matchedStudent.id:shown.studentId)) : false,
       isTrial:!!(matchedStudent && matchedStudent.plan==='trial'),
       isGroup:!!(matchedStudent && isGroupPlan(matchedStudent.plan)),
-      isMakeup:!!(lesson && lesson.makeupForLessonId),
-      occupied:!!(lesson || slot.occupiedBy)
+      isMakeup:!!(shown && shown.makeupForLessonId),
+      occupied:!!(shown || slot.occupiedBy),
+      // True when this row is only covered by a session that started
+      // earlier — it's already shown on that earlier row, so repeating it
+      // here would just duplicate the same booking.
+      isContinuation:!!continuing
     };
-  });
+  }).filter(s=>!s.isContinuation);
 
   const firstOccupied=allSlotInfo.findIndex(s=>s.occupied);
   const lastOccupied=allSlotInfo.length-1-[...allSlotInfo].reverse().findIndex(s=>s.occupied);
