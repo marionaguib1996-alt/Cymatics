@@ -304,7 +304,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-75</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-77</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -2914,7 +2914,21 @@ function convertTrial(id){
        ${planOptionsHtml('monthly')}
      </select></div>
    </div>
+   <div class="form-field wide" style="margin-top:10px">
+     <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:normal">
+       <input id="rn-mark-paid" type="checkbox" style="width:auto" checked onchange="onRenewMarkPaidChange()">
+       Mark as paid?
+     </label>
+   </div>
+   <div class="form-field wide" id="rn-payment-method-field">
+     <label>How was this payment received?</label>
+     <div style="display:flex;gap:10px;margin-top:4px">
+       <button type="button" class="btn btn-sm btn-gold" id="rn-method-instapay" onclick="selectRenewPaymentMethod('InstaPay')" style="flex:1">InstaPay</button>
+       <button type="button" class="btn btn-sm" id="rn-method-cash" onclick="selectRenewPaymentMethod('Cash')" style="flex:1">Cash</button>
+     </div>
+   </div>
    <div style="text-align:right;margin-top:14px"><button class="btn btn-gold" onclick="confirmRenewal(${id})">Confirm Conversion</button></div>`);
+ window._renewPaymentMethod='InstaPay';
 }
 
 function renderTeachers(){
@@ -3292,11 +3306,15 @@ function sendRenewalReminder(studentId){
 
     const month=getNextMonthString();
     const monthName=formatMonthName(month);
-    let dayNumbers=getWeekdayDatesInMonth(month, student.lesson_day);
+    const allDayNumbers=getWeekdayDatesInMonth(month, student.lesson_day);
+    let dayNumbers=allDayNumbers;
+    const excludedDays=[];
     if(student.teacher && typeof isTeacherAbsentOnDate==='function'){
-      dayNumbers=dayNumbers.filter(day=>{
+      dayNumbers=allDayNumbers.filter(day=>{
         const dateKey=month+'-'+String(day).padStart(2,'0');
-        return !isTeacherAbsentOnDate(student.teacher, dateKey, student.lessonTime);
+        const absent=isTeacherAbsentOnDate(student.teacher, dateKey, student.lessonTime);
+        if(absent) excludedDays.push(day);
+        return !absent;
       });
     }
     const lessonCount=dayNumbers.length;
@@ -3319,6 +3337,21 @@ function sendRenewalReminder(studentId){
     }
     const firstName=student.first_name||(student.name||'').split(' ')[0]||student.name;
 
+    // Optional line explaining any date(s) dropped from the count because
+    // the teacher is already marked absent that day — only appears when
+    // relevant, singular/plural worded correctly.
+    let absenceNote='';
+    if(excludedDays.length){
+      const teacherProfile=(db.teacherProfiles||[]).find(p=>p.name===student.teacher);
+      const teacherTitle=teacherProfile?.title||'Mr';
+      const teacherFirstName=(student.teacher||'').trim().split(' ')[0]||student.teacher;
+      const excludedDateList=excludedDays.map(ordinalDay).join(', ');
+      const eSmile=String.fromCodePoint(0x263A);
+      absenceNote = excludedDays.length===1
+        ? 'Kindly note that there is no session on '+excludedDateList+' as '+teacherTitle+' '+teacherFirstName+' won\'t be available to give the session at the time '+eSmile+'\n'
+        : 'Kindly note that there are no sessions on '+excludedDateList+' as '+teacherTitle+' '+teacherFirstName+' won\'t be available to give the session at the time '+eSmile+'\n';
+    }
+
     // Emojis built at runtime from code points so the source stays pure
     // ASCII (immune to any file-encoding/hosting corruption). These render
     // correctly now that links go through api.whatsapp.com rather than the
@@ -3327,6 +3360,7 @@ function sendRenewalReminder(studentId){
     const message='Hello '+firstName+'!\n'+
       'Hope you\'re having a blast at Cymatics!\n'+
       'Just a little reminder that your payment for '+monthName+' sessions ('+lessonCount+' lessons on the '+dateList+') is due Today '+ePiano+eMic+'\n'+
+      absenceNote+
       'It\'s '+Math.round(amount)+' EGP for the month — keeping things up to date means you won\'t miss a single beat of the fun! \n'+
       'Instapay: 01277336092 -Mario Naguib\n'+
       'Can\'t wait to see you at the next session! '+eSparkle;
@@ -9643,7 +9677,38 @@ function renewStudentSubscription(id){
         </div>
       </div>
     </div>
+    <div class="form-field wide" style="margin-top:10px">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:normal">
+        <input id="rn-mark-paid" type="checkbox" style="width:auto" checked onchange="onRenewMarkPaidChange()">
+        Mark as paid?
+      </label>
+    </div>
+    <div class="form-field wide" id="rn-payment-method-field">
+      <label>How was this payment received?</label>
+      <div style="display:flex;gap:10px;margin-top:4px">
+        <button type="button" class="btn btn-sm btn-gold" id="rn-method-instapay" onclick="selectRenewPaymentMethod('InstaPay')" style="flex:1">InstaPay</button>
+        <button type="button" class="btn btn-sm" id="rn-method-cash" onclick="selectRenewPaymentMethod('Cash')" style="flex:1">Cash</button>
+      </div>
+    </div>
     <div style="text-align:right;margin-top:14px"><button class="btn btn-gold" onclick="confirmRenewal(${id})">Confirm Renewal</button></div>`);
+  window._renewPaymentMethod='InstaPay';
+}
+
+// Toggles the payment-method choice's visibility based on whether "Mark
+// as paid?" is checked — matching the two-step question flow (paid? then
+// how?) rather than always forcing a method choice.
+function onRenewMarkPaidChange(){
+  const checked=!!document.getElementById('rn-mark-paid')?.checked;
+  const field=document.getElementById('rn-payment-method-field');
+  if(field) field.style.display = checked ? 'block' : 'none';
+}
+
+function selectRenewPaymentMethod(method){
+  window._renewPaymentMethod=method;
+  const instapayBtn=document.getElementById('rn-method-instapay');
+  const cashBtn=document.getElementById('rn-method-cash');
+  if(instapayBtn) instapayBtn.className = 'btn btn-sm'+(method==='InstaPay'?' btn-gold':'');
+  if(cashBtn) cashBtn.className = 'btn btn-sm'+(method==='Cash'?' btn-gold':'');
 }
 
 function onRenewPlanChange(id){
@@ -9788,13 +9853,14 @@ function confirmRenewal(id){
 
   const created=scheduleWeeklyLessonsFrom(student, firstNewDate, count);
 
-  // A renewal is a new billing cycle, and by the time it's being
-  // processed here the payment has already been confirmed (that's the
-  // normal trigger for clicking Renew) — so mark the new cycle paid
-  // rather than leaving it unpaid and requiring a separate manual step.
-  // Applies to every month the newly-created sessions actually fall into
-  // (a renewal can span a month boundary), not just the currently-viewed
-  // one.
+  // Ask (via the modal's own fields) rather than assume: was this renewal
+  // actually paid, and if so, how? By the time an admin is confirming a
+  // renewal payment is usually already in hand, but not always — leaving
+  // it unanswered would either wrongly mark someone paid or wrongly leave
+  // someone unpaid who did pay.
+  const markPaid=!!document.getElementById('rn-mark-paid')?.checked;
+  const paymentMethod=window._renewPaymentMethod||'InstaPay';
+
   if(created){
     const coveredMonths=new Set();
     for(let i=0;i<count;i++){
@@ -9803,10 +9869,11 @@ function confirmRenewal(id){
     }
     coveredMonths.forEach(m=>{
       const key=student.id+'_'+m;
-      db.payments[key]=true;
+      db.payments[key]=markPaid;
       db.paymentMethods=db.paymentMethods||{};
-      db.paymentMethods[key]='InstaPay';
-      if(typeof syncPaymentToggleToSupabase==='function') syncPaymentToggleToSupabase(student.id, m, true, 'InstaPay');
+      if(markPaid) db.paymentMethods[key]=paymentMethod;
+      else delete db.paymentMethods[key];
+      if(typeof syncPaymentToggleToSupabase==='function') syncPaymentToggleToSupabase(student.id, m, markPaid, markPaid?paymentMethod:null);
     });
     // Custom Pay is a one-time override for THIS renewal only — clear it
     // now that the renewal has actually been processed, so it doesn't
