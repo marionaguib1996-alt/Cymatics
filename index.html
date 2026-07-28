@@ -304,7 +304,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-79</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-80</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -453,6 +453,11 @@ input::placeholder{color:var(--text-dim)}
     <div class="card-title">Renewals Due</div>
     <div class="teacher-row-meta" style="margin-bottom:12px">Monthly and Group Monthly students who have attended their last logged session for the current month. Shows the payment due for next month.</div>
     <div id="renewals-due-list"></div>
+  </div>
+  <div class="card">
+    <div class="card-title">Weekly Renewals</div>
+    <div class="teacher-row-meta" style="margin-bottom:12px">Weekly session students whose last logged session has passed with nothing booked after it — ready to renew for another week, or convert to Monthly.</div>
+    <div id="weekly-renewals-list"></div>
   </div>
   <div class="card">
     <div class="card-title">Trial Follow-up</div>
@@ -2461,9 +2466,10 @@ function togglePayment(id){
   // Marking as paid — ask how, before completing the action.
   openModal('Mark as Paid', `
     <div style="margin-bottom:14px;color:var(--text-muted)">How was this payment received?</div>
-    <div style="display:flex;gap:10px">
-      <button class="btn btn-gold" style="flex:1" onclick="confirmMarkPaid(${id},'Instapay')">Instapay</button>
-      <button class="btn btn-gold" style="flex:1" onclick="confirmMarkPaid(${id},'Cash')">Cash</button>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <button class="btn btn-gold" style="flex:1;min-width:100px" onclick="confirmMarkPaid(${id},'Instapay')">Instapay</button>
+      <button class="btn btn-gold" style="flex:1;min-width:100px" onclick="confirmMarkPaid(${id},'Cash')">Cash</button>
+      <button class="btn btn-gold" style="flex:1;min-width:100px" onclick="confirmMarkPaid(${id},'InstaPay + Cash')">InstaPay + Cash</button>
     </div>
   `);
 }
@@ -2934,9 +2940,10 @@ function convertTrial(id){
    </div>
    <div class="form-field wide" id="rn-payment-method-field">
      <label>How was this payment received?</label>
-     <div style="display:flex;gap:10px;margin-top:4px">
-       <button type="button" class="btn btn-sm btn-gold" id="rn-method-instapay" onclick="selectRenewPaymentMethod('InstaPay')" style="flex:1">InstaPay</button>
-       <button type="button" class="btn btn-sm" id="rn-method-cash" onclick="selectRenewPaymentMethod('Cash')" style="flex:1">Cash</button>
+     <div style="display:flex;gap:10px;margin-top:4px;flex-wrap:wrap">
+       <button type="button" class="btn btn-sm btn-gold" id="rn-method-instapay" onclick="selectRenewPaymentMethod('InstaPay')" style="flex:1;min-width:90px">InstaPay</button>
+       <button type="button" class="btn btn-sm" id="rn-method-cash" onclick="selectRenewPaymentMethod('Cash')" style="flex:1;min-width:90px">Cash</button>
+       <button type="button" class="btn btn-sm" id="rn-method-both" onclick="selectRenewPaymentMethod('InstaPay + Cash')" style="flex:1;min-width:90px">InstaPay + Cash</button>
      </div>
    </div>
    <div style="text-align:right;margin-top:14px"><button class="btn btn-gold" onclick="confirmRenewal(${id})">Confirm Conversion</button></div>`);
@@ -2991,7 +2998,7 @@ function renderTeachers(){
       <td>${payable}${archivedNote}</td>
       <td>${egp(total)}${overrideNote}</td>
       <td><span class="badge ${paid?'badge-green':'badge-amber'}">${paid?'Paid':'Pending'}</span></td>
-      <td><button class="btn btn-sm" onclick="togglePayrollPaid('${jsString(p.name)}')">${paid?'Undo':'Mark Paid'}</button></td>
+      <td><button class="btn btn-sm" onclick="togglePayrollPaid('${jsString(p.name)}')">${paid?'Undo':'Mark Paid'}</button> <button class="btn btn-sm" onclick="printTeacherPayrollLessons('${jsString(p.name)}')" title="Downloads a day-by-day lesson summary for this teacher's current payroll period">🖨️ Print Lessons</button></td>
    </tr>`;
  }).join('');
 
@@ -3487,6 +3494,54 @@ function sendRenewalReminder(studentId){
 // WhatsApp reminder action here — converting them is a separate,
 // deliberate action taken from the Students tab (Convert button), not a
 // one-click here to avoid accidentally locking in a plan.
+// ── Weekly Renewals ─────────────────────────────────────────────────────
+// A weekly-plan student whose booked session has passed with nothing new
+// scheduled after it — ready to either book another single week, or move
+// to a Monthly plan. Mirrors studentHasPendingRenewal's logic but without
+// the monthly-specific "finished this calendar month" requirement, since
+// a weekly session isn't scoped to a month at all.
+function studentWeeklyPendingDecision(student){
+  if(!student) return false;
+  if((student.status||'active')==='archived' || student.frozen) return false;
+  if(typeof isWeeklyPlan!=='function' || !isWeeklyPlan(student.plan)) return false;
+  const todayKey=new Date().toISOString().slice(0,10);
+  const own=(db.lessons||[]).filter(l=>
+    (String(l.studentId)===String(student.id) || l.student===student.name) &&
+    (l.status_record||'active')!=='archived'
+  );
+  if(!own.length) return false;
+  const hasUpcoming=own.some(l=>l.status==='scheduled' && (l.date||'')>=todayKey);
+  if(hasUpcoming) return false;
+  return own.some(l=>l.status==='attended');
+}
+
+function renderWeeklyRenewals(){
+  const host=document.getElementById('weekly-renewals-list');
+  if(!host) return;
+  const rows=[];
+  (db.students||[]).forEach(s=>{
+    if(!studentWeeklyPendingDecision(s)) return;
+    const own=(db.lessons||[]).filter(l=>(String(l.studentId)===String(s.id)||l.student===s.name) && (l.status_record||'active')!=='archived');
+    const lastDate=own.map(l=>l.date).filter(Boolean).sort().slice(-1)[0]||null;
+    rows.push({s, lastDate});
+  });
+  rows.sort((a,b)=>String(a.lastDate||'').localeCompare(String(b.lastDate||'')));
+  if(!rows.length){
+    host.innerHTML='<div class="empty"><div class="empty-icon">✅</div><div class="empty-text">No weekly renewals pending.</div></div>';
+    return;
+  }
+  host.innerHTML=rows.map(({s,lastDate})=>{
+    const label=lastDate ? 'Last session '+formatLedgerDate(lastDate) : 'No sessions yet';
+    return `<div class="unpaid-item">
+      <div>
+        <div class="unpaid-name">${escapeHtml(s.name)}</div>
+        <div class="unpaid-meta">${escapeHtml(s.instrument||'')} ${s.instrument&&s.teacher?'·':''} ${escapeHtml(s.teacher||'')}${s.lesson_day?' · '+escapeHtml(s.lesson_day):''}${s.lessonTime?' '+escapeHtml(formatTime12h(s.lessonTime)):''} · <span class="badge badge-red" style="font-size:10px">${label}</span></div>
+      </div>
+      <button class="btn btn-sm btn-gold" onclick="renewStudentSubscription(${s.id})" title="Book another week, or switch this student to Monthly">🔁 Renew</button>
+    </div>`;
+  }).join('');
+}
+
 function renderTrialFollowUp(){
   const host=document.getElementById('trial-followup-list');
   if(!host) return;
@@ -5614,6 +5669,7 @@ function switchPage(page, btn){
   if(page==='reports')renderReports();
   if(page==='profiles'){refreshInstrumentSelectors(); renderProfiles(); renderInstrumentPage(); if(typeof renderAddProfileTimeSlots==='function') renderAddProfileTimeSlots();}
   if(page==='renewals' && typeof renderRenewalsDue==='function') renderRenewalsDue();
+  if(page==='renewals' && typeof renderWeeklyRenewals==='function') renderWeeklyRenewals();
   if(page==='renewals' && typeof renderTrialFollowUp==='function') renderTrialFollowUp();
   if(page==='instruments')renderInstrumentPage();
   if(page==='database')renderDatabase(); if(page==='cloud'){}
@@ -5644,10 +5700,10 @@ function formatTime12h(timeStr){
   return h+':'+m+' '+period;
 }
 
-// Payroll runs on a 26th-to-25th cycle, not a calendar month. The payroll
-// period for a given "YYYY-MM" is the 26th of the PREVIOUS month through the
-// 25th of that month, inclusive. Example: July payroll covers Jun 26 → Jul 25;
-// a session taught Jul 26–31 belongs to August's period instead. This is the
+// Payroll runs on a 25th-to-24th cycle, not a calendar month. The payroll
+// period for a given "YYYY-MM" is the 25th of the PREVIOUS month through the
+// 24th of that month, inclusive. Example: July payroll covers Jun 25 → Jul 24;
+// a session taught Jul 25–31 belongs to August's period instead. This is the
 // single boundary test used everywhere payroll payable-lessons/amounts are
 // computed, replacing the old plain calendar-month (l.month===month) check.
 function isLessonInPayrollPeriod(lesson, monthStr){
@@ -5655,12 +5711,12 @@ function isLessonInPayrollPeriod(lesson, monthStr){
   if(!dateKey || !monthStr) return false;
   const [y,m]=monthStr.split('-').map(Number);
   if(!y || !m) return false;
-  // End of window: the 25th of the selected month.
-  const endKey=monthStr+'-25';
-  // Start of window: the 26th of the previous month.
+  // End of window: the 24th of the selected month.
+  const endKey=monthStr+'-24';
+  // Start of window: the 25th of the previous month.
   let py=y, pm=m-1;
   if(pm<1){ pm=12; py-=1; }
-  const startKey=py+'-'+String(pm).padStart(2,'0')+'-26';
+  const startKey=py+'-'+String(pm).padStart(2,'0')+'-25';
   return dateKey>=startKey && dateKey<=endKey;
 }
 
@@ -9801,9 +9857,10 @@ function renewStudentSubscription(id){
     </div>
     <div class="form-field wide" id="rn-payment-method-field">
       <label>How was this payment received?</label>
-      <div style="display:flex;gap:10px;margin-top:4px">
-        <button type="button" class="btn btn-sm btn-gold" id="rn-method-instapay" onclick="selectRenewPaymentMethod('InstaPay')" style="flex:1">InstaPay</button>
-        <button type="button" class="btn btn-sm" id="rn-method-cash" onclick="selectRenewPaymentMethod('Cash')" style="flex:1">Cash</button>
+      <div style="display:flex;gap:10px;margin-top:4px;flex-wrap:wrap">
+        <button type="button" class="btn btn-sm btn-gold" id="rn-method-instapay" onclick="selectRenewPaymentMethod('InstaPay')" style="flex:1;min-width:90px">InstaPay</button>
+        <button type="button" class="btn btn-sm" id="rn-method-cash" onclick="selectRenewPaymentMethod('Cash')" style="flex:1;min-width:90px">Cash</button>
+        <button type="button" class="btn btn-sm" id="rn-method-both" onclick="selectRenewPaymentMethod('InstaPay + Cash')" style="flex:1;min-width:90px">InstaPay + Cash</button>
       </div>
     </div>
     <div style="text-align:right;margin-top:14px"><button class="btn btn-gold" onclick="confirmRenewal(${id})">Confirm Renewal</button></div>`);
@@ -9823,8 +9880,10 @@ function selectRenewPaymentMethod(method){
   window._renewPaymentMethod=method;
   const instapayBtn=document.getElementById('rn-method-instapay');
   const cashBtn=document.getElementById('rn-method-cash');
+  const bothBtn=document.getElementById('rn-method-both');
   if(instapayBtn) instapayBtn.className = 'btn btn-sm'+(method==='InstaPay'?' btn-gold':'');
   if(cashBtn) cashBtn.className = 'btn btn-sm'+(method==='Cash'?' btn-gold':'');
+  if(bothBtn) bothBtn.className = 'btn btn-sm'+(method==='InstaPay + Cash'?' btn-gold':'');
 }
 
 function onRenewPlanChange(id){
@@ -13523,6 +13582,144 @@ function generateTeacherSchedulePhoto(teacherName, dayName, silent){
   link.href=canvas.toDataURL('image/png');
   link.click();
   showToast('Schedule photo downloaded');
+}
+
+// ── Print Lessons (Payroll tab) ─────────────────────────────────────────
+// Builds a day-by-day lesson summary photo for one teacher's current
+// payroll period (25th of the previous month through the 24th of this
+// one), formatted to match the academy's existing manual payroll
+// write-up: one line per teaching-day occurrence, grouped with a blank
+// line whenever there's a multi-day gap, "NULL" for an expected teaching
+// day with nothing payroll-eligible, an Attended/Counted breakdown when
+// absent-and-paid sessions are mixed in with attended ones, a "(N Grp)"
+// annotation for group sessions, and a closing TOTAL + Payment line built
+// from the exact same calculatePayrollAmount/payableSessionCount the
+// Payroll tab itself uses — so this always agrees with what's shown there.
+function printTeacherPayrollLessons(teacherName){
+  const profile=(db.teacherProfiles||[]).find(p=>p.name===teacherName);
+  if(!profile){ showToast('Teacher not found'); return; }
+
+  const month=currentMonth();
+  const monthLabel=(typeof formatMonthName==='function') ? formatMonthName(month) : month;
+
+  const [y,m]=month.split('-').map(Number);
+  let py=y, pm=m-1; if(pm<1){ pm=12; py-=1; }
+  const startKey=py+'-'+String(pm).padStart(2,'0')+'-25';
+  const endKey=month+'-24';
+
+  const teachingDays=(profile.days && profile.days.length) ? profile.days : Object.keys(profile.timeSlots||{});
+  if(!teachingDays.length){ showToast('No configured teaching days for '+teacherName); return; }
+
+  // Walk every calendar day in the payroll period, keeping only the ones
+  // that fall on one of this teacher's regular teaching weekdays.
+  const dateEntries=[];
+  let cur=new Date(startKey+'T00:00:00Z');
+  const end=new Date(endKey+'T00:00:00Z');
+  while(cur<=end){
+    const dateKey=cur.toISOString().slice(0,10);
+    const dayName=WEEKDAY_NAMES[cur.getUTCDay()];
+    if(teachingDays.includes(dayName)) dateEntries.push({dateKey, dayName});
+    cur.setUTCDate(cur.getUTCDate()+1);
+  }
+
+  let regularTotal=0, grpTotal=0, prevDateKey=null;
+  const lines=dateEntries.map(({dateKey,dayName})=>{
+    const dayLessons=(db.lessons||[]).filter(l=>
+      l.date===dateKey &&
+      (l.teacher||'').toLowerCase()===teacherName.toLowerCase() &&
+      isPayrollEligibleLesson(l) &&
+      (l.status==='attended' || l.status==='absent_paid')
+    );
+    const attendedCount=dayLessons.filter(l=>l.status==='attended').reduce((s,l)=>s+(l.isDoubleSession?2:1),0);
+    const countedCount=dayLessons.filter(l=>l.status==='absent_paid').reduce((s,l)=>s+(l.isDoubleSession?2:1),0);
+    const totalCount=attendedCount+countedCount;
+    const grpCount=dayLessons.filter(l=>{
+      const st=(db.students||[]).find(s=>String(s.id)===String(l.studentId)||s.name===l.student);
+      return !!(l.isExtendedDuration || (st && isGroupPlan(st.plan)));
+    }).length;
+    regularTotal += Math.max(0, totalCount-grpCount);
+    grpTotal += grpCount;
+
+    const dayNum=Number(dateKey.slice(8,10));
+    const dateLabel = dateKey.slice(0,7)===month ? String(dayNum) : (dayNum+'/'+Number(dateKey.slice(5,7)));
+
+    let summary;
+    if(totalCount===0){
+      summary='NULL';
+    } else if(grpCount===totalCount && totalCount===1){
+      summary='1 Grp session';
+    } else if(countedCount===0){
+      summary=totalCount+' session'+(totalCount===1?'':'s')+(grpCount>0?' ('+grpCount+' Grp)':'');
+    } else {
+      summary=totalCount+' sessions ('+attendedCount+' Attended, '+countedCount+' Counted)'+(grpCount>0?', '+grpCount+' Grp':'');
+    }
+
+    let blankBefore=false;
+    if(prevDateKey){
+      const gapDays=Math.round((new Date(dateKey+'T00:00:00Z')-new Date(prevDateKey+'T00:00:00Z'))/86400000);
+      if(gapDays>=3) blankBefore=true;
+    }
+    prevDateKey=dateKey;
+    return {text:dayName.slice(0,3)+' '+dateLabel+' : '+summary, blankBefore};
+  });
+
+  // TOTAL / Payment — the SAME calculation the Payroll tab itself uses,
+  // so this always matches what's shown there.
+  const eligibleLessons=(db.lessons||[]).filter(l=>
+    isLessonInPayrollPeriod(l, month) &&
+    (l.teacher||'').toLowerCase()===teacherName.toLowerCase() &&
+    isPayrollEligibleLesson(l)
+  );
+  const paymentTotal=calculatePayrollAmount(eligibleLessons, profile.rate);
+
+  // Draw as a plain white canvas document, matching the reference layout.
+  const width=520;
+  const lineHeight=26;
+  const blankHeight=14;
+  const headerHeight=44;
+  const nameHeight=34;
+  const footerHeight=70;
+  const padding=24;
+  const bodyHeight=lines.reduce((h,l)=>h+(l.blankBefore?blankHeight:0)+lineHeight, 0);
+  const height=headerHeight+nameHeight+bodyHeight+footerHeight+padding;
+
+  const canvas=document.createElement('canvas');
+  canvas.width=width;
+  canvas.height=height;
+  const ctx=canvas.getContext('2d');
+  ctx.fillStyle='#ffffff';
+  ctx.fillRect(0,0,width,height);
+  ctx.fillStyle='#000000';
+  ctx.textBaseline='alphabetic';
+
+  let cursorY=padding;
+  ctx.font='bold 16px Arial, sans-serif';
+  ctx.textAlign='left';
+  ctx.fillText('Teacher Lessons ('+monthLabel+')', padding, cursorY+16);
+  cursorY+=headerHeight;
+
+  ctx.font='bold 14px Arial, sans-serif';
+  ctx.fillText(teacherName+':', padding, cursorY+14);
+  cursorY+=nameHeight;
+
+  ctx.font='13px Arial, sans-serif';
+  lines.forEach(l=>{
+    if(l.blankBefore) cursorY+=blankHeight;
+    ctx.fillText(l.text, padding, cursorY+13);
+    cursorY+=lineHeight;
+  });
+
+  cursorY+=10;
+  ctx.font='bold 13px Arial, sans-serif';
+  ctx.fillText('TOTAL: '+regularTotal+' Sessions'+(grpTotal>0?' + '+grpTotal+' Grp Sessions':''), padding, cursorY+13);
+  cursorY+=22;
+  ctx.fillText('Payment: '+Math.round(paymentTotal), padding, cursorY+13);
+
+  const link=document.createElement('a');
+  link.download='Payroll_'+teacherName.replace(/\s+/g,'_')+'_'+month+'.png';
+  link.href=canvas.toDataURL('image/png');
+  link.click();
+  showToast('Lesson summary downloaded for '+teacherName);
 }
 </script>
 
