@@ -304,7 +304,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-80</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-81</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -13610,17 +13610,36 @@ function printTeacherPayrollLessons(teacherName){
   const teachingDays=(profile.days && profile.days.length) ? profile.days : Object.keys(profile.timeSlots||{});
   if(!teachingDays.length){ showToast('No configured teaching days for '+teacherName); return; }
 
-  // Walk every calendar day in the payroll period, keeping only the ones
-  // that fall on one of this teacher's regular teaching weekdays.
+  // Walk every calendar day in the payroll period, keeping the ones that
+  // fall on one of this teacher's regular teaching weekdays (these can
+  // show "NULL" when empty).
   const dateEntries=[];
+  const seenDates=new Set();
   let cur=new Date(startKey+'T00:00:00Z');
   const end=new Date(endKey+'T00:00:00Z');
   while(cur<=end){
     const dateKey=cur.toISOString().slice(0,10);
     const dayName=WEEKDAY_NAMES[cur.getUTCDay()];
-    if(teachingDays.includes(dayName)) dateEntries.push({dateKey, dayName});
+    if(teachingDays.includes(dayName)){ dateEntries.push({dateKey, dayName}); seenDates.add(dateKey); }
     cur.setUTCDate(cur.getUTCDate()+1);
   }
+  // Add any OTHER date in the window with payroll-eligible sessions for
+  // this teacher, even on a day that isn't one of their regular ones — an
+  // exception session (e.g. a one-off Saturday logged via quick
+  // attendance) still needs its own visible line, not just a silent bump
+  // to the total with no line item to show where it came from.
+  (db.lessons||[]).forEach(l=>{
+    const dateKey=String(l.date||'').slice(0,10);
+    if(!dateKey || seenDates.has(dateKey)) return;
+    if(dateKey<startKey || dateKey>endKey) return;
+    if((l.teacher||'').toLowerCase()!==teacherName.toLowerCase()) return;
+    if(!isPayrollEligibleLesson(l)) return;
+    if(l.status!=='attended' && l.status!=='absent_paid') return;
+    const d=new Date(dateKey+'T00:00:00Z');
+    dateEntries.push({dateKey, dayName:WEEKDAY_NAMES[d.getUTCDay()]});
+    seenDates.add(dateKey);
+  });
+  dateEntries.sort((a,b)=>a.dateKey.localeCompare(b.dateKey));
 
   let regularTotal=0, grpTotal=0, prevDateKey=null;
   const lines=dateEntries.map(({dateKey,dayName})=>{
