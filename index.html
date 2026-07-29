@@ -304,7 +304,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-81</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-82</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -5746,6 +5746,25 @@ function payableSessionCount(lessons){
 // a double session) for any lesson without an override, so this produces
 // identical totals to the old rate-x-count approach until an admin
 // actually sets an override somewhere.
+// Is this lesson a GROUP session for payroll purposes? Either the lesson
+// itself is flagged as an extended/60-minute group booking, or the
+// student it belongs to is on a group-family plan. Shared by the payroll
+// amount calculation and the Print Lessons breakdown so both agree on
+// what counts as "Grp".
+function isPayrollGroupSession(l){
+  if(l.isExtendedDuration) return true;
+  const st=(db.students||[]).find(s=>String(s.id)===String(l.studentId) || s.name===l.student);
+  return !!(st && typeof isGroupPlan==='function' && isGroupPlan(st.plan));
+}
+
+// Group sessions pay 1.5x the teacher's normal per-session rate — a 60-
+// minute group class is worth more than a standard 45-minute lesson.
+// Confirmed against the academy's own manual payroll records: every
+// teacher's stated total only resolves correctly with this multiplier
+// applied (e.g. 5 regular + 2 Grp at a 250 rate = 5*250 + 2*(250*1.5) =
+// exactly the recorded 2000 total).
+const PAYROLL_GROUP_RATE_MULTIPLIER=1.5;
+
 function calculatePayrollAmount(lessons, rate){
   const r=Number(rate)||0;
   return lessons.reduce((sum,l)=>{
@@ -5754,7 +5773,8 @@ function calculatePayrollAmount(lessons, rate){
       const n=Number(l.customPayrollAmount);
       if(!Number.isNaN(n)) return sum+n;
     }
-    return sum + (r * (l.isDoubleSession ? 2 : 1));
+    const perSession = r * (isPayrollGroupSession(l) ? PAYROLL_GROUP_RATE_MULTIPLIER : 1);
+    return sum + (perSession * (l.isDoubleSession ? 2 : 1));
   }, 0);
 }
 
@@ -13652,10 +13672,7 @@ function printTeacherPayrollLessons(teacherName){
     const attendedCount=dayLessons.filter(l=>l.status==='attended').reduce((s,l)=>s+(l.isDoubleSession?2:1),0);
     const countedCount=dayLessons.filter(l=>l.status==='absent_paid').reduce((s,l)=>s+(l.isDoubleSession?2:1),0);
     const totalCount=attendedCount+countedCount;
-    const grpCount=dayLessons.filter(l=>{
-      const st=(db.students||[]).find(s=>String(s.id)===String(l.studentId)||s.name===l.student);
-      return !!(l.isExtendedDuration || (st && isGroupPlan(st.plan)));
-    }).length;
+    const grpCount=dayLessons.filter(l=>isPayrollGroupSession(l)).length;
     regularTotal += Math.max(0, totalCount-grpCount);
     grpTotal += grpCount;
 
