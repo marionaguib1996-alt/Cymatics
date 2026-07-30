@@ -304,7 +304,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-82</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-84</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -9743,7 +9743,13 @@ function scheduleWeeklyLessonsFrom(student, firstDate, count){
     const date=addDaysToDateString(firstDate, i*7);
     i++;
     if(!date) continue;
-    const already=(db.lessons||[]).some(l=>String(l.studentId)===String(student.id) && l.date===date);
+    // Only an ACTIVE lesson on this date counts as a real collision — an
+    // archived one (deleted, replaced, or cleaned up) isn't actually
+    // occupying the date anymore. Without this, a stale archived record
+    // silently blocks a new lesson from ever being scheduled there again,
+    // permanently losing that date from the student's batch with nothing
+    // visible to explain why.
+    const already=(db.lessons||[]).some(l=>String(l.studentId)===String(student.id) && l.date===date && (l.status_record||'active')!=='archived');
     if(already) continue;
     const lesson={
       id:Date.now()+i,
@@ -12214,9 +12220,12 @@ function updateDoubleSessionCustomSlots(missedLessonId){
   }
   const opts=[];
   slots.forEach(t=>{
-    // Free = teacher not busy AND a room open at the start of the session.
-    const teacherBusy=isTeacherBusyDuringRange(teacherName, date, t, SESSION_DURATION_MINUTES, null);
-    const roomFull=isRoomFullDuringRange(date, t, SESSION_DURATION_MINUTES, null);
+    // Free = teacher not busy AND a room open for the FULL 90-minute
+    // window, not just its first 45 minutes — otherwise a start time
+    // could look free when the second half genuinely conflicts with
+    // another booking.
+    const teacherBusy=isTeacherBusyDuringRange(teacherName, date, t, DOUBLE_SESSION_DURATION_MINUTES, null);
+    const roomFull=isRoomFullDuringRange(date, t, DOUBLE_SESSION_DURATION_MINUTES, null);
     if(!teacherBusy && !roomFull){
       opts.push(`<option value="${escapeAttr(t)}">${escapeHtml(formatTime12h(t))} – ${escapeHtml(formatTime12h(addSlotMinutes(t,DOUBLE_SESSION_DURATION_MINUTES)))}</option>`);
     }
@@ -12237,12 +12246,11 @@ function confirmCustomDoubleSession(missedLessonId){
   const date=dmyToIso(document.getElementById('msd-date')?.value||'');
   const time=document.getElementById('msd-time')?.value||'';
   if(!date || !time){ showToast('Please pick a date and start time.'); return; }
-  // Re-validate the start slot at confirm — someone may have booked into
-  // it since the dropdown was built. Checks the session start (a room and
-  // the teacher must be free to begin), consistent with how the times are
-  // offered across the whole day.
-  if(isTeacherBusyDuringRange(missed.teacher, date, time, SESSION_DURATION_MINUTES, null) || isRoomFullDuringRange(date, time, SESSION_DURATION_MINUTES, null)){
-    showToast('That start time just filled up — pick a different time.');
+  // Re-validate the FULL 90-minute range at confirm — someone may have
+  // booked into it since the dropdown was built, and checking only the
+  // first 45 minutes would miss a conflict in the second half.
+  if(isTeacherBusyDuringRange(missed.teacher, date, time, DOUBLE_SESSION_DURATION_MINUTES, null) || isRoomFullDuringRange(date, time, DOUBLE_SESSION_DURATION_MINUTES, null)){
+    showToast('That window just filled up — pick a different time.');
     updateDoubleSessionCustomSlots(missedLessonId);
     return;
   }
