@@ -304,7 +304,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-84</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-85</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -13422,6 +13422,7 @@ function downloadAllTeacherSchedulePhotos(){
 function generateTeacherSchedulePhoto(teacherName, dayName, silent){
   const profile=(db.teacherProfiles||[]).find(p=>p.name===teacherName);
   if(!profile){ if(!silent) showToast('Teacher not found'); return; }
+  const teacherInstruments=(profile.instruments||[]).filter(Boolean);
 
   const effectiveSlots=getEffectiveTeacherDaySlots(teacherName, dayName, null);
   if(!effectiveSlots.length){ if(!silent) showToast('This teacher has no configured slots on '+dayName); return; }
@@ -13475,6 +13476,7 @@ function generateTeacherSchedulePhoto(teacherName, dayName, silent){
       time:slot.time,
       timeEnd:slotEnd,
       studentName:shown?shown.student:(slot.occupiedBy||null),
+      instrument:shown ? (shown.instrument||matchedStudent?.instrument||'') : '',
       paid:shown ? paidSet.has(String(matchedStudent?matchedStudent.id:shown.studentId)) : false,
       isTrial:!!(matchedStudent && matchedStudent.plan==='trial'),
       isGroup:!!(matchedStudent && isGroupPlan(matchedStudent.plan)),
@@ -13519,6 +13521,7 @@ function generateTeacherSchedulePhoto(teacherName, dayName, silent){
       time:l.time,
       timeEnd:addSlotMinutes(l.time,dur),
       studentName:l.student,
+      instrument:l.instrument||matchedStudent?.instrument||'',
       paid:paidSet.has(String(matchedStudent?matchedStudent.id:l.studentId)),
       isTrial:!!(matchedStudent && matchedStudent.plan==='trial'),
       isGroup:!!(l.isExtendedDuration || (matchedStudent && isGroupPlan(matchedStudent.plan))),
@@ -13601,7 +13604,8 @@ function generateTeacherSchedulePhoto(teacherName, dayName, silent){
       ctx.font='bold 14px Arial, sans-serif';
       ctx.textAlign='center';
       ctx.textBaseline='middle';
-      ctx.fillText(row.studentName+(row.isGroup?' (Group)':'')+(row.isMakeup?' (Make-Up)':''), timeColWidth+cellColWidth/2, y+rowHeight/2);
+      const instTag=(teacherInstruments.length>1 && row.instrument) ? ' '+instrumentEmoji(row.instrument) : '';
+      ctx.fillText(row.studentName+instTag+(row.isGroup?' (Group)':'')+(row.isMakeup?' (Make-Up)':''), timeColWidth+cellColWidth/2, y+rowHeight/2);
     }
   });
 
