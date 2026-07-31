@@ -304,7 +304,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-85</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-87</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -10082,6 +10082,18 @@ function confirmRenewal(id){
     if(student.customPay!=null){
       student.customPay=null;
     }
+    // Any teacher-absence deduction that was applied to this renewal's
+    // price has now compensated the student for that session — it's
+    // settled, not still "owed", so it should stop showing on the
+    // Makeup Dashboard. Uses the exact same lessons the deduction amount
+    // (and the reminder's note) were computed from.
+    if(typeof teacherAbsenceDeductions==='function'){
+      const deductions=teacherAbsenceDeductions(student);
+      deductions.forEach(l=>{
+        l.makeupResolved=true;
+        if(window.syncLessonUpdateToSupabase) syncLessonUpdateToSupabase(l);
+      });
+    }
   }
 
   save();
@@ -10114,9 +10126,15 @@ function confirmRenewal(id){
   renderLessons();
   if(typeof renderOverview==='function') renderOverview();
   if(typeof renderTeacherWorkspace==='function') renderTeacherWorkspace();
+  // The student who was just renewed needs to disappear from these lists
+  // right away — without this they'd sit there (looking like the renewal
+  // didn't take effect) until the page was manually reloaded.
+  if(typeof renderRenewalsDue==='function') renderRenewalsDue();
+  if(typeof renderWeeklyRenewals==='function') renderWeeklyRenewals();
+  if(typeof renderTrialFollowUp==='function') renderTrialFollowUp();
   if(typeof syncStudentUpdateToSupabase==='function') syncStudentUpdateToSupabase(student);
   if(created){
-    showToast(created+' session(s) scheduled starting '+formatDateDMY(firstNewDate)+' — marked unpaid for the new cycle');
+    showToast(created+' session(s) scheduled starting '+formatDateDMY(firstNewDate)+' — marked '+(markPaid?'paid':'unpaid')+' for the new cycle');
   } else {
     showToast('Student details updated (no new sessions — they may already exist)');
   }
