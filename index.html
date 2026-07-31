@@ -304,7 +304,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-88</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-90</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -864,6 +864,12 @@ input::placeholder{color:var(--text-dim)}
 </div>
 <div class="table-wrap"><table><thead><tr><th>Name</th><th>Mobile</th><th>Rate</th><th>Instruments</th><th>Days</th><th>Actions</th></tr></thead>
 <tbody id="profiles-body"></tbody></table></div>
+</div>
+
+<div class="card">
+<div class="card-title">Upcoming Teacher Absences</div>
+<div class="teacher-row-meta" style="margin-bottom:12px">Absences recorded today or later, across all teachers. Edit or remove one if a date or reason needs correcting.</div>
+<div id="upcoming-absences-list"></div>
 </div>
 
 <div class="card">
@@ -5667,7 +5673,7 @@ function switchPage(page, btn){
   if(page==='practice' && typeof renderPracticeSessionsPage==='function')renderPracticeSessionsPage();
   if(page==='expenses'){renderExpenses(); if(typeof renderOtherRevenue==='function') renderOtherRevenue();}
   if(page==='reports')renderReports();
-  if(page==='profiles'){refreshInstrumentSelectors(); renderProfiles(); renderInstrumentPage(); if(typeof renderAddProfileTimeSlots==='function') renderAddProfileTimeSlots();}
+  if(page==='profiles'){refreshInstrumentSelectors(); renderProfiles(); renderInstrumentPage(); if(typeof renderAddProfileTimeSlots==='function') renderAddProfileTimeSlots(); if(typeof renderUpcomingAbsences==='function') renderUpcomingAbsences();}
   if(page==='renewals' && typeof renderRenewalsDue==='function') renderRenewalsDue();
   if(page==='renewals' && typeof renderWeeklyRenewals==='function') renderWeeklyRenewals();
   if(page==='renewals' && typeof renderTrialFollowUp==='function') renderTrialFollowUp();
@@ -10049,6 +10055,22 @@ function confirmRenewal(id){
     }
   }
 
+  // Guard against a stale reference date producing a firstNewDate that's
+  // already in the past — whichever branch above computed it. If a
+  // student's most recent lesson record is older than expected (a data
+  // gap, a short batch, a late trial conversion, etc.), "the next
+  // occurrence after it" can still land before today — and a 'scheduled'
+  // lesson dated in the past can never register as genuinely upcoming, so
+  // the student would keep reappearing on Renewals Due no matter how many
+  // times they're renewed. Not applied when the admin explicitly chose a
+  // Weekly session date themselves — that's already validated separately.
+  if(!(isWeeklyPlan(plan) && dmyToIso(document.getElementById('rn-date')?.value||''))){
+    const soonestPossible=nextWeekdayOnOrAfter(todayKey, lessonDay);
+    if(soonestPossible && firstNewDate<soonestPossible){
+      firstNewDate=soonestPossible;
+    }
+  }
+
   // Auto monthly plans bill and book per the lesson-days remaining in the
   // month of the first new session; other plans use their fixed count.
   // Any date the teacher is already marked absent for is excluded from
@@ -13253,24 +13275,33 @@ function openTeacherAbsenceModal(){
   const teachers=(db.teacherProfiles||[]).filter(p=>(p.status||'active')!=='archived')
     .map(p=>p.name).sort();
   if(!teachers.length){ showToast('No active teachers to mark absent.'); return; }
-  const calDay=document.getElementById('cal-day')?.value||'';
-  const defaultDate=window._calCurrentDate || (calDay ? nextWeekdayOnOrAfter(new Date().toISOString().slice(0,10), calDay) : new Date().toISOString().slice(0,10));
-  window._absenceDates = defaultDate ? [defaultDate] : [];
+  // No default date pre-selected — the admin picks the day(s) explicitly
+  // rather than the currently-viewed calendar day being silently counted
+  // as already chosen.
+  window._absenceDates = [];
   openModal('Mark Teacher Absent', `
     <div class="form-field"><label for="ta-teacher">Teacher</label><select id="ta-teacher" onchange="updateTeacherAbsencePreview()">
       ${teachers.map(t=>`<option value="${escapeAttr(t)}">${escapeHtml(t)}</option>`).join('')}
     </select></div>
     <div class="form-field"><label for="ta-date">Add day(s)</label>
       <div style="display:flex;gap:4px">
-        <input id="ta-date" type="text" placeholder="dd/mm/yyyy" maxlength="10" value="${escapeAttr(formatDateDMY(defaultDate))}" oninput="maskDateInput(this)">
+        <input id="ta-date" type="text" placeholder="dd/mm/yyyy" maxlength="10" oninput="maskDateInput(this)">
         <button type="button" class="btn btn-sm" onclick="openDatePicker('ta-date')">📅</button>
         <button type="button" class="btn btn-sm btn-gold" onclick="addAbsenceDate()">+ Add</button>
       </div>
       <div id="ta-date-chips" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px"></div>
     </div>
-    <div class="form-field"><label>Scope</label>
-      <label style="display:flex;align-items:center;gap:6px;font-weight:400;margin-bottom:4px"><input type="radio" name="ta-scope" value="day" checked onchange="onTeacherAbsenceScopeChange()"> Whole day</label>
-      <label style="display:flex;align-items:center;gap:6px;font-weight:400"><input type="radio" name="ta-scope" value="range" onchange="onTeacherAbsenceScopeChange()"> Only a time range (e.g. stepping out for an event)</label>
+    <div class="form-field wide"><label>Scope</label>
+      <div style="display:flex;flex-direction:column;gap:10px;margin-top:4px">
+        <div style="display:flex;align-items:center;gap:8px;cursor:pointer" onclick="document.getElementById('ta-scope-day').click()">
+          <input id="ta-scope-day" type="radio" name="ta-scope" value="day" checked onchange="onTeacherAbsenceScopeChange()" style="width:auto;margin:0;cursor:pointer">
+          <span style="font-size:13px;font-weight:400;text-transform:none;letter-spacing:normal;color:var(--text)">Whole day</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;cursor:pointer" onclick="document.getElementById('ta-scope-range').click()">
+          <input id="ta-scope-range" type="radio" name="ta-scope" value="range" onchange="onTeacherAbsenceScopeChange()" style="width:auto;margin:0;cursor:pointer">
+          <span style="font-size:13px;font-weight:400;text-transform:none;letter-spacing:normal;color:var(--text)">Only a time range <span style="color:var(--text-muted)">(e.g. stepping out for an event)</span></span>
+        </div>
+      </div>
     </div>
     <div id="ta-range-fields" style="display:none">
       <div class="teacher-log-grid">
@@ -13342,6 +13373,123 @@ function isTeacherAbsentOnDate(teacherName, dateKey, timeStr){
     const t=timeToMinutes(timeStr);
     return t>=timeToMinutes(a.fromTime) && t<timeToMinutes(a.toTime);
   });
+}
+
+// ── Upcoming Teacher Absences (Teacher Management page) ─────────────────
+function renderUpcomingAbsences(){
+  const host=document.getElementById('upcoming-absences-list');
+  if(!host) return;
+  const todayKey=new Date().toISOString().slice(0,10);
+  const upcoming=(db.teacherAbsences||[])
+    .filter(a=>(a.date||'')>=todayKey)
+    .sort((a,b)=>String(a.date).localeCompare(String(b.date)) || String(a.teacher).localeCompare(String(b.teacher)));
+
+  if(!upcoming.length){
+    host.innerHTML='<div class="empty"><div class="empty-icon">✅</div><div class="empty-text">No upcoming absences recorded.</div></div>';
+    return;
+  }
+
+  host.innerHTML=upcoming.map(a=>{
+    const scopeLabel = a.scope==='range'
+      ? escapeHtml(formatTime12h(a.fromTime))+' – '+escapeHtml(formatTime12h(a.toTime))
+      : 'Whole day';
+    return `<div class="unpaid-item">
+      <div>
+        <div class="unpaid-name">${escapeHtml(a.teacher||'')}</div>
+        <div class="unpaid-meta">${escapeHtml(formatDateDMY(a.date))} · ${scopeLabel}${a.reason?' · '+escapeHtml(a.reason):''}</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <button class="btn btn-sm" onclick="editTeacherAbsence(${JSON.stringify(String(a.id))})">Edit</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteTeacherAbsence(${JSON.stringify(String(a.id))})">Delete</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function editTeacherAbsence(absenceId){
+  const a=(db.teacherAbsences||[]).find(x=>String(x.id)===String(absenceId));
+  if(!a){ showToast('Absence not found.'); return; }
+  const teachers=(db.teacherProfiles||[]).filter(p=>(p.status||'active')!=='archived').map(p=>p.name).sort();
+  openModal('Edit Absence', `
+    <div class="form-field"><label for="ea-teacher">Teacher</label><select id="ea-teacher">
+      ${teachers.map(t=>`<option value="${escapeAttr(t)}" ${t===a.teacher?'selected':''}>${escapeHtml(t)}</option>`).join('')}
+    </select></div>
+    <div class="form-field"><label for="ea-date">Date</label>
+      <div style="display:flex;gap:4px">
+        <input id="ea-date" type="text" placeholder="dd/mm/yyyy" maxlength="10" value="${escapeAttr(formatDateDMY(a.date))}" oninput="maskDateInput(this)">
+        <button type="button" class="btn btn-sm" onclick="openDatePicker('ea-date')">📅</button>
+      </div>
+    </div>
+    <div class="form-field wide"><label>Scope</label>
+      <div style="display:flex;flex-direction:column;gap:10px;margin-top:4px">
+        <div style="display:flex;align-items:center;gap:8px;cursor:pointer" onclick="document.getElementById('ea-scope-day').click()">
+          <input id="ea-scope-day" type="radio" name="ea-scope" value="day" ${a.scope!=='range'?'checked':''} onchange="onEditAbsenceScopeChange()" style="width:auto;margin:0;cursor:pointer">
+          <span style="font-size:13px;font-weight:400;text-transform:none;letter-spacing:normal;color:var(--text)">Whole day</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;cursor:pointer" onclick="document.getElementById('ea-scope-range').click()">
+          <input id="ea-scope-range" type="radio" name="ea-scope" value="range" ${a.scope==='range'?'checked':''} onchange="onEditAbsenceScopeChange()" style="width:auto;margin:0;cursor:pointer">
+          <span style="font-size:13px;font-weight:400;text-transform:none;letter-spacing:normal;color:var(--text)">Only a time range</span>
+        </div>
+      </div>
+    </div>
+    <div id="ea-range-fields" style="display:${a.scope==='range'?'block':'none'}">
+      <div class="teacher-log-grid">
+        <div class="form-field"><label for="ea-from">From</label><input id="ea-from" type="text" placeholder="HH:MM (24h)" maxlength="5" value="${escapeAttr(a.fromTime||'')}"></div>
+        <div class="form-field"><label for="ea-to">To</label><input id="ea-to" type="text" placeholder="HH:MM (24h)" maxlength="5" value="${escapeAttr(a.toTime||'')}"></div>
+      </div>
+    </div>
+    <div class="form-field wide"><label for="ea-reason">Reason (optional)</label><input id="ea-reason" type="text" value="${escapeAttr(a.reason||'')}" placeholder="e.g. Sick leave, personal event"></div>
+    <div style="text-align:right;margin-top:14px">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-gold" onclick="confirmEditTeacherAbsence(${JSON.stringify(String(a.id))})">Save Changes</button>
+    </div>
+  `);
+}
+
+function onEditAbsenceScopeChange(){
+  const scope=(document.querySelector('input[name="ea-scope"]:checked')||{}).value||'day';
+  const rf=document.getElementById('ea-range-fields');
+  if(rf) rf.style.display = scope==='range' ? 'block' : 'none';
+}
+
+function confirmEditTeacherAbsence(absenceId){
+  const a=(db.teacherAbsences||[]).find(x=>String(x.id)===String(absenceId));
+  if(!a){ showToast('Absence not found.'); return; }
+  const teacher=document.getElementById('ea-teacher')?.value||'';
+  const date=dmyToIso(document.getElementById('ea-date')?.value||'');
+  if(!teacher){ showToast('Pick a teacher.'); return; }
+  if(!date){ showToast('Enter a valid date.'); return; }
+  const scope=(document.querySelector('input[name="ea-scope"]:checked')||{}).value||'day';
+  let fromTime=null, toTime=null;
+  if(scope==='range'){
+    fromTime=document.getElementById('ea-from')?.value||'';
+    toTime=document.getElementById('ea-to')?.value||'';
+    if(!/^\d{1,2}:\d{2}$/.test(fromTime) || !/^\d{1,2}:\d{2}$/.test(toTime)){ showToast('Enter a valid time range (HH:MM).'); return; }
+    if(timeToMinutes(toTime)<=timeToMinutes(fromTime)){ showToast('"To" must be after "From".'); return; }
+  }
+  const reason=(document.getElementById('ea-reason')?.value||'').trim();
+  a.teacher=teacher;
+  a.date=date;
+  a.scope=scope;
+  a.fromTime=fromTime;
+  a.toTime=toTime;
+  a.reason=reason||null;
+  save();
+  closeModal();
+  renderUpcomingAbsences();
+  if(typeof syncTeacherAbsenceToSupabase==='function') syncTeacherAbsenceToSupabase(a);
+  showToast('Absence updated');
+}
+
+function deleteTeacherAbsence(absenceId){
+  const a=(db.teacherAbsences||[]).find(x=>String(x.id)===String(absenceId));
+  if(!a) return;
+  if(!confirm('Remove this absence for '+a.teacher+' on '+formatDateDMY(a.date)+'?')) return;
+  db.teacherAbsences=(db.teacherAbsences||[]).filter(x=>String(x.id)!==String(absenceId));
+  save();
+  renderUpcomingAbsences();
+  if(typeof syncTeacherAbsenceDeleteToSupabase==='function') syncTeacherAbsenceDeleteToSupabase(absenceId);
+  showToast('Absence removed');
 }
 
 function teacherAbsenceAffectedLessons(){
