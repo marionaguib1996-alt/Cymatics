@@ -304,7 +304,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-90</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-91</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -13399,8 +13399,8 @@ function renderUpcomingAbsences(){
         <div class="unpaid-meta">${escapeHtml(formatDateDMY(a.date))} · ${scopeLabel}${a.reason?' · '+escapeHtml(a.reason):''}</div>
       </div>
       <div style="display:flex;align-items:center;gap:8px">
-        <button class="btn btn-sm" onclick="editTeacherAbsence(${JSON.stringify(String(a.id))})">Edit</button>
-        <button class="btn btn-sm btn-danger" onclick="deleteTeacherAbsence(${JSON.stringify(String(a.id))})">Delete</button>
+        <button class="btn btn-sm" onclick="editTeacherAbsence('${escapeAttr(String(a.id))}')">Edit</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteTeacherAbsence('${escapeAttr(String(a.id))}')">Delete</button>
       </div>
     </div>`;
   }).join('');
@@ -13441,7 +13441,7 @@ function editTeacherAbsence(absenceId){
     <div class="form-field wide"><label for="ea-reason">Reason (optional)</label><input id="ea-reason" type="text" value="${escapeAttr(a.reason||'')}" placeholder="e.g. Sick leave, personal event"></div>
     <div style="text-align:right;margin-top:14px">
       <button class="btn" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-gold" onclick="confirmEditTeacherAbsence(${JSON.stringify(String(a.id))})">Save Changes</button>
+      <button class="btn btn-gold" onclick="confirmEditTeacherAbsence('${escapeAttr(String(a.id))}')">Save Changes</button>
     </div>
   `);
 }
