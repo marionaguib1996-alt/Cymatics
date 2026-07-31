@@ -304,7 +304,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-87</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-88</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -9725,7 +9725,7 @@ function setDefaultJoinedDate(){
 }
 setDefaultJoinedDate();
 
-function scheduleWeeklyLessonsFrom(student, firstDate, count){
+function scheduleWeeklyLessonsFrom(student, firstDate, count, teacherForAbsenceCheck, lessonTimeForAbsenceCheck){
   if(!firstDate || !count) return 0;
   const newLessons=[];
   // Walk forward week by week until COUNT new lessons are actually
@@ -9751,6 +9751,10 @@ function scheduleWeeklyLessonsFrom(student, firstDate, count){
     // visible to explain why.
     const already=(db.lessons||[]).some(l=>String(l.studentId)===String(student.id) && l.date===date && (l.status_record||'active')!=='archived');
     if(already) continue;
+    // Skip a date the teacher is already marked absent for — they won't
+    // be there, so scheduling a lesson on it would just need undoing
+    // (and doesn't match the count Renewals Due already deducted for).
+    if(teacherForAbsenceCheck && typeof isTeacherAbsentOnDate==='function' && isTeacherAbsentOnDate(teacherForAbsenceCheck, date, lessonTimeForAbsenceCheck)) continue;
     const lesson={
       id:Date.now()+i,
       studentId:student.id,
@@ -10047,12 +10051,27 @@ function confirmRenewal(id){
 
   // Auto monthly plans bill and book per the lesson-days remaining in the
   // month of the first new session; other plans use their fixed count.
-  const count=(plan==='monthly' || plan==='group-monthly')
+  // Any date the teacher is already marked absent for is excluded from
+  // the count here too — otherwise this would try to schedule (and bill
+  // for) one more session than Renewals Due actually previewed, including
+  // a lesson landing on the exact date the teacher won't be there.
+  let count=(plan==='monthly' || plan==='group-monthly')
     ? weekdayOccurrencesLeftInMonth(firstNewDate, lessonDay)
     : sessionCounts[plan];
+  if((plan==='monthly' || plan==='group-monthly') && teacher && typeof isTeacherAbsentOnDate==='function'){
+    const monthOfFirst=String(firstNewDate||'').slice(0,7);
+    const dayNumbers=(typeof getWeekdayDatesInMonth==='function') ? getWeekdayDatesInMonth(monthOfFirst, lessonDay) : [];
+    const firstDay=Number(String(firstNewDate||'').slice(8,10));
+    const absentCount=dayNumbers.filter(d=>{
+      if(d<firstDay) return false; // before the batch's own start — irrelevant
+      const dateKey=monthOfFirst+'-'+String(d).padStart(2,'0');
+      return isTeacherAbsentOnDate(teacher, dateKey, lessonTime);
+    }).length;
+    count=Math.max(0, count-absentCount);
+  }
   if(!count){ showToast('No lesson-days remain this month for that plan — pick a Weekly session or a date next month.'); return; }
 
-  const created=scheduleWeeklyLessonsFrom(student, firstNewDate, count);
+  const created=scheduleWeeklyLessonsFrom(student, firstNewDate, count, teacher, lessonTime);
 
   // Ask (via the modal's own fields) rather than assume: was this renewal
   // actually paid, and if so, how? By the time an admin is confirming a
