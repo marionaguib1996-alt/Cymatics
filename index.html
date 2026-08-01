@@ -304,7 +304,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-93</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-94</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -7132,6 +7132,14 @@ async function syncLessonToSupabase(lesson){
      lesson.id=data.id;
      (db.lessonLogs||[]).forEach(log=>{ if(log.lessonId===oldId) log.lessonId=data.id; });
      save();
+     // The row for this lesson may already be on screen with the OLD id
+     // baked into its Edit/Delete onclick handlers (rendered synchronously
+     // right after creation, before this async swap could complete) —
+     // without refreshing, those buttons silently do nothing until
+     // something else happens to re-render the page. Each of these is a
+     // no-op if its own page isn't currently showing.
+     if(typeof renderLessons==='function') renderLessons();
+     if(typeof renderCalendarPage==='function') renderCalendarPage();
    }
  }catch(err){
    console.warn('Lesson sync failed:', err.message);
