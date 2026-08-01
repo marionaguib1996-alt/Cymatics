@@ -304,7 +304,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-91</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-92</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -2703,13 +2703,19 @@ function renderStudents(){
   if(sum){
     const activeStudents=db.students.filter(s=>(s.status||'active')!=='archived' && !s.frozen);
     const paid=activeStudents.filter(s=>db.payments[s.id+'_'+month]).length;
-    const unpaid=activeStudents.length-paid;
+    // A student pending renewal hasn't started this billing cycle yet —
+    // that's a different situation from genuinely owing for sessions
+    // already had, so they're excluded from Unpaid and tracked on their
+    // own instead (this is exactly who the Renewals Due list surfaces).
+    const pendingRenewal=activeStudents.filter(s=>!db.payments[s.id+'_'+month] && typeof studentHasPendingRenewal==='function' && studentHasPendingRenewal(s)).length;
+    const unpaid=activeStudents.length-paid-pendingRenewal;
     const weekly=activeStudents.filter(s=>isWeeklyPlan(s.plan)||s.plan==='trial').length;
     const monthly=activeStudents.length-weekly;
     const flagged=activeStudents.filter(s=>getStudentHealthFlags(s).level!=='ok').length;
     sum.innerHTML=`<div class="metric"><div class="metric-label">Students</div><div class="metric-value">${countUniquePeople(activeStudents)}</div></div>
     <div class="metric green"><div class="metric-label">Paid</div><div class="metric-value green">${paid}</div></div>
     <div class="metric red"><div class="metric-label">Unpaid</div><div class="metric-value red">${unpaid}</div></div>
+    <div class="metric amber" title="Finished their last cycle and haven't renewed yet — see the Renewals tab"><div class="metric-label">Pending Renewal</div><div class="metric-value amber">${pendingRenewal}</div></div>
     <div class="metric"><div class="metric-label">Monthly / Weekly</div><div class="metric-value">${monthly}/${weekly}</div></div>
     <div class="metric amber" title="Students with a health flag — a red or amber dot next to their name. Red = needs attention now (overdue payment, absence streak, make-ups piling up, stalled trial); amber = keep an eye on."><div class="metric-label">Needs Attention</div><div class="metric-value amber">${flagged}</div></div>`;
   }
@@ -3117,8 +3123,12 @@ function renderOverview(){
     const paid=!!db.payments[key];
     // A student who has finished all of this month's lessons has been
     // served for what they paid — they move to Renewals (next-month
-    // payment) and are not counted as owing for the current month.
-    if(!paid && studentFinishedMonth(s, month)) return;
+    // payment) and are not counted as owing for the current month. Also
+    // excludes a student pending renewal (per the same check Renewals Due
+    // uses) even when the viewed month has zero lesson records for them
+    // yet — otherwise a student who simply hasn't renewed gets counted as
+    // owing money for a cycle they haven't started.
+    if(!paid && (studentFinishedMonth(s, month) || (typeof studentHasPendingRenewal==='function' && studentHasPendingRenewal(s)))) return;
     if(!isWeeklyPlan(s.plan)){
       const amt=getStudentPlanAmount(s);
       if(paid)collected+=amt; else{outstanding+=amt;unpaid.push(s);}
@@ -10827,16 +10837,35 @@ function studentHasPendingRenewal(student){
   if(!student) return false;
   if((student.status||'active')==='archived' || student.frozen) return false;
   if(typeof isMonthlyPlan!=='function' || !isMonthlyPlan(student.plan)) return false;
-  const now=new Date();
-  const monthKey=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
-  if(typeof studentFinishedMonth!=='function' || !studentFinishedMonth(student, monthKey)) return false;
-  const todayKey=now.toISOString().slice(0,10);
-  const hasUpcoming=(db.lessons||[]).some(l=>
+
+  const todayKey=new Date().toISOString().slice(0,10);
+  const ownLessons=(db.lessons||[]).filter(l=>
     (String(l.studentId)===String(student.id) || l.student===student.name) &&
-    (l.status_record||'active')!=='archived' &&
-    l.status==='scheduled' && (l.date||'')>=todayKey
+    (l.status_record||'active')!=='archived'
   );
-  return !hasUpcoming;
+  if(!ownLessons.length) return false;
+
+  // Already renewed if ANY scheduled lesson exists today or later — the
+  // strict "no upcoming lesson at all" signal, regardless of which month
+  // it happens to land in.
+  const hasUpcoming=ownLessons.some(l=>l.status==='scheduled' && (l.date||'')>=todayKey);
+  if(hasUpcoming) return false;
+
+  // Must have genuinely attended something recently. Deliberately NOT
+  // scoped to the exact current calendar month — a student who finished
+  // last month and simply hasn't been renewed into this one yet is
+  // EXACTLY who belongs here, and requiring current-month attendance
+  // made them permanently invisible the moment a new month began (they'd
+  // never get a new-month lesson record without first being renewed —
+  // the very thing this check exists to surface). Bounded to 60 days so
+  // a long-dormant, effectively-abandoned record isn't resurfaced
+  // indefinitely; anything older than that is a candidate for archiving
+  // instead of renewal.
+  const attendedDates=ownLessons.filter(l=>l.status==='attended').map(l=>l.date).filter(Boolean).sort();
+  if(!attendedDates.length) return false;
+  const lastAttended=attendedDates[attendedDates.length-1];
+  const daysSince=Math.floor((new Date(todayKey)-new Date(lastAttended))/86400000);
+  return daysSince>=0 && daysSince<=60;
 }
 
 // Is there a monthly student whose REGULAR slot is this exact
