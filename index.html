@@ -304,7 +304,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-94</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-95</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -12083,6 +12083,8 @@ function showMakeupDetails(studentId, idsCsv){
     .sort((a,b)=>String(a.date).localeCompare(String(b.date)));
   const todayKey=new Date().toISOString().slice(0,10);
   const statusLabel=(st)=> st==='teacher_absent' ? 'Teacher absent' : (st==='absent_excused' ? 'Excused absence' : st);
+  window._makeupDetailsStudentId=studentId;
+  window._makeupDetailsIdsCsv=idsCsv;
   const rowsHtml=lessons.map(l=>{
     const expired=isMakeupExpired(l);
     let daysHtml;
@@ -12093,6 +12095,7 @@ function showMakeupDetails(studentId, idsCsv){
       daysHtml=`<span class="badge ${daysLeft<=7?'badge-amber':''}">${daysLeft} day${daysLeft===1?'':'s'} left</span>`;
     }
     return `<tr>
+      <td><input type="checkbox" class="mu-madeup-check" data-id="${l.id}" style="width:auto"></td>
       <td>${escapeHtml(formatDateDMY(l.date))}</td>
       <td>${escapeHtml(l.instrument||student?.instrument||'—')}</td>
       <td>${escapeHtml(statusLabel(l.status))}</td>
@@ -12103,10 +12106,39 @@ function showMakeupDetails(studentId, idsCsv){
   openModal('Make-Ups — '+escapeHtml(student?.name||''), `
     <div class="teacher-row-meta" style="margin-bottom:12px">${lessons.length} make-up${lessons.length===1?'':'s'} still to schedule${student?.instrument?` · ${escapeHtml(student.instrument)}`:''}${student?.teacher?` with ${escapeHtml(student.teacher)}`:''}.</div>
     <div class="table-wrap"><table>
-      <thead><tr><th>Missed Lesson</th><th>Instrument</th><th>Reason</th><th>Time Left</th><th></th></tr></thead>
-      <tbody>${rowsHtml||'<tr><td colspan="5">Nothing to schedule.</td></tr>'}</tbody>
+      <thead><tr><th>Made Up?</th><th>Missed Lesson</th><th>Instrument</th><th>Reason</th><th>Time Left</th><th></th></tr></thead>
+      <tbody>${rowsHtml||'<tr><td colspan="6">Nothing to schedule.</td></tr>'}</tbody>
     </table></div>
+    ${lessons.length ? `<div style="text-align:right;margin-top:14px"><button class="btn btn-gold" onclick="confirmMakeupDetailsChecked()">Mark Checked as Made Up</button></div>` : ''}
   `);
+}
+
+// Marks every checked row in the Makeup Details modal as made-up-without-
+// booking (same resolution as the single-lesson "Already Made Up" option),
+// then refreshes the modal in place so the resolved ones drop out of the
+// list immediately.
+function confirmMakeupDetailsChecked(){
+  const checked=[...document.querySelectorAll('.mu-madeup-check:checked')].map(el=>Number(el.getAttribute('data-id')));
+  if(!checked.length){ showToast('Check at least one lesson first.'); return; }
+  let count=0;
+  checked.forEach(id=>{
+    const l=(db.lessons||[]).find(x=>x.id===id);
+    if(!l || l.makeupResolved) return;
+    l.makeupResolved=true;
+    count++;
+    if(window.syncLessonUpdateToSupabase) syncLessonUpdateToSupabase(l);
+  });
+  save();
+  if(typeof renderReports==='function') renderReports();
+  const studentId=window._makeupDetailsStudentId;
+  const remainingIds=String(window._makeupDetailsIdsCsv||'').split(',').filter(Boolean)
+    .filter(idStr=>!checked.includes(Number(idStr)));
+  showToast(count+' make-up'+(count===1?'':'s')+' marked as made up');
+  if(remainingIds.length){
+    showMakeupDetails(studentId, remainingIds.join(','));
+  } else {
+    closeModal();
+  }
 }
 
 function openScheduleMakeup(missedLessonId){
@@ -12180,7 +12212,35 @@ function openScheduleMakeup(missedLessonId){
     </div>
     <div id="ms-capacity-note" style="margin-top:6px;font-size:12px;color:var(--text-muted)"></div>
     <button class="btn btn-sm btn-gold" style="margin-top:10px" onclick="confirmSeparateDayMakeup(${missedLessonId})">Book Separate Makeup</button>
+
+    <div class="card-title" style="margin-top:20px">Option 3 — Already Made Up</div>
+    <small>Use this if the makeup already happened informally (or outside the app) — no new session gets booked, this just clears the owed status.</small>
+    <div style="margin-top:8px;display:flex;align-items:center;gap:8px">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:normal;text-transform:none;font-size:13px">
+        <input id="ms-mark-madeup" type="checkbox" style="width:auto">
+        Mark as Made-Up
+      </label>
+      <button class="btn btn-sm btn-gold" onclick="confirmMakeupAlreadyDone(${missedLessonId})">Confirm</button>
+    </div>
   `);
+}
+
+// Marks a single missed lesson as made-up without booking anything — the
+// checkbox must actually be checked first, so confirming without it is a
+// harmless no-op with a reminder toast rather than silently doing nothing.
+function confirmMakeupAlreadyDone(missedLessonId){
+  const checked=!!document.getElementById('ms-mark-madeup')?.checked;
+  if(!checked){ showToast('Check "Mark as Made-Up" first.'); return; }
+  const l=(db.lessons||[]).find(x=>x.id===missedLessonId);
+  if(!l){ showToast('Lesson not found.'); return; }
+  l.makeupResolved=true;
+  save();
+  closeModal();
+  if(typeof renderReports==='function') renderReports();
+  if(typeof renderLessons==='function') renderLessons();
+  if(typeof renderCalendarPage==='function') renderCalendarPage();
+  if(window.syncLessonUpdateToSupabase) syncLessonUpdateToSupabase(l);
+  showToast('Marked as made up');
 }
 
 function updateMakeupSeparateDaySlots(missedLessonId){
