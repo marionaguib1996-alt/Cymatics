@@ -304,7 +304,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-92</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-93</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1444,6 +1444,34 @@ function getNextMonthString(){
   let month=now.getMonth()+1; // 0-indexed -> next month directly
   if(month>11){ month=0; year+=1; }
   return year+'-'+String(month+1).padStart(2,'0');
+}
+
+// The month a student's NEXT renewal batch would actually start in —
+// NOT necessarily "next calendar month from today". A student who
+// finished several months ago and hasn't renewed yet needs to be billed
+// for the month right after their last completed one (exactly what
+// confirmRenewal would schedule into if Renew were clicked right now),
+// not silently skipped ahead to whatever's "next" relative to today —
+// that would quote a price for the wrong month and imply they don't owe
+// anything for the month(s) in between. Falls back to the plain
+// next-calendar-month when there's no lesson history or lesson day to
+// anchor on.
+function studentNextBillingMonth(student){
+  if(!student || !student.lesson_day) return getNextMonthString();
+  const ownLessons=(db.lessons||[]).filter(l=>
+    (String(l.studentId)===String(student.id) || l.student===student.name) &&
+    (l.status_record||'active')!=='archived'
+  );
+  const dates=ownLessons.map(l=>l.date).filter(Boolean).sort();
+  const lastDate=dates.length ? dates[dates.length-1] : null;
+  if(!lastDate) return getNextMonthString();
+  let firstNewDate=nextWeekdayStrictlyAfter(lastDate, student.lesson_day);
+  const todayKey=new Date().toISOString().slice(0,10);
+  const soonestPossible=nextWeekdayOnOrAfter(todayKey, student.lesson_day);
+  if(soonestPossible && firstNewDate<soonestPossible){
+    firstNewDate=soonestPossible;
+  }
+  return String(firstNewDate||getNextMonthString()).slice(0,7);
 }
 
 // Every date within a given "YYYY-MM" month that falls on the given
@@ -3309,14 +3337,19 @@ function renderRenewalsDue(){
   if(!host) return;
   const now=new Date();
   const monthKey=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
-  const nextMonthKey=(typeof getNextMonthString==='function') ? getNextMonthString() : monthKey;
-  const nextMonthName=(typeof formatMonthName==='function') ? formatMonthName(nextMonthKey) : nextMonthKey;
   const rows=[];
   (db.students||[]).forEach(s=>{
     if((s.status||'active')==='archived' || s.frozen) return;
     if(!isMonthlyPlan(s.plan)) return; // monthly-billed plans only (incl. legacy)
     if(!studentHasPendingRenewal(s)) return; // must have finished this month AND not already renewed
     if(!s.lesson_day) return; // can't compute next month's occurrences without one
+    // The month THIS student's next batch would actually start in — not
+    // necessarily next-calendar-month-from-today. A student who's several
+    // months behind on renewing still needs billing for the month right
+    // after their last completed one, matching what confirmRenewal would
+    // actually schedule if Renew were clicked right now.
+    const nextMonthKey=studentNextBillingMonth(s);
+    const nextMonthName=(typeof formatMonthName==='function') ? formatMonthName(nextMonthKey) : nextMonthKey;
     let dayNumbers=(typeof getWeekdayDatesInMonth==='function') ? getWeekdayDatesInMonth(nextMonthKey, s.lesson_day) : [];
     // Exclude any date the teacher is already marked absent for — the
     // student won't have (and shouldn't be billed for) a session that day.
@@ -3349,14 +3382,14 @@ function renderRenewalsDue(){
       amount=billableCount*rate;
     }
     const remindedAt=db.remindersSent[s.id+'_renewal_'+nextMonthKey]||null;
-    rows.push({s, lessonCount, amount, remindedAt, isCustomPay, deductionCount:deductions.length});
+    rows.push({s, lessonCount, amount, remindedAt, isCustomPay, deductionCount:deductions.length, nextMonthName});
   });
   rows.sort((a,b)=>(a.s.name||'').localeCompare(b.s.name||''));
   if(!rows.length){
     host.innerHTML='<div class="empty"><div class="empty-icon">✅</div><div class="empty-text">No renewals due — no monthly students have finished this month\'s sessions yet.</div></div>';
     return;
   }
-  host.innerHTML=rows.map(({s,lessonCount,amount,remindedAt,isCustomPay,deductionCount})=>{
+  host.innerHTML=rows.map(({s,lessonCount,amount,remindedAt,isCustomPay,deductionCount,nextMonthName})=>{
     const remindedBadge = remindedAt
       ? `<span class="badge badge-blue" style="font-size:10px" title="Reminded ${escapeAttr(new Date(remindedAt).toLocaleString())}">✓ Reminded ${escapeHtml(timeAgoLabel(remindedAt))}</span>`
       : '';
@@ -3404,7 +3437,7 @@ function sendRenewalReminder(studentId){
       return;
     }
 
-    const month=getNextMonthString();
+    const month=(typeof studentNextBillingMonth==='function') ? studentNextBillingMonth(student) : getNextMonthString();
     const monthName=formatMonthName(month);
     const allDayNumbers=getWeekdayDatesInMonth(month, student.lesson_day);
     let dayNumbers=allDayNumbers;
