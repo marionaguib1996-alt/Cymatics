@@ -304,7 +304,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-96</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-97</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -3630,7 +3630,10 @@ function renderTrialFollowUp(){
         <div class="unpaid-name">${escapeHtml(s.name)}</div>
         <div class="unpaid-meta">${escapeHtml(s.instrument||'')} ${s.instrument&&s.teacher?'·':''} ${escapeHtml(s.teacher||'')}${s.lesson_day?' · '+escapeHtml(s.lesson_day):''}${s.lessonTime?' '+escapeHtml(formatTime12h(s.lessonTime)):''} · <span class="badge badge-red" style="font-size:10px">Trial ${trialDate?formatDateDMY(trialDate):''}</span> ${remindedBadge}</div>
       </div>
-      <button class="btn btn-sm" onclick="sendTrialConversionMessage(${s.id})" title="Opens WhatsApp with the trial follow-up reminder">${reminderBtnLabel}</button>
+      <div style="display:flex;align-items:center;gap:8px">
+        <button class="btn btn-sm" onclick="sendTrialConversionMessage(${s.id})" title="Opens WhatsApp with the trial follow-up reminder">${reminderBtnLabel}</button>
+        <button class="btn btn-sm btn-gold" onclick="convertTrial(${s.id})" title="Convert this trial to a paying plan">🔁 Convert</button>
+      </div>
     </div>`;
   }).join('');
 }
