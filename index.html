@@ -304,7 +304,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-98</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-99</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -9936,6 +9936,15 @@ function renewStudentSubscription(id){
       <div class="form-field"><label for="rn-time">Time Slot</label><select id="rn-time">
         ${timeChoicesWithCurrent.length ? timeChoicesWithCurrent.map(t=>`<option value="${escapeAttr(t)}" ${t===student.lessonTime?'selected':''}>${escapeHtml(formatTime12h(t))}</option>`).join('') : '<option value="">No available slots</option>'}
       </select></div>
+    </div>
+    <div class="form-field wide" style="margin-top:10px">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:normal">
+        <input id="rn-custom-dates-toggle" type="checkbox" style="width:auto" onchange="onRenewCustomDatesToggle(${id})">
+        Use Custom Dates instead
+      </label>
+      <div class="teacher-row-meta" style="margin-top:2px">Pick specific dates by hand — any day of the week — instead of auto-scheduling from the regular lesson day.</div>
+    </div>
+    <div id="rn-plan-section" class="teacher-log-grid">
       <div class="form-field"><label for="rn-plan">Plan</label><select id="rn-plan" onchange="onRenewPlanChange(${id})">
         ${planOptionsHtml(student.plan)}
       </select></div>
@@ -9946,6 +9955,24 @@ function renewStudentSubscription(id){
           <button type="button" class="btn btn-sm" onclick="openDatePicker('rn-date')">📅</button>
         </div>
       </div>
+    </div>
+    <div id="rn-custom-dates-section" style="display:none">
+      <div class="form-field wide">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:normal">
+          <input id="rn-custom-is-group" type="checkbox" style="width:auto" ${isGroupPlan(student.plan)?'checked':''} onchange="updateRenewCustomPreview()">
+          Group session rate (750 EGP/session instead of 500)
+        </label>
+      </div>
+      <div class="form-field wide">
+        <label for="rn-custom-date">Add date(s)</label>
+        <div style="display:flex;gap:4px">
+          <input id="rn-custom-date" type="text" placeholder="dd/mm/yyyy" maxlength="10" oninput="maskDateInput(this)">
+          <button type="button" class="btn btn-sm" onclick="openDatePicker('rn-custom-date')">📅</button>
+          <button type="button" class="btn btn-sm btn-gold" onclick="addRenewCustomDate(${id})">+ Add</button>
+        </div>
+        <div id="rn-custom-date-chips" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px"></div>
+      </div>
+      <div id="rn-custom-preview" style="margin-top:6px;font-size:13px;color:var(--gold);font-weight:600"></div>
     </div>
     <div class="form-field wide" style="margin-top:10px">
       <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:normal">
@@ -9963,6 +9990,60 @@ function renewStudentSubscription(id){
     </div>
     <div style="text-align:right;margin-top:14px"><button class="btn btn-gold" onclick="confirmRenewal(${id})">Confirm Renewal</button></div>`);
   window._renewPaymentMethod='InstaPay';
+  window._renewCustomDates=[];
+}
+
+// Toggles between the normal auto-scheduled Plan section and the free
+// Custom Dates section.
+function onRenewCustomDatesToggle(id){
+  const useCustom=!!document.getElementById('rn-custom-dates-toggle')?.checked;
+  const planSection=document.getElementById('rn-plan-section');
+  const customSection=document.getElementById('rn-custom-dates-section');
+  if(planSection) planSection.style.display = useCustom ? 'none' : 'grid';
+  if(customSection) customSection.style.display = useCustom ? 'block' : 'none';
+}
+
+function addRenewCustomDate(id){
+  const raw=document.getElementById('rn-custom-date')?.value||'';
+  const iso=dmyToIso(raw);
+  if(!iso){ showToast('Enter a valid date (dd/mm/yyyy).'); return; }
+  const todayKey=new Date().toISOString().slice(0,10);
+  if(iso<todayKey){ showToast('That date is in the past.'); return; }
+  window._renewCustomDates=window._renewCustomDates||[];
+  if(!window._renewCustomDates.includes(iso)) window._renewCustomDates.push(iso);
+  window._renewCustomDates.sort();
+  document.getElementById('rn-custom-date').value='';
+  renderRenewCustomDateChips();
+  updateRenewCustomPreview();
+}
+
+function removeRenewCustomDate(iso){
+  window._renewCustomDates=(window._renewCustomDates||[]).filter(d=>d!==iso);
+  renderRenewCustomDateChips();
+  updateRenewCustomPreview();
+}
+
+function renderRenewCustomDateChips(){
+  const host=document.getElementById('rn-custom-date-chips');
+  if(!host) return;
+  const dates=window._renewCustomDates||[];
+  host.innerHTML=dates.map(iso=>{
+    const dayName=WEEKDAY_NAMES[parseDateUTC(iso).getUTCDay()];
+    return `<span class="badge badge-blue" style="display:flex;align-items:center;gap:4px">${escapeHtml(dayName.slice(0,3))} ${escapeHtml(formatDateDMY(iso))} <span style="cursor:pointer" onclick="removeRenewCustomDate('${escapeAttr(iso)}')">✕</span></span>`;
+  }).join('');
+}
+
+// Per Mario's rule: per-session rate x however many dates are picked.
+function updateRenewCustomPreview(){
+  const host=document.getElementById('rn-custom-preview');
+  if(!host) return;
+  const dates=window._renewCustomDates||[];
+  const isGroup=!!document.getElementById('rn-custom-is-group')?.checked;
+  const rate=isGroup?750:500;
+  const total=dates.length*rate;
+  host.textContent = dates.length
+    ? dates.length+' session'+(dates.length===1?'':'s')+' × '+rate+' EGP = '+egp(total)
+    : 'Add at least one date to see the price.';
 }
 
 // Toggles the payment-method choice's visibility based on whether "Mark
@@ -10018,6 +10099,11 @@ function onRenewDayChange(id){
 function confirmRenewal(id){
   const student=db.students.find(x=>x.id===id);
   if(!student) return;
+
+  if(document.getElementById('rn-custom-dates-toggle')?.checked){
+    confirmRenewalCustomDates(id, student);
+    return;
+  }
 
   const wasTrial=student.plan==='trial' || student.plan==='group-trial';
 
@@ -10216,6 +10302,79 @@ function confirmRenewal(id){
   } else {
     showToast('Student details updated (no new sessions — they may already exist)');
   }
+}
+
+// Custom Dates renewal: one lesson per hand-picked date, any day of the
+// week, priced at per-session rate x however many dates were picked —
+// bypassing the normal auto-plan scheduling entirely.
+function confirmRenewalCustomDates(id, student){
+  const teacher=document.getElementById('rn-teacher')?.value||student.teacher;
+  const instrument=document.getElementById('rn-instrument')?.value||student.instrument;
+  const lessonTime=document.getElementById('rn-time')?.value||'';
+  const dates=(window._renewCustomDates||[]).slice().sort();
+  const isGroup=!!document.getElementById('rn-custom-is-group')?.checked;
+
+  if(!teacher){ showToast('Please choose a teacher'); return; }
+  if(!lessonTime){ showToast('Please choose a time slot'); return; }
+  if(!dates.length){ showToast('Add at least one date.'); return; }
+
+  const dur=isGroup?GROUP_SESSION_DURATION_MINUTES:SESSION_DURATION_MINUTES;
+  const todayKey=new Date().toISOString().slice(0,10);
+  for(const date of dates){
+    if(date<todayKey){ showToast('One of the picked dates ('+formatDateDMY(date)+') is in the past — remove it.'); return; }
+    const ownLesson=(db.lessons||[]).find(l=>l.date===date && String(l.studentId)===String(id) && (l.status_record||'active')!=='archived');
+    if(isRoomFullDuringRange(date, lessonTime, dur, ownLesson?.id||null)){ showToast('The 3-room limit is hit on '+formatDateDMY(date)+' — pick another date or time.'); return; }
+  }
+
+  student.teacher=teacher;
+  student.instrument=instrument;
+  student.lessonTime=lessonTime;
+
+  const rate=isGroup?750:500;
+  const created=[];
+  dates.forEach((date,i)=>{
+    const lesson={
+      id:Date.now()+i,
+      studentId:student.id,
+      student:student.name,
+      instrument:instrument||'',
+      teacher:teacher||'',
+      date:date,
+      time:lessonTime,
+      status:'scheduled',
+      month:date.slice(0,7),
+      isExtendedDuration:isGroup||undefined
+    };
+    db.lessons.push(lesson);
+    createLessonLog(student, lesson);
+    created.push(lesson);
+  });
+
+  const markPaid=!!document.getElementById('rn-mark-paid')?.checked;
+  const paymentMethod=window._renewPaymentMethod||'InstaPay';
+  const coveredMonths=new Set(dates.map(d=>d.slice(0,7)));
+  coveredMonths.forEach(m=>{
+    const key=student.id+'_'+m;
+    db.payments[key]=markPaid;
+    db.paymentMethods=db.paymentMethods||{};
+    if(markPaid) db.paymentMethods[key]=paymentMethod;
+    else delete db.paymentMethods[key];
+    if(typeof syncPaymentToggleToSupabase==='function') syncPaymentToggleToSupabase(student.id, m, markPaid, markPaid?paymentMethod:null);
+  });
+  if(student.customPay!=null) student.customPay=null;
+
+  save();
+  closeModal();
+  created.forEach(l=>{ if(typeof syncLessonToSupabase==='function') syncLessonToSupabase(l); });
+  renderStudents();
+  renderLessons();
+  if(typeof renderOverview==='function') renderOverview();
+  if(typeof renderTeacherWorkspace==='function') renderTeacherWorkspace();
+  if(typeof renderRenewalsDue==='function') renderRenewalsDue();
+  if(typeof renderWeeklyRenewals==='function') renderWeeklyRenewals();
+  if(typeof renderTrialFollowUp==='function') renderTrialFollowUp();
+  if(typeof syncStudentUpdateToSupabase==='function') syncStudentUpdateToSupabase(student);
+  showToast(dates.length+' session(s) scheduled on custom dates ('+egp(dates.length*rate)+') — marked '+(markPaid?'paid':'unpaid'));
 }
 
 (function(){
