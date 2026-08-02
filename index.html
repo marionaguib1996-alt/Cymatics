@@ -304,7 +304,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-97</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-98</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -10084,38 +10084,13 @@ function confirmRenewal(id){
       firstNewDate=chosen;
     }
   }
-  // A trial conversion should start the recurring schedule the week AFTER
-  // the trial — i.e. one week on from the trial lesson, on the chosen
-  // lesson day. Anchoring on the trial lesson's OWN date (lastDate) rather
-  // than on "today" is what makes this correct regardless of when the
-  // conversion is actually performed: converting the trial three days
-  // later, or across a week boundary, must not push the first real lesson
-  // an extra week out. (The previous version anchored on today's week,
-  // which is exactly why a trial on Friday could land its first lesson two
-  // Fridays later instead of the next one.) Not applied to a normal
-  // renewal, where "right after the last lesson" is already correct.
-  if(wasTrial){
-    const anchor=parseDateUTC(lastDate);
-    if(anchor){
-      // One week on from the trial lesson...
-      const oneWeekOn=new Date(anchor);
-      oneWeekOn.setUTCDate(oneWeekOn.getUTCDate()+7);
-      // ...then snap to the chosen lesson day within that week (forward
-      // from that point, so a different chosen day than the trial's own
-      // still lands in the correct week).
-      const idx=WEEKDAY_NAMES.indexOf(lessonDay);
-      if(idx>=0){
-        const md=oneWeekOn.getUTCDay();
-        // Search within a 7-day window centered so the same weekday maps
-        // to itself (offset 0) rather than jumping a full week ahead.
-        let fwd=(idx-md+7)%7;
-        oneWeekOn.setUTCDate(oneWeekOn.getUTCDate()+fwd);
-        firstNewDate=oneWeekOn.toISOString().slice(0,10);
-      } else {
-        firstNewDate=oneWeekOn.toISOString().slice(0,10);
-      }
-    }
-  }
+  // A trial conversion's firstNewDate is already computed correctly above
+  // (nextWeekdayStrictlyAfter(lastDate, lessonDay), where lastDate is the
+  // trial lesson's own date) — the nearest occurrence of the chosen day
+  // after the trial, regardless of which specific weekday that is. The
+  // past-date clamp just below already handles a late conversion (one
+  // performed well after the trial) by pushing forward to the soonest
+  // real occurrence from today, so no special-casing is needed here.
 
   // Guard against a stale reference date producing a firstNewDate that's
   // already in the past — whichever branch above computed it. If a
