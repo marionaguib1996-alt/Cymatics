@@ -304,7 +304,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-101</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-102</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -382,9 +382,17 @@ input::placeholder{color:var(--text-dim)}
       <div class="form-field"><label for="s-day">Lesson Day</label><select id="s-day">
       <option>Sunday</option><option>Monday</option><option>Tuesday</option><option>Wednesday</option><option>Thursday</option><option>Friday</option><option>Saturday</option>
       </select></div>
-      <div class="form-field"><label for="s-time">Time Slot</label><select id="s-time">
+      <div class="form-field"><label for="s-time">Time Slot</label><select id="s-time" onchange="onStudentTimeSelectChange()">
       <option value="">Select Teacher &amp; Day first</option>
-      </select></div>
+      </select>
+      <div id="s-time-custom-field" style="display:none;margin-top:6px">
+        <div style="display:flex;gap:4px">
+          <input id="s-time-custom" type="text" placeholder="HH:MM (24h), e.g. 15:45" maxlength="5">
+          <button type="button" class="btn btn-sm btn-gold" onclick="applyStudentCustomTime()">Set</button>
+        </div>
+        <div class="teacher-row-meta" style="margin-top:2px">Still checked against room and teacher availability when you save.</div>
+      </div>
+      </div>
       <div class="form-field"><label for="s-plan">Payment plan</label>
         <select id="s-plan" onchange="updateStudentTimeSlotOptions()">
           <option value="trial">Trial Session (500 EGP)</option>
@@ -10788,7 +10796,7 @@ window.updateStudentTimeSlotOptions=function(){
   const timeSel=document.getElementById('s-time');
   if(!timeSel) return;
   const slots=getAvailableSlotsWithCapacity(teacherName, dayName, null, isGroupPlan(plan));
-  if(!slots.length){ timeSel.innerHTML='<option value="">No available slots for this day</option>'; return; }
+  if(!slots.length){ timeSel.innerHTML='<option value="">No available slots for this day</option><option value="__custom__">✏️ Custom time...</option>'; return; }
   timeSel.innerHTML=slots.map(({time,full,shiftedFrom,actualStart,shortWindow,busyWith})=>{
     const bookValue=full ? '' : (actualStart||time);
     let label=formatTime12h(actualStart||time);
@@ -10797,7 +10805,41 @@ window.updateStudentTimeSlotOptions=function(){
     if(busyWith) label+=' (Teacher Busy — with '+busyWith+')';
     else if(full) label+=' (Rooms Full)';
     return `<option value="${bookValue}" ${full?'disabled':''}>${escapeHtml(label)}</option>`;
-  }).join('');
+  }).join('') + '<option value="__custom__">✏️ Custom time...</option>';
+};
+
+// Reveals the custom-time text field when "Custom time..." is picked from
+// the dropdown, hides it otherwise.
+window.onStudentTimeSelectChange=function(){
+  const sel=document.getElementById('s-time');
+  const field=document.getElementById('s-time-custom-field');
+  if(!sel || !field) return;
+  field.style.display = sel.value==='__custom__' ? 'block' : 'none';
+};
+
+// Turns the typed custom time into an actual selected option on the s-time
+// dropdown itself — so every existing check that reads its value (room
+// capacity, teacher availability, saving) keeps working unchanged, off-grid
+// time or not.
+window.applyStudentCustomTime=function(){
+  const raw=(document.getElementById('s-time-custom')?.value||'').trim();
+  if(!/^\d{1,2}:\d{2}$/.test(raw)){ showToast('Enter a valid time as HH:MM (24h), e.g. 15:45.'); return; }
+  const [h,m]=raw.split(':').map(Number);
+  if(h>23 || m>59){ showToast('Enter a valid time as HH:MM (24h), e.g. 15:45.'); return; }
+  const time=String(h).padStart(2,'0')+':'+String(m).padStart(2,'0');
+  const sel=document.getElementById('s-time');
+  if(!sel) return;
+  // Replace any prior custom option, then add and select the new one.
+  [...sel.querySelectorAll('option[data-custom]')].forEach(o=>o.remove());
+  const opt=document.createElement('option');
+  opt.value=time;
+  opt.textContent=formatTime12h(time)+' (Custom)';
+  opt.setAttribute('data-custom','1');
+  opt.selected=true;
+  const customTrigger=[...sel.options].find(o=>o.value==='__custom__');
+  if(customTrigger) sel.insertBefore(opt, customTrigger);
+  else sel.appendChild(opt);
+  sel.value=time;
 };
 
 // Override Edit Student time slot dropdown
