@@ -304,7 +304,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-102</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-103</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -386,8 +386,18 @@ input::placeholder{color:var(--text-dim)}
       <option value="">Select Teacher &amp; Day first</option>
       </select>
       <div id="s-time-custom-field" style="display:none;margin-top:6px">
-        <div style="display:flex;gap:4px">
-          <input id="s-time-custom" type="text" placeholder="HH:MM (24h), e.g. 15:45" maxlength="5">
+        <div style="display:flex;gap:4px;align-items:center">
+          <select id="s-time-custom-hour" style="flex:1">
+            <option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option><option value="9">9</option><option value="10">10</option><option value="11">11</option><option value="12">12</option>
+          </select>
+          <span>:</span>
+          <select id="s-time-custom-min" style="flex:1">
+            <option value="0">00</option><option value="1">01</option><option value="2">02</option><option value="3">03</option><option value="4">04</option><option value="5">05</option><option value="6">06</option><option value="7">07</option><option value="8">08</option><option value="9">09</option><option value="10">10</option><option value="11">11</option><option value="12">12</option><option value="13">13</option><option value="14">14</option><option value="15">15</option><option value="16">16</option><option value="17">17</option><option value="18">18</option><option value="19">19</option><option value="20">20</option><option value="21">21</option><option value="22">22</option><option value="23">23</option><option value="24">24</option><option value="25">25</option><option value="26">26</option><option value="27">27</option><option value="28">28</option><option value="29">29</option><option value="30">30</option><option value="31">31</option><option value="32">32</option><option value="33">33</option><option value="34">34</option><option value="35">35</option><option value="36">36</option><option value="37">37</option><option value="38">38</option><option value="39">39</option><option value="40">40</option><option value="41">41</option><option value="42">42</option><option value="43">43</option><option value="44">44</option><option value="45">45</option><option value="46">46</option><option value="47">47</option><option value="48">48</option><option value="49">49</option><option value="50">50</option><option value="51">51</option><option value="52">52</option><option value="53">53</option><option value="54">54</option><option value="55">55</option><option value="56">56</option><option value="57">57</option><option value="58">58</option><option value="59">59</option>
+          </select>
+          <select id="s-time-custom-ampm" style="flex:1">
+            <option value="AM">AM</option>
+            <option value="PM">PM</option>
+          </select>
           <button type="button" class="btn btn-sm btn-gold" onclick="applyStudentCustomTime()">Set</button>
         </div>
         <div class="teacher-row-meta" style="margin-top:2px">Still checked against room and teacher availability when you save.</div>
@@ -10822,11 +10832,16 @@ window.onStudentTimeSelectChange=function(){
 // capacity, teacher availability, saving) keeps working unchanged, off-grid
 // time or not.
 window.applyStudentCustomTime=function(){
-  const raw=(document.getElementById('s-time-custom')?.value||'').trim();
-  if(!/^\d{1,2}:\d{2}$/.test(raw)){ showToast('Enter a valid time as HH:MM (24h), e.g. 15:45.'); return; }
-  const [h,m]=raw.split(':').map(Number);
-  if(h>23 || m>59){ showToast('Enter a valid time as HH:MM (24h), e.g. 15:45.'); return; }
-  const time=String(h).padStart(2,'0')+':'+String(m).padStart(2,'0');
+  const h12=Number(document.getElementById('s-time-custom-hour')?.value);
+  const min=Number(document.getElementById('s-time-custom-min')?.value);
+  const ampm=document.getElementById('s-time-custom-ampm')?.value;
+  if(!h12 || h12<1 || h12>12 || Number.isNaN(min) || (ampm!=='AM' && ampm!=='PM')){
+    showToast('Pick an hour, minute, and AM/PM.');
+    return;
+  }
+  let h24=h12%12; // 12 -> 0
+  if(ampm==='PM') h24+=12;
+  const time=String(h24).padStart(2,'0')+':'+String(min).padStart(2,'0');
   const sel=document.getElementById('s-time');
   if(!sel) return;
   // Replace any prior custom option, then add and select the new one.
