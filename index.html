@@ -264,6 +264,41 @@ input::placeholder{color:var(--text-dim)}
   #sync-failure-badge{font-size:11px;padding:4px 8px}
   .month-selector{font-size:12px}
   .logo-sub{display:none}
+  /* Stat cards: two-up is genuinely cramped at this width (labels wrap to
+     three lines and a 5-card row leaves an orphan), so go single-column
+     and let each card be readable at a glance. */
+  .metric-grid,.metric-grid.metric-grid-5{grid-template-columns:1fr}
+  .metric{padding:10px 12px}
+  .metric-value{font-size:22px}
+  .metric-label{font-size:10px;letter-spacing:0.04em}
+  /* Reclaim vertical space — on a phone the padding was costing more
+     screen than the content itself in places. */
+  .card{padding:12px;margin-bottom:12px}
+  .card-title{font-size:13px}
+  .main,.teacher-main{padding:0.75rem}
+  /* Filter/search clusters stack rather than squeezing side by side. */
+  .card > div[style*="display:flex"][style*="flex-wrap"]{gap:8px}
+  .card input,.card select{max-width:none !important;width:100%}
+  /* Summary rows keep label and value on one line instead of wrapping. */
+  .summary-row{font-size:13px}
+  /* Tables are the biggest remaining source of phone crowding. Tighter
+     cells fit noticeably more per screen; keeping cells on one line means
+     the row stays scannable while scrolling sideways instead of every
+     row becoming three ragged lines tall. */
+  table{font-size:12px}
+  th{padding:7px 8px;font-size:10px}
+  td{padding:7px 8px;white-space:nowrap}
+  /* A fixed-height inner scroll box inside an already-scrolling phone
+     page is awkward — let Reports tables run their natural length. */
+  #page-reports .table-wrap{max-height:none}
+  /* Modals: the inner panel is inline-styled to width:min(700px,90vw)
+     with 20px padding on both the overlay and the panel, which wastes a
+     lot of a phone screen. Reclaim it. */
+  #app-modal{padding:8px}
+  #app-modal > div{width:100% !important;padding:14px !important}
+  /* Nav tabs scroll horizontally rather than wrapping to three rows. */
+  .nav-bar{gap:2px}
+  .nav-btn{padding:8px 10px;font-size:12px;white-space:nowrap}
 }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -304,7 +339,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-105</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-108</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1012,11 +1047,7 @@ input::placeholder{color:var(--text-dim)}
           <div class="metric green"><div class="metric-label">Taught This Month</div><div id="teacher-sessions-month" class="metric-value green">0</div></div>
           <div class="metric amber"><div class="metric-label">Excused Absences</div><div id="teacher-excused-count" class="metric-value amber">0</div></div>
           <div class="metric red"><div class="metric-label">Days Absent (Month)</div><div id="teacher-days-absent" class="metric-value red">0</div></div>
-          <div class="metric red" style="cursor:pointer" onclick="toggleTeacherMakeupsDrilldown()" title="Tap to see who's owed a make-up"><div class="metric-label">Makeups Owed</div><div id="teacher-makeups-count" class="metric-value red">0</div></div>
-        </div>
-        <div id="teacher-makeups-drilldown" class="card" style="display:none">
-          <div class="card-title">Make-ups Owed — Details</div>
-          <div id="teacher-makeups-list" class="teacher-list"></div>
+          <div class="metric red" style="cursor:pointer" onclick="toggleTeacherMakeupsDrilldown()" title="Tap to see who's owed a make-up"><div class="metric-label">Makeups Owed (Total)</div><div id="teacher-makeups-count" class="metric-value red">0</div></div>
         </div>
         <div class="teacher-section-grid">
           <div class="card">
@@ -1027,6 +1058,10 @@ input::placeholder{color:var(--text-dim)}
             <div class="card-title">Workspace Summary</div>
             <div id="teacher-dashboard-summary"></div>
           </div>
+        </div>
+        <div id="teacher-makeups-drilldown" class="card" style="display:none">
+          <div class="card-title">Make-ups Owed — Details</div>
+          <div id="teacher-makeups-list" class="teacher-list"></div>
         </div>
       </div>
     </div>
@@ -3422,6 +3457,14 @@ function sendRenewalReminder(studentId){
     }
 
     const {month, monthName, lessonCount, dateList, amount, absenceNote, deductionNoteBlock}=computeRenewalCourseDetails(student);
+    // Guard against messaging the same student twice for the same billing
+    // month — easy to do now that reminder history follows you between
+    // devices (send from the laptop, forget, send again from the phone).
+    const alreadySentAt=db.remindersSent[studentId+'_renewal_'+month];
+    if(alreadySentAt){
+      const when=(typeof timeAgoLabel==='function') ? timeAgoLabel(alreadySentAt) : 'earlier';
+      if(!confirm((student.name||'This student')+' was already reminded '+when+' for '+monthName+'.\n\nSend another reminder anyway?')) return;
+    }
     // When only a PARENT number is on file the message is going to the
     // parent, not the student — so greet them generically rather than
     // addressing the parent by the child's first name.
@@ -4042,7 +4085,13 @@ function editLesson(id){
        </label>
      </div>
      <div class="form-field"><label for="el-payroll-amount">Custom Payroll Amount (EGP)</label><input id="el-payroll-amount" type="number" min="0" step="1" placeholder="Standard: ${egp(Number(db.teacherProfiles.find(t=>t.name===l.teacher)?.rate)||0)}" value="${l.customPayrollAmount!=null?escapeAttr(l.customPayrollAmount):''}"><small style="color:var(--text-muted);display:block;margin-top:2px">Leave blank to use the teacher's standard rate for this session. Set a value to override it for this one lesson only (e.g. it ran long, or a special arrangement applies).</small></div>
-     <div class="form-field wide"><label for="el-notes">Notes</label><textarea id="el-notes" placeholder="Any notes about this session...">${escapeHtml(l.notes||'')}</textarea></div>
+     <div class="form-field wide"><label for="el-notes">Notes</label><textarea id="el-notes" placeholder="Any notes about this session...">${escapeHtml(l.notes||'')}</textarea>
+       <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:normal;text-transform:none;font-size:13px;letter-spacing:normal;margin-top:6px;color:var(--text)">
+         <input id="el-notes-show-teacher" type="checkbox" style="width:auto" ${l.notesShowToTeacher?'checked':''}>
+         Show to teacher
+       </label>
+       <div class="teacher-row-meta" style="margin-top:2px">Off by default — notes stay admin-only unless you tick this.</div>
+     </div>
    </div>
    <small>Changing the time here only affects this one session.</small>
    <div style="text-align:right;margin-top:14px"><button class="btn btn-gold" onclick="saveEditLesson(${l.id})">Save Lesson</button></div>`);
@@ -4097,8 +4146,9 @@ function saveEditLesson(id){
  const payrollAmountRaw=document.getElementById('el-payroll-amount')?.value;
  const customPayrollAmount=(payrollAmountRaw==null||payrollAmountRaw==='')?null:Number(payrollAmountRaw);
  const notes=document.getElementById('el-notes')?.value||'';
+ const notesShowToTeacher=!!document.getElementById('el-notes-show-teacher')?.checked;
 
- l.date=d; l.time=tm; l.teacher=t; l.instrument=i; l.status=s; l.customPayrollAmount=customPayrollAmount; l.notes=notes;
+ l.date=d; l.time=tm; l.teacher=t; l.instrument=i; l.status=s; l.customPayrollAmount=customPayrollAmount; l.notes=notes; l.notesShowToTeacher=notesShowToTeacher;
  l.month=String(d||'').slice(0,7) || l.month;
  // Newly marking this lesson attended (and not manually flagged unpaid):
  // default the unpaid flag from the month's payment status, so an
@@ -4539,16 +4589,14 @@ function renderReports(){
 
    rlt.innerHTML=lapsed.map(({s,trialDate})=>{
      const daysAgo = trialDate ? Math.floor((Date.now()-new Date(trialDate).getTime())/86400000) : null;
+     // Messaging deliberately lives only in the Renewals tab now, so
+     // there's a single place reminders are sent from (and a single
+     // record of what's already been sent). Convert is still available
+     // on the Students page for a late sign-up.
      const phone=(s.phone1||s.phone||'').trim();
-     let followUp='<span style="color:var(--text-muted)">No phone</span>';
-     if(phone){
-       const digits=toWhatsAppNumber(phone);
-       const eNote=String.fromCodePoint(0x1F3B5);
-       const msg=encodeURIComponent('Hi '+(s.first_name||s.name||'')+'! We loved having you at your trial session at Cymatics. Would you like to continue with regular lessons? We would be happy to reserve your spot '+eNote);
-       // api.whatsapp.com instead of wa.me: the wa.me redirector mangles
-       // some multi-byte characters in the text parameter.
-       followUp=`<a class="btn btn-sm btn-gold" href="https://api.whatsapp.com/send?phone=${digits}&text=${msg}" target="_blank" rel="noopener">💬 WhatsApp</a>`;
-     }
+     const followUp = phone
+       ? `<span style="color:var(--text-muted)">${escapeHtml(phone)}</span>`
+       : '<span style="color:var(--text-muted)">No phone</span>';
      const daysBadge = daysAgo==null ? '—'
        : `<span class="badge ${daysAgo>7?'badge-red':daysAgo>3?'badge-amber':''}">${daysAgo}d</span>`;
      return `<tr><td>${escapeHtml(s.name)}</td><td>${escapeHtml(s.instrument||'')}</td><td>${escapeHtml(s.teacher||'')}</td><td>${trialDate?escapeHtml(formatLedgerDate(trialDate)):'—'}</td><td>${daysBadge}</td><td>${followUp}</td></tr>`;
@@ -8394,7 +8442,12 @@ function getTeacherLogsMonth(){
 function getTeacherWorkspaceData(){
   const scopeName=teacherScopeName();
   const selectedMonth=getTeacherLogsMonth();
-  const isDemoMode=!scopeName && !session.teacherId;
+  // Demo mode (show everything) is ONLY for a non-authenticated preview.
+  // A real signed-in teacher whose name failed to resolve must fall
+  // through to seeing nothing rather than everyone else's data — showing
+  // another teacher's students would be both wrong and a privacy leak.
+  const isRealSession=!!(session.email || session.teacherId || session.loggedIn);
+  const isDemoMode=!scopeName && !session.teacherId && !isRealSession;
 
   const allLessons=(db.lessons||[]).filter(l=>{
     if(session.teacherId && l.teacher_id) return l.teacher_id===session.teacherId;
@@ -8525,11 +8578,12 @@ function switchTeacherPage(page, btn){
   if(metaEl) metaEl.textContent=meta.meta||'';
 
   // Default the day filter to today's weekday when opening a tab that has
-  // one, so the teacher lands on the current day first rather than an
-  // all-days list they'd have to scroll or filter. Only on open — a manual
-  // change while the tab stays open is preserved.
+  // one, so the teacher lands on the current day first. NOT applied to the
+  // Logs tab — that's a "catch up on everything outstanding" view, and
+  // silently pre-filtering it to one weekday made it look like most
+  // students were missing.
   const todayWeekday=(typeof WEEKDAY_NAMES!=='undefined') ? WEEKDAY_NAMES[new Date().getDay()] : '';
-  const dayFilterId={logs:'teacher-logs-day-filter', schedule:'teacher-schedule-day-filter', students:'teacher-students-day-filter'}[page];
+  const dayFilterId={schedule:'teacher-schedule-day-filter', students:'teacher-students-day-filter'}[page];
   if(dayFilterId && todayWeekday){
     const dayEl=document.getElementById(dayFilterId);
     if(dayEl) dayEl.value=todayWeekday;
@@ -8567,6 +8621,39 @@ async function teacherRefreshClick(btn){
   }
 }
 
+// Single source of truth for what a TEACHER sees as a lesson's status.
+// Admin-side distinctions (absent_paid vs absent_excused vs
+// teacher_absent) are billing concerns, so they collapse to "Absent".
+function teacherFacingStatusText(status){
+  const s=String(status||'scheduled');
+  if(s==='attended') return 'Attended';
+  if(s==='absent_paid'||s==='absent_excused'||s==='teacher_absent') return 'Absent';
+  return 'Scheduled';
+}
+
+// Restrict the teacher day-filter dropdowns to the days that teacher
+// actually teaches. A hardcoded all-seven list lets them pick a day they
+// never work, which returns an empty list and reads like missing data.
+// Falls back to all days if the profile has none configured, so the
+// filter can never end up empty.
+function populateTeacherDayFilters(teacherName){
+  const profile=(db.teacherProfiles||[]).find(p=>p.name===teacherName);
+  let days=(profile && profile.days && profile.days.length)
+    ? profile.days.slice()
+    : Object.keys((profile&&profile.timeSlots)||{});
+  if(!days.length) days=WEEKDAY_NAMES.slice();
+  days=WEEKDAY_NAMES.filter(d=>days.includes(d)); // keep calendar order
+  ['teacher-logs-day-filter','teacher-schedule-day-filter','teacher-students-day-filter'].forEach(id=>{
+    const el=document.getElementById(id);
+    if(!el) return;
+    const prev=el.value;
+    el.innerHTML='<option value="">All days</option>'+
+      days.map(d=>`<option value="${escapeAttr(d)}">${escapeHtml(d)}</option>`).join('');
+    // Preserve the current selection when it's still a valid choice.
+    if(prev && days.includes(prev)) el.value=prev;
+  });
+}
+
 function renderTeacherWorkspace(){
   const view=document.getElementById('teacher-view');
   if(!view) return;
@@ -8583,6 +8670,7 @@ function renderTeacherWorkspace(){
   }
 
   const data=getTeacherWorkspaceData();
+  if(typeof populateTeacherDayFilters==='function') populateTeacherDayFilters(data.teacherName||session.name||'');
   const todayKey=getLocalTodayKey();
   const currentMonthKey=todayKey.slice(0,7);
   // "This week" anchored to the same Friday-start convention used
@@ -8594,23 +8682,45 @@ function renderTeacherWorkspace(){
     const d=lessonDateKey(l.date||l.lesson_date);
     return d>=weekStart && d<weekEnd && String(l.status||'')==='attended';
   }).length;
+  // "This month" for a teacher means their PAYROLL month (25th of the
+  // previous month through the 24th of this one) — the same window their
+  // pay is calculated from — not the calendar month. Showing a different
+  // range here than they get paid for is exactly the kind of mismatch
+  // that makes a teacher think the numbers are wrong.
+  const inTeacherMonth=(l)=>{
+    const d=lessonDateKey(l.date||l.lesson_date);
+    return (typeof isLessonInPayrollPeriod==='function')
+      ? isLessonInPayrollPeriod({date:d}, currentMonthKey)
+      : d.slice(0,7)===currentMonthKey;
+  };
   const sessionsThisMonth=data.allLessons.filter(l=>
-    lessonDateKey(l.date||l.lesson_date).slice(0,7)===currentMonthKey && String(l.status||'')==='attended'
+    inTeacherMonth(l) && String(l.status||'')==='attended'
   ).length;
-  const excusedCount=data.allLogs.filter(l=>l.attendance==='absent_excused').length;
+  const excusedCount=data.allLessons.filter(l=>
+    (l.status_record||'active')!=='archived'
+    && String(l.status||'')==='absent_excused'
+    && inTeacherMonth(l)
+  ).length;
   // Days the teacher was absent this month — counted as DISTINCT days
   // (a day with several teacher_absent lessons is one absence day).
   const teacherAbsentDays=new Set(
     data.allLessons
       .filter(l=>(l.status_record||'active')!=='archived'
         && String(l.status||'')==='teacher_absent'
-        && lessonDateKey(l.date||l.lesson_date).slice(0,7)===currentMonthKey)
+        && inTeacherMonth(l))
       .map(l=>lessonDateKey(l.date||l.lesson_date))
   ).size;
-  const makeupsOwedCount=data.allLogs.filter(l=>{
-    const lesson=(db.lessons||[]).find(x=>x.id==l.lessonId);
-    return lesson ? isMakeupOwed(lesson) : (l.attendance==='teacher_absent'||l.attendance==='absent_excused');
-  }).length;
+  // Genuinely OUTSTANDING make-ups only: owed, not resolved, and with no
+  // make-up session already booked against them. Counted straight from
+  // the lesson records rather than from logs, so a missing/!unsynced log
+  // can't silently inflate or deflate the number.
+  const owedTeacherName=String(data.teacherName||session.name||'').trim().toLowerCase();
+  const makeupsOwedCount=(db.lessons||[]).filter(l=>
+    (l.status_record||'active')!=='archived'
+    && String(l.teacher||'').trim().toLowerCase()===owedTeacherName
+    && typeof isMakeupOwed==='function' && isMakeupOwed(l)
+    && !(typeof findMakeupLessonFor==='function' && findMakeupLessonFor(l.id))
+  ).length;
 
   const weekEl=document.getElementById('teacher-sessions-week');
   const monthEl=document.getElementById('teacher-sessions-month');
@@ -8657,15 +8767,19 @@ function renderTeacherWorkspace(){
       return (a.time||'').localeCompare(b.time||'');
     }) : [];
     const preview=nextDayLessons.map(l=>{
-      const matchedStudent=(db.students||[]).find(s=>String(s.id)===String(l.studentId) || s.name===(l.student_name||l.student));
-      const planBadges=teacherPlanBadgesHtml(matchedStudent?.plan);
+      const status=String(l.status||'scheduled');
+      const isAbsent = status==='absent_paid' || status==='absent_excused' || status==='teacher_absent';
+      const statusClass = status==='attended' ? 'badge-green' : isAbsent ? 'badge-red' : 'badge-blue';
+      const statusText = status==='attended' ? 'Attended' : isAbsent ? 'Absent' : 'Scheduled';
+      const owedBadge=(typeof isMakeupOwed==='function' && isMakeupOwed(l))
+        ? ' <span class="badge badge-amber" style="font-size:10px" title="A make-up session is still owed for this lesson">Make-Up Owed</span>' : '';
       return `
       <div class="teacher-row">
         <div>
-          <div class="teacher-row-title">${escapeHtml(l.student_name||l.student||'Student')}${planBadges?' '+planBadges:''}</div>
-          <div class="teacher-row-meta">${l.time?escapeHtml(formatTime12h(l.time))+' · ':''} ${escapeHtml(l.instrument||'')} · ${escapeHtml(l.status||'scheduled')}</div>
+          <div class="teacher-row-title">${escapeHtml(l.student_name||l.student||'Student')}</div>
+          <div class="teacher-row-meta">${l.time?escapeHtml(formatTime12h(l.time))+' · ':''}${escapeHtml(l.instrument||'')}</div>
         </div>
-        <span class="badge badge-blue" style="font-size:10px">${escapeHtml(l.teacher||l.teacherName||'')}</span>
+        <div style="text-align:right"><span class="badge ${statusClass}" style="font-size:10px">${statusText}</span>${owedBadge}</div>
       </div>`;
     });
     const heading=nextDayDate?`<div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;font-weight:600">${formatLedgerDate(nextDayDate)}</div>`:'';
@@ -8768,33 +8882,39 @@ function renderTeacherWorkspace(){
       }
       const rows=lessons.map(l=>{
         const status=String(l.status||'scheduled');
-        // Teachers don't need payment status — an attended lesson is just
-        // "Attended", never "Attended (Unpaid)", and no amber unpaid styling.
-        const statusClass=
-          status==='attended'?'badge-green':
-          status==='absent_paid'?'badge-red':
-          status==='absent_excused'?'badge-amber':
-          status==='teacher_absent'?'badge-red':
-          status==='scheduled'?'badge-blue':'badge-red';
-        const statusText=STATUS_LABELS[status]||status;
+        // Teachers see only three states: Scheduled, Attended, Absent.
+        // The admin-side distinctions (absent_paid vs absent_excused vs
+        // teacher_absent) are billing concerns, not teaching ones, so they
+        // collapse to a single "Absent" here.
+        const isAbsent = status==='absent_paid' || status==='absent_excused' || status==='teacher_absent';
+        const statusClass = status==='attended' ? 'badge-green'
+          : isAbsent ? 'badge-red'
+          : 'badge-blue';
+        const statusText = status==='attended' ? 'Attended'
+          : isAbsent ? 'Absent'
+          : 'Scheduled';
+        // Surfaced only when a make-up is genuinely still owed (not yet
+        // booked or resolved) — that IS actionable for a teacher.
+        const owedBadge=(typeof isMakeupOwed==='function' && isMakeupOwed(l))
+          ? ' <span class="badge badge-amber" title="A make-up session is still owed for this lesson">Make-Up Owed</span>' : '';
         const makeupBadge=(l.makeupForLessonId && !l.isDoubleSession) ? ' <span class="badge badge-purple" title="This session is a makeup for a previously missed lesson">🔁 Makeup</span>' : '';
         const doubleBadge=l.isDoubleSession ? ' <span class="badge badge-purple" title="Absorbs a missed lesson as a double session">Double Session</span>' : '';
-        const notesBadge=l.notes ? ` <span class="badge badge-purple" style="cursor:pointer" onclick="toggleLessonNote('note-${l.id}')" title="Tap to read note">📝 Notes</span>` : '';
-        const matchedStudent=(db.students||[]).find(s=>String(s.id)===String(l.studentId) || s.name===(l.student_name||l.student));
-        const planBadges=teacherPlanBadgesHtml(matchedStudent?.plan);
+        // Admin notes are private unless explicitly shared with the teacher.
+        const noteVisible=!!(l.notes && l.notesShowToTeacher);
+        const notesBadge=noteVisible ? ` <span class="badge badge-purple" style="cursor:pointer" onclick="toggleLessonNote('note-${l.id}')" title="Tap to read note">📝 Notes</span>` : '';
         return `
         <div class="teacher-row">
           <div style="display:flex;align-items:center;gap:12px;min-width:0">
             <div style="min-width:70px;text-align:center;background:var(--surface2,#242220);border-radius:6px;padding:6px 4px;font-weight:700;font-size:13px;color:var(--gold-light,#e2c47a)">${escapeHtml(formatTime12h(l.time||''))}</div>
             <div style="min-width:0">
-              <div class="teacher-row-title">${escapeHtml(l.student_name||l.student||'Student')}${planBadges?' '+planBadges:''}</div>
+              <div class="teacher-row-title">${escapeHtml(l.student_name||l.student||'Student')}</div>
               <div class="teacher-row-meta">${escapeHtml(l.instrument||'')}</div>
             </div>
           </div>
           <div style="text-align:right">
-            <span class="badge ${statusClass}">${escapeHtml(statusText)}</span>${makeupBadge}${doubleBadge}${notesBadge}
+            <span class="badge ${statusClass}">${escapeHtml(statusText)}</span>${owedBadge}${makeupBadge}${doubleBadge}${notesBadge}
           </div>
-          ${l.notes ? `<div id="note-${l.id}" style="display:none;grid-column:1/-1;margin-top:6px;padding:8px 10px;background:var(--surface,#1a1916);border-radius:6px;font-size:13px;color:var(--text-light,#e8e4d8);white-space:pre-wrap">${escapeHtml(l.notes)}</div>` : ''}
+          ${noteVisible ? `<div id="note-${l.id}" style="display:none;grid-column:1/-1;margin-top:6px;padding:8px 10px;background:var(--surface,#1a1916);border-radius:6px;font-size:13px;color:var(--text-light,#e8e4d8);white-space:pre-wrap">${escapeHtml(l.notes)}</div>` : ''}
         </div>`;
       });
       const realCount=lessons.filter(l=>!isAbsentStatus(l)).length;
@@ -8882,27 +9002,36 @@ function renderTeacherWorkspace(){
   if(logsList){
     const logsSearch=(document.getElementById('teacher-logs-search')||{}).value?.toLowerCase()||'';
     const dayFilter=document.getElementById('teacher-logs-day-filter')?.value||'';
-    // Only attended sessions represent real lesson content worth showing
-    // here — an excused absence or a day the teacher was out has nothing
-    // to log (no topic covered, no performance to rate).
-    const attendedLogs=data.logs.filter(log=>String(log.attendance||'').trim().toLowerCase()==='attended');
+    // Derive from the teacher's ATTENDED LESSONS, not from existing log
+    // records. Building it from logs meant a student only appeared once a
+    // log row existed for them — so any session whose log hadn't synced
+    // (or was never written) vanished from this list with nothing to
+    // indicate it was missing, which is precisely the "not all students
+    // appear" problem. Every attended session now shows up, and simply
+    // reads as "to log" until it has content.
+    const attendedLessons=(db.lessons||[]).filter(l=>
+      (l.status_record||'active')!=='archived' &&
+      String(l.status||'')==='attended' &&
+      String(l.teacher||'').trim().toLowerCase()===String(data.teacherName||session.name||'').trim().toLowerCase()
+    );
+    const logByLessonId={};
+    (data.logs||[]).forEach(lg=>{ if(lg.lessonId!=null) logByLessonId[String(lg.lessonId)]=lg; });
+
     // Filtered by the STUDENT'S CURRENT lesson_day, not by which weekday
-    // a given log's own date happened to fall on — consistent with how
-    // the Students tab's day filter works. Otherwise, a student whose
-    // day was changed (e.g. Saturday to Friday) would have their older
-    // attended logs stay permanently filed under the OLD day forever,
-    // since those logs' own dates never change even after the student's
-    // schedule does.
-    const dayFilteredLogs=dayFilter ? attendedLogs.filter(log=>{
-      const matchedStudent=(db.students||[]).find(s=>s.name===log.studentName);
+    // a given lesson's own date happened to fall on — otherwise a student
+    // whose day changed (e.g. Saturday to Friday) would stay filed under
+    // the OLD day forever, since past dates never change.
+    const dayFilteredLessons=dayFilter ? attendedLessons.filter(l=>{
+      const matchedStudent=(db.students||[]).find(s=>String(s.id)===String(l.studentId) || s.name===(l.student||l.student_name));
       return matchedStudent && matchedStudent.lesson_day===dayFilter;
-    }) : attendedLogs;
-    // Group logs by student name — one row per student instead of one per session
+    }) : attendedLessons;
+
+    // Group by student name — one row per student, not per session.
     const byStudent={};
-    dayFilteredLogs.forEach(log=>{
-      const name=log.studentName||'Student';
+    dayFilteredLessons.forEach(l=>{
+      const name=l.student||l.student_name||'Student';
       if(!byStudent[name]) byStudent[name]=[];
-      byStudent[name].push(log);
+      byStudent[name].push(l);
     });
     const studentNames=Object.keys(byStudent)
       .filter(name=>!logsSearch || name.toLowerCase().includes(logsSearch))
@@ -8910,9 +9039,13 @@ function renderTeacherWorkspace(){
     const rows=studentNames.map(name=>{
       const matchedStudent=(db.students||[]).find(s=>s.name===name);
       const isTrial=matchedStudent && matchedStudent.plan==='trial';
-      // "Needs logging" = at least one attended session for this student
-      // whose log has neither a topic covered nor a performance rating.
-      const unlogged=byStudent[name].filter(lg=>!(lg.topicCovered||'').trim() && !lg.performanceRating).length;
+      // "Needs logging" = an attended session whose log has neither a
+      // topic covered nor a performance rating (including sessions with
+      // no log record at all).
+      const unlogged=byStudent[name].filter(l=>{
+        const lg=logByLessonId[String(l.id)];
+        return !lg || (!(lg.topicCovered||'').trim() && !lg.performanceRating);
+      }).length;
       const needsBadge = unlogged>0
         ? ` <span class="badge badge-amber" style="font-size:10px">${unlogged} to log</span>`
         : ' <span class="badge badge-green" style="font-size:10px">Logged</span>';
@@ -8932,7 +9065,10 @@ function renderTeacherWorkspace(){
     // when everything's logged so a diligent teacher sees no noise.
     const needsSummary=document.getElementById('teacher-logs-needs-summary');
     if(needsSummary){
-      const totalUnlogged=dayFilteredLogs.filter(lg=>!(lg.topicCovered||'').trim() && !lg.performanceRating).length;
+      const totalUnlogged=dayFilteredLessons.filter(l=>{
+        const lg=logByLessonId[String(l.id)];
+        return !lg || (!(lg.topicCovered||'').trim() && !lg.performanceRating);
+      }).length;
       needsSummary.innerHTML = totalUnlogged>0
         ? `<div style="background:var(--amber-bg,#3a2f14);border:1px solid var(--amber-text,#e0b84c);border-radius:8px;padding:8px 12px;color:var(--amber-text,#e0b84c);font-size:13px;font-weight:600">📝 ${totalUnlogged} session${totalUnlogged>1?'s':''} still need${totalUnlogged>1?'':'s'} a log — tap a student to fill it in.</div>`
         : '';
@@ -8978,7 +9114,6 @@ function openTeacherLessonLogEditor(logId){
       </div>`);
     return;
   }
-  const suggestedDue=log.homeworkDueDate || addDaysToDateString(log.homeworkAssignedDate||log.lessonDate, 7);
   openModal('Lesson Log - '+(log.studentName||'Student'),`
     <div class="teacher-log-editor">
       <div class="teacher-log-grid">
@@ -8987,10 +9122,9 @@ function openTeacherLessonLogEditor(logId){
           ${[1,2,3,4,5].map(n=>`<option value="${n}" ${Number(log.performanceRating)===n?'selected':''}>${n} / 5</option>`).join('')}
         </select></div>
         <div class="form-field wide"><label for="tw-topic">Topic Covered</label><input id="tw-topic" value="${escapeAttr(log.topicCovered)}"></div>
-        <div class="form-field wide"><label for="tw-notes">Teacher Notes</label><textarea id="tw-notes">${escapeHtml(log.teacherNotes)}</textarea></div>
+        <div class="form-field wide"><label for="tw-notes">Teacher Notes</label><textarea id="tw-notes" placeholder="e.g. Chord changes are getting cleaner, but still rushing the strumming pattern. Confidence noticeably up from last week. Struggled with the F barre chord — worth revisiting slowly next session.">${escapeHtml(log.teacherNotes)}</textarea></div>
         <div class="form-field wide"><label for="tw-goal">Next Lesson Goal</label><input id="tw-goal" value="${escapeAttr(log.nextLessonGoal)}"></div>
         <div class="form-field wide"><label for="tw-homework">Homework Task</label><textarea id="tw-homework" placeholder="e.g. Practice C major scale, 10 minutes daily">${escapeHtml(log.homework)}</textarea></div>
-        <div class="form-field"><label for="tw-homework-due">Due Date</label><div style="display:flex;gap:4px"><input id="tw-homework-due" type="text" placeholder="dd/mm/yyyy" maxlength="10" oninput="maskDateInput(this)" value="${escapeAttr(isoToDmy(suggestedDue))}"><button type="button" class="btn btn-sm" onclick="openDatePicker('tw-homework-due')">📅</button></div></div>
         <div class="form-field" style="display:flex;align-items:flex-end;padding-bottom:8px">
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:normal">
             <input id="tw-homework-done" type="checkbox" style="width:auto" ${log.homeworkCompleted?'checked':''}>
@@ -9070,7 +9204,9 @@ function saveTeacherLessonLog(logId){
   if(!log) return;
   const lesson=db.lessons.find(l=>l.id==log.lessonId);
   const homeworkAssigned=log.homeworkAssignedDate||lesson?.date||'';
-  const homeworkDue=dmyToIso(document.getElementById('tw-homework-due')?.value||'');
+  // Due Date field removed from the form — preserve whatever was already
+  // stored so historical logs keep their value rather than being wiped.
+  const homeworkDue=log.homeworkDueDate||'';
   if(!homeworkDatesValid(homeworkAssigned,homeworkDue)){
     showToast('Homework due date cannot be before the assigned date');
     return;
@@ -9157,9 +9293,27 @@ async function syncLessonLogToSupabase(log){
 // silently lost. Keyed by lessonId so repeated failures for the same log
 // collapse to a single pending entry rather than piling up.
 window._lessonLogRetryQueue = window._lessonLogRetryQueue || {};
+window._lessonLogRetryCounts = window._lessonLogRetryCounts || {};
+// A permanently-rejected write (e.g. an RLS policy that hasn't been fixed
+// server-side yet) must not retry forever — that's what turned one failed
+// save into hundreds of Sync Issues entries, drowning out genuinely
+// transient errors. Give up after this many attempts; "Push to Cloud"
+// still replays everything once the underlying cause is fixed.
+window.MAX_LESSON_LOG_RETRIES = 5;
 window.enqueueLessonLogRetry=function(log){
   if(!log || log.lessonId==null) return;
-  window._lessonLogRetryQueue[String(log.lessonId)]=log;
+  const key=String(log.lessonId);
+  const attempts=(window._lessonLogRetryCounts[key]||0)+1;
+  window._lessonLogRetryCounts[key]=attempts;
+  if(attempts>window.MAX_LESSON_LOG_RETRIES){
+    delete window._lessonLogRetryQueue[key];
+    if(!window._lessonLogGaveUpWarned){
+      window._lessonLogGaveUpWarned=true;
+      console.warn('Lesson log sync keeps being rejected by the server — retries paused. Fix the cause (see Sync Issues), then use "Push to Cloud" on the Cloud tab.');
+    }
+    return;
+  }
+  window._lessonLogRetryQueue[key]=log;
 };
 window.flushLessonLogRetries=async function(){
   const entries=Object.entries(window._lessonLogRetryQueue||{});
@@ -9441,7 +9595,7 @@ function openAdminStudentProfile(studentId,studentName){
         </div>
         <div>
           <div class="card-title">Lesson History${getLinkedCourses(student).length ? ' <span class="badge badge-purple" title="This person has other linked courses">🔗 '+getLinkedCourses(student).length+' other course(s)</span>' : ''}</div>
-          <div class="teacher-timeline">${studentLessons.slice(0,10).map(l=>`<div class="teacher-timeline-item"><strong>${escapeHtml(formatLedgerDate(l.date))}</strong><span>${escapeHtml(l.instrument||'')} with ${escapeHtml(l.teacher||'')} — ${escapeHtml(STATUS_LABELS[l.status]||l.status)}${l.notes?' — '+escapeHtml(l.notes):''} ${getLinkedCourses(student).length ? '<button class="btn btn-sm" style="padding:2px 8px;font-size:11px" onclick="openMoveLessonModal('+l.id+')">Move</button>' : ''}</span></div>`).join('') || teacherEmpty('No lesson history yet.')}</div>
+          <div class="teacher-timeline">${studentLessons.slice(0,10).map(l=>`<div class="teacher-timeline-item"><strong>${escapeHtml(formatLedgerDate(l.date))}</strong><span>${escapeHtml(l.instrument||'')} — ${escapeHtml(teacherFacingStatusText(l.status))}${(l.notes&&l.notesShowToTeacher)?' — '+escapeHtml(l.notes):''} ${getLinkedCourses(student).length ? '<button class="btn btn-sm" style="padding:2px 8px;font-size:11px" onclick="openMoveLessonModal('+l.id+')">Move</button>' : ''}</span></div>`).join('') || teacherEmpty('No lesson history yet.')}</div>
           <div class="card-title" style="margin-top:18px">Homework History</div>
           <div class="teacher-timeline">${homeworkHistory.slice(0,8).map(log=>`<div class="teacher-timeline-item"><strong>${escapeHtml(formatTeacherLessonDate(log.lessonDate))}</strong><span>${escapeHtml(log.homework)} — <button class="btn btn-sm ${log.homeworkCompleted?'':'btn-gold'}" style="padding:2px 8px;font-size:11px" onclick="toggleHomeworkDone('${jsString(log.id)}');openAdminStudentProfile('${jsString(student.id)}','${jsString(student.name)}')">${log.homeworkCompleted?'Done ✓':'Mark Done'}</button></span></div>`).join('') || teacherEmpty('No homework history yet.')}</div>
           <div class="card-title" style="margin-top:18px">Performance Timeline</div>
@@ -9689,7 +9843,7 @@ function renderStudentScheduleView(){
       <div class="teacher-row">
         <div>
           <div class="teacher-row-title">${escapeHtml(formatTeacherLessonDate(l.date))}${l.time?' '+escapeHtml(formatTime12h(l.time)):''}${l.makeupForLessonId?' <span class="badge badge-purple" style="font-size:9px">Make-Up</span>':''}</div>
-          <div class="teacher-row-meta">${escapeHtml(l.instrument||'')} - ${escapeHtml(STATUS_LABELS[l.status]||l.status||'')}</div>
+          <div class="teacher-row-meta">${escapeHtml(l.instrument||'')} - ${escapeHtml(teacherFacingStatusText(l.status))}</div>
         </div>
       </div>`), 'No lesson history yet.')}</div>`;
 }
