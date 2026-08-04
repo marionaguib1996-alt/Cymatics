@@ -339,7 +339,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-108</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-109</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1149,6 +1149,7 @@ input::placeholder{color:var(--text-dim)}
             <option value="Saturday">Saturday</option>
           </select>
         </div>
+        <div id="teacher-logs-range-note" class="teacher-row-meta" style="margin-bottom:8px"></div>
         <div id="teacher-logs-needs-summary" style="margin-bottom:10px"></div>
         <div id="teacher-lesson-logs-list" class="teacher-list" style="max-height:340px;overflow-y:auto"></div>
       </div>
@@ -9009,11 +9010,20 @@ function renderTeacherWorkspace(){
     // indicate it was missing, which is precisely the "not all students
     // appear" problem. Every attended session now shows up, and simply
     // reads as "to log" until it has content.
-    const attendedLessons=(db.lessons||[]).filter(l=>
-      (l.status_record||'active')!=='archived' &&
-      String(l.status||'')==='attended' &&
-      String(l.teacher||'').trim().toLowerCase()===String(data.teacherName||session.name||'').trim().toLowerCase()
-    );
+    // Scoped to the SELECTED month, using the same payroll window (25th of
+    // the previous month through the 24th) the dashboard stats and payslips
+    // use. Two different meanings of "month" inside one teacher view is
+    // exactly the kind of mismatch that makes the numbers look wrong.
+    const logsMonthKey=getTeacherLogsMonth();
+    const attendedLessons=(db.lessons||[]).filter(l=>{
+      if((l.status_record||'active')==='archived') return false;
+      if(String(l.status||'')!=='attended') return false;
+      if(String(l.teacher||'').trim().toLowerCase()!==String(data.teacherName||session.name||'').trim().toLowerCase()) return false;
+      const d=String(l.date||l.lesson_date||'').slice(0,10);
+      return (typeof isLessonInPayrollPeriod==='function')
+        ? isLessonInPayrollPeriod({date:d}, logsMonthKey)
+        : d.slice(0,7)===logsMonthKey;
+    });
     const logByLessonId={};
     (data.logs||[]).forEach(lg=>{ if(lg.lessonId!=null) logByLessonId[String(lg.lessonId)]=lg; });
 
@@ -9058,6 +9068,17 @@ function renderTeacherWorkspace(){
       </div>`;
     });
     const monthLabel=(typeof MONTHS!=='undefined' ? MONTHS.find(m=>m.key===getTeacherLogsMonth())?.label : null) || getTeacherLogsMonth();
+    // Spell out the actual date range — "August" here means the payroll
+    // window, not the calendar month, and a teacher shouldn't have to
+    // guess which one they're looking at.
+    const rangeNote=document.getElementById('teacher-logs-range-note');
+    if(rangeNote){
+      const [ry,rm]=String(logsMonthKey).split('-').map(Number);
+      let py=ry, pm=rm-1; if(pm<1){ pm=12; py-=1; }
+      const rStart=py+'-'+String(pm).padStart(2,'0')+'-25';
+      const rEnd=logsMonthKey+'-24';
+      rangeNote.textContent='Showing '+formatDateDMY(rStart)+' – '+formatDateDMY(rEnd)+' (same period as your pay).';
+    }
     logsList.innerHTML=renderTeacherRows(rows,'No lesson logs for '+escapeHtml(monthLabel)+(dayFilter?' on '+escapeHtml(dayFilter):'')+'.');
 
     // Needs-logging summary: total attended sessions in view with an empty
@@ -9095,6 +9116,23 @@ function addDaysToDateString(dateStr, days){
   if(!d) return '';
   d.setUTCDate(d.getUTCDate()+days);
   return d.toISOString().slice(0,10);
+}
+
+// Opens the log editor for a LESSON that has no log record yet, creating
+// one first. A session with no log is exactly the session that most needs
+// logging, so it must not be a dead end.
+function openTeacherLessonLogForLesson(lessonId){
+  const lesson=(db.lessons||[]).find(l=>String(l.id)===String(lessonId));
+  if(!lesson){ showToast('Lesson not found.'); return; }
+  let log=(db.lessonLogs||[]).find(l=>String(l.lessonId)===String(lesson.id));
+  if(!log){
+    const student=(db.students||[]).find(s=>String(s.id)===String(lesson.studentId) || s.name===(lesson.student||lesson.student_name));
+    if(!student){ showToast('Student not found for this lesson.'); return; }
+    log=createLessonLog(student, lesson);
+    save();
+    if(typeof syncLessonLogToSupabase==='function') syncLessonLogToSupabase(log);
+  }
+  if(log) openTeacherLessonLogEditor(log.id);
 }
 
 function openTeacherLessonLogEditor(logId){
@@ -9140,23 +9178,43 @@ function openTeacherLogsForStudent(studentName){
   const host=document.getElementById('teacher-logs-student-detail');
   if(!host) return;
   const data=getTeacherWorkspaceData();
-  const logs=data.logs
-    .filter(log=>(log.studentName||'Student')===studentName)
-    .filter(log=>String(log.attendance||'').trim().toLowerCase()==='attended')
-    .sort((a,b)=>String(a.lessonDate||'').localeCompare(String(b.lessonDate||'')));
+  const logsMonthKey=getTeacherLogsMonth();
+  // Derive from attended LESSONS in the same payroll window the list uses.
+  // Building this from log records alone meant a session the list counted
+  // as "to log" could be absent here — leaving the teacher no way to
+  // actually log it. Scoping by calendar month while the list used the
+  // payroll window caused the same mismatch from the other direction.
+  const logByLessonId={};
+  (data.logs||[]).forEach(lg=>{ if(lg.lessonId!=null) logByLessonId[String(lg.lessonId)]=lg; });
+  const scopeName=String(data.teacherName||session.name||'').trim().toLowerCase();
+  const sessions=(db.lessons||[]).filter(l=>{
+    if((l.status_record||'active')==='archived') return false;
+    if(String(l.status||'')!=='attended') return false;
+    if((l.student||l.student_name||'Student')!==studentName) return false;
+    if(String(l.teacher||'').trim().toLowerCase()!==scopeName) return false;
+    const d=String(l.date||l.lesson_date||'').slice(0,10);
+    return (typeof isLessonInPayrollPeriod==='function')
+      ? isLessonInPayrollPeriod({date:d}, logsMonthKey)
+      : d.slice(0,7)===logsMonthKey;
+  }).sort((a,b)=>String(a.date||'').localeCompare(String(b.date||'')));
 
-  const rows=logs.map((log,i)=>`
+  const rows=sessions.map((l,i)=>{
+    const log=logByLessonId[String(l.id)];
+    const hasContent=!!(log && ((log.topicCovered||'').trim() || log.performanceRating));
+    const editTarget=log ? `openTeacherLessonLogEditor('${jsString(log.id)}')` : `openTeacherLessonLogForLesson('${jsString(String(l.id))}')`;
+    return `
     <div class="teacher-row">
       <div>
-        <div class="teacher-row-title">${escapeHtml(formatTeacherLessonDate(log.lessonDate))}${i===logs.length-1?' <span class="badge badge-green" style="font-size:10px">Latest Session</span>':''}</div>
+        <div class="teacher-row-title">${escapeHtml(formatTeacherLessonDate(l.date||l.lesson_date))}${i===sessions.length-1?' <span class="badge badge-green" style="font-size:10px">Latest Session</span>':''}${hasContent?'':' <span class="badge badge-amber" style="font-size:10px">To log</span>'}</div>
         <div class="teacher-row-meta">
-          ${escapeHtml(log.instrument||'')} - Performance ${renderStars(log.performanceRating)}
-          ${log.topicCovered?'<br>Topic: '+escapeHtml(log.topicCovered):''}
-          ${log.nextLessonGoal?'<br>Goal: '+escapeHtml(log.nextLessonGoal):''}
+          ${escapeHtml(l.instrument||'')}${hasContent?' - Performance '+renderStars(log.performanceRating):''}
+          ${(log&&log.topicCovered)?'<br>Topic: '+escapeHtml(log.topicCovered):''}
+          ${(log&&log.nextLessonGoal)?'<br>Goal: '+escapeHtml(log.nextLessonGoal):''}
         </div>
       </div>
-      <button class="btn btn-sm" onclick="openTeacherLessonLogEditor('${jsString(log.id)}')">Edit</button>
-    </div>`);
+      <button class="btn btn-sm${hasContent?'':' btn-gold'}" onclick="${editTarget}">${hasContent?'Edit':'Log it'}</button>
+    </div>`;
+  });
 
   // The next upcoming (not-yet-happened) scheduled lesson for this student,
   // shown after the attended history so the teacher can see and prep for
