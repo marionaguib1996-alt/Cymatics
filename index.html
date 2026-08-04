@@ -304,7 +304,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-104</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-105</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -898,14 +898,6 @@ input::placeholder{color:var(--text-dim)}
 </div>
 </div>
 
-<div id="page-instruments" class="page">
-<div class="card">
-<div class="card-title">Instruments</div>
-<input id="instrument-name-secondary" placeholder="Instrument">
-<button class="btn btn-gold" onclick="addInstrument()">Add</button>
-<div id="instrument-list-secondary" style="margin-top:10px"></div>
-</div>
-</div>
 
 <!-- CLOUD -->
 
@@ -1754,21 +1746,6 @@ async function confirmRefund(studentId){
   }
 }
 
-// Formats the REMAINING sessions in the current month for a student, in the
-// format: "July sessions (3 lessons on the 14th, 21st and 28th)". Only counts
-// the student's regular weekday occurrences from today onward. Returns '' if
-// there's no lesson day or nothing left this month.
-function formatRemainingSessionsThisMonth(student){
-  if(!student || !student.lesson_day) return '';
-  const now=new Date();
-  const month=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
-  const todayDay=now.getDate();
-  const allDays=getWeekdayDatesInMonth(month, student.lesson_day);
-  const remaining=allDays.filter(d=>d>=todayDay);
-  if(!remaining.length) return '';
-  const dateList=joinDatesNaturally(remaining.map(ordinalDay));
-  return formatMonthName(month)+' sessions ('+remaining.length+' lesson'+(remaining.length===1?'':'s')+' on the '+dateList+')';
-}
 
 // Trial follow-up: a friendly WhatsApp nudge for a student still on a trial
 // plan, inviting them to pay and lock in their spot. The amount shown is the
@@ -1835,7 +1812,9 @@ function sendTrialConversionMessage(studentId){
       showToast('Your browser blocked the WhatsApp popup — allow popups for this site, then try again.');
       return;
     }
-    db.remindersSent[studentId+'_trial']=new Date().toISOString();
+    const trialKey=studentId+'_trial', trialAt=new Date().toISOString();
+    db.remindersSent[trialKey]=trialAt;
+    if(typeof syncReminderSentToSupabase==='function') syncReminderSentToSupabase(trialKey, trialAt);
     save();
     if(typeof renderTrialFollowUp==='function') renderTrialFollowUp();
   }catch(err){
@@ -1844,85 +1823,7 @@ function sendTrialConversionMessage(studentId){
   }
 }
 
-function sendPaymentReminder(studentId){
-  try{
-    const student=(db.students||[]).find(s=>s.id===studentId);
-    if(!student){ showToast('Student not found.'); return; }
 
-    const phone=toWhatsAppNumber(student.phone1||student.phone2);
-    if(!phone){
-      showToast('No phone number on file for '+(student.name||'this student')+' — opening Edit Student so you can add one.');
-      if(typeof editStudent==='function') editStudent(studentId);
-      return;
-    }
-
-    if(!student.lesson_day){
-      showToast('No regular lesson day set for '+(student.name||'this student')+' — opening Edit Student so you can set one.');
-      if(typeof editStudent==='function') editStudent(studentId);
-      return;
-    }
-
-    const month=getNextMonthString();
-    const monthName=formatMonthName(month);
-
-    // Deliberately computed from the student's regular weekday, not from
-    // db.lessons — represents only their main recurring plan, excluding
-    // any makeups/reschedules, and works even for a future month that
-    // hasn't been scheduled yet.
-    const dayNumbers=getWeekdayDatesInMonth(month, student.lesson_day);
-    const lessonCount=dayNumbers.length;
-    const dateList=joinDatesNaturally(dayNumbers.map(ordinalDay));
-    // Price = lessons in this month x the per-lesson rate (500 standard,
-    // 750 group). Since the reminder covers next month in full, every
-    // weekday occurrence is a lesson. A custom per-student amount overrides.
-    let price;
-    if(student && student.customAmount!=null && student.customAmount!==''){
-      price=Number(student.customAmount)||0;
-    } else {
-      const rate=whatsAppPerLessonRate(student.plan);
-      price = lessonCount>0 ? lessonCount*rate : rate;
-    }
-    // When only a PARENT number is on file the message is going to the
-    // parent, not the student — so greet them generically rather than
-    // addressing the parent by the child's first name.
-    const usingParentNumber=!String(student.phone1||'').trim() && !!String(student.phone2||'').trim();
-    const firstName=usingParentNumber
-      ? 'Dear'
-      : (student.first_name||(student.name||'').split(' ')[0]||student.name);
-
-    // Emojis built at runtime from code points — the source stays pure
-    // ASCII so no file-encoding or hosting step can corrupt them.
-    // Emojis built at runtime from code points so the source stays pure
-    // ASCII (immune to any file-encoding/hosting corruption). These render
-    // correctly now that links go through api.whatsapp.com rather than the
-    // wa.me redirector, which was corrupting multi-byte characters.
-    const ePiano=String.fromCodePoint(0x1F3B9), eMic=String.fromCodePoint(0x1F3A4), eSparkle=String.fromCodePoint(0x1F4AB);
-    const message='Hello '+firstName+' ! \n'+
-      'Hope you\'re having a blast at Cymatics!\n'+
-      'Just a little reminder that your payment for '+monthName+' sessions ('+lessonCount+' lessons on the '+dateList+') is due Today '+ePiano+eMic+'\n'+
-      'It\'s '+Math.round(price)+' EGP for the month - keeping things up to date means you won\'t miss a single beat of the fun! \n'+
-      'Instapay : 01277336092 - Mario Naguib\n'+
-      'Can\'t wait to see you at the next session! '+eSparkle;
-
-    // Using api.whatsapp.com's direct /send endpoint instead of the wa.me
-    // short-link redirector — wa.me's own redirect step appears to mangle
-    // certain Unicode symbol characters in the text parameter (confirmed
-    // reproducible across multiple browsers and devices), while this older,
-    // direct endpoint passes the text straight through.
-    const win=window.open('https://api.whatsapp.com/send?phone='+phone+'&text='+encodeURIComponent(message), '_blank');
-    if(!win){
-      showToast('Your browser blocked the WhatsApp popup — allow popups for this site, then try again.');
-    }
-  }catch(err){
-    console.error('sendPaymentReminder failed:', err);
-    showToast('Could not open the reminder — '+(err.message||'unexpected error')+'. Check the browser console for details.');
-  }
-}
-
-// Short, immediate nudge for a specific lesson — "your teacher is waiting" —
-// distinct from the payment reminder above (that one's about the upcoming
-// month; this one's about right now, for a single lesson).
-function sendLessonReminder_REMOVED(){}
 
 // Generate month range (±12 months from today = 25 options)
 function genMonths(){
@@ -2236,9 +2137,6 @@ function login(role,user={}){
   }
 }
 
-function demoLogin(role){
-  login(role,{name:'Demo User'});
-}
 
 async function logout(){
   // End the real Supabase Auth session too, not just the local role flag —
@@ -3438,8 +3336,7 @@ function renderRenewalsDue(){
 }
 
 // Sends the exact next-month payment reminder for a student on the
-// Renewals Due list. Distinct from the general sendPaymentReminder in
-// that it always reflects the SAME numbers shown on the dashboard row
+// Renewals Due list. Always reflects the SAME numbers shown on the row
 // (next month's weekday occurrence count x per-session rate), and does
 // not touch the schedule — booking next month's lessons is the separate
 // "Renew" action.
@@ -3562,7 +3459,9 @@ function sendRenewalReminder(studentId){
     }
     // Record the reminder so the Renewals list can show it was already
     // sent this cycle, and the button can warn before sending it twice.
-    db.remindersSent[studentId+'_renewal_'+month]=new Date().toISOString();
+    const renewKey=studentId+'_renewal_'+month, renewAt=new Date().toISOString();
+    db.remindersSent[renewKey]=renewAt;
+    if(typeof syncReminderSentToSupabase==='function') syncReminderSentToSupabase(renewKey, renewAt);
     save();
     if(typeof renderRenewalsDue==='function') renderRenewalsDue();
   }catch(err){
@@ -3624,7 +3523,9 @@ function sendConsolidatedRenewalReminder(primary, linkedPending, phone){
     // billing month — otherwise the other course's row would still invite
     // sending a second, redundant reminder.
     courseDetails.forEach(c=>{
-      db.remindersSent[c.student.id+'_renewal_'+c.month]=new Date().toISOString();
+      const key=c.student.id+'_renewal_'+c.month, at=new Date().toISOString();
+      db.remindersSent[key]=at;
+      if(typeof syncReminderSentToSupabase==='function') syncReminderSentToSupabase(key, at);
     });
     save();
     if(typeof renderRenewalsDue==='function') renderRenewalsDue();
@@ -4322,75 +4223,7 @@ function renderDatabase(){
 // resources_storage_and_table_setup.sql for the bucket/table/RLS setup
 // this depends on.
 
-function onResourceTargetChange(){
-  const target=document.getElementById('res-target')?.value;
-  const studentSel=document.getElementById('res-student');
-  if(!studentSel) return;
-  if(target==='student'){
-    studentSel.style.display='';
-    if(!studentSel.options.length){
-      studentSel.innerHTML=(db.students||[]).filter(s=>(s.status||'active')!=='archived')
-        .sort((a,b)=>(a.name||'').localeCompare(b.name||''))
-        .map(s=>`<option value="${s.id}">${escapeHtml(s.name)} — ${escapeHtml(s.instrument||'')}</option>`).join('');
-    }
-  } else {
-    studentSel.style.display='none';
-  }
-}
 
-async function uploadResource(){
-  const title=(document.getElementById('res-title')?.value||'').trim();
-  const target=document.getElementById('res-target')?.value||'all';
-  const targetStudentId=target==='student' ? document.getElementById('res-student')?.value : null;
-  const fileInput=document.getElementById('res-file');
-  const file=fileInput?.files?.[0];
-  const statusEl=document.getElementById('res-upload-status');
-  const setStatus=(msg)=>{ if(statusEl) statusEl.textContent=msg; };
-
-  if(!title){ setStatus('Please enter a title.'); return; }
-  if(!file){ setStatus('Please choose a file.'); return; }
-  if(target==='student' && !targetStudentId){ setStatus('Please choose which student.'); return; }
-  if(!window.supabaseClientV1){ setStatus('Not connected to Supabase.'); return; }
-
-  setStatus('⏳ Uploading...');
-  // Timestamp-prefixed path avoids collisions between two different
-  // uploads that happen to share the same original filename.
-  const storagePath=Date.now()+'_'+file.name.replace(/[^a-zA-Z0-9._-]/g,'_');
-
-  try{
-    const {error: uploadError}=await window.supabaseClientV1.storage.from('resources').upload(storagePath, file);
-    if(uploadError){ setStatus('Upload failed: '+uploadError.message); return; }
-
-    const targetStudent=targetStudentId ? (db.students||[]).find(s=>String(s.id)===String(targetStudentId)) : null;
-    const payload={
-      title,
-      filename: file.name,
-      storage_path: storagePath,
-      file_size: file.size,
-      uploaded_by: session.name||session.email||'Admin',
-      target_type: target,
-      target_student_id: targetStudent ? targetStudent.id : null
-    };
-    const {data,error: insertError}=await window.supabaseClientV1.from('resources').insert([payload]).select().single();
-    if(insertError){ setStatus('File uploaded, but saving details failed: '+insertError.message); return; }
-
-    db.resources.push({
-      id: data.id, title, filename: file.name, storagePath, fileSize: file.size,
-      uploadedBy: payload.uploaded_by, targetType: target,
-      targetStudentId: targetStudent ? targetStudent.id : null,
-      targetStudentName: targetStudent ? targetStudent.name : null,
-      createdAt: data.created_at||new Date().toISOString()
-    });
-    save();
-
-    document.getElementById('res-title').value='';
-    fileInput.value='';
-    setStatus('✅ Uploaded successfully.');
-    renderResourcesPage();
-  }catch(err){
-    setStatus('Upload failed: '+err.message);
-  }
-}
 
 function renderResourcesPage(){
   const tb=document.getElementById('resources-body');
@@ -4712,7 +4545,8 @@ function renderReports(){
        const digits=toWhatsAppNumber(phone);
        const eNote=String.fromCodePoint(0x1F3B5);
        const msg=encodeURIComponent('Hi '+(s.first_name||s.name||'')+'! We loved having you at your trial session at Cymatics. Would you like to continue with regular lessons? We would be happy to reserve your spot '+eNote);
-       // api.whatsapp.com instead of wa.me — see the note in sendPaymentReminder.
+       // api.whatsapp.com instead of wa.me: the wa.me redirector mangles
+       // some multi-byte characters in the text parameter.
        followUp=`<a class="btn btn-sm btn-gold" href="https://api.whatsapp.com/send?phone=${digits}&text=${msg}" target="_blank" rel="noopener">💬 WhatsApp</a>`;
      }
      const daysBadge = daysAgo==null ? '—'
@@ -5318,7 +5152,7 @@ async function initializeCloudSafe(){
 }
 
 function addInstrument(){
- const el=document.getElementById('instrument-name-main')||document.getElementById('instrument-name-secondary')||document.getElementById('instrument-name');
+ const el=document.getElementById('instrument-name-main')||document.getElementById('instrument-name');
  if(!el) return;
  let v=el.value.trim();
  if(!v) return;
@@ -5347,7 +5181,7 @@ function renderInstrumentPage(){
      <button class="btn btn-sm btn-danger" onclick="deleteInstrument(${idx})">Delete</button>
    </span>
  </div>`).join('');
- ['instrument-list-main','instrument-list-secondary','instrument-list'].forEach(id=>{
+ ['instrument-list-main','instrument-list'].forEach(id=>{
    const el=document.getElementById(id); if(el) el.innerHTML=html;
  });
 }
@@ -5823,7 +5657,6 @@ function switchPage(page, btn){
   if(page==='renewals' && typeof renderRenewalsDue==='function') renderRenewalsDue();
   if(page==='renewals' && typeof renderWeeklyRenewals==='function') renderWeeklyRenewals();
   if(page==='renewals' && typeof renderTrialFollowUp==='function') renderTrialFollowUp();
-  if(page==='instruments')renderInstrumentPage();
   if(page==='database')renderDatabase(); if(page==='cloud'){}
   if(page==='notes' && typeof renderNotesPage==='function')renderNotesPage();
 }
@@ -5980,13 +5813,6 @@ if(document.readyState==='loading'){
 
 
 <script>
-window.normalizeStudentName=function(student){
- if(student){
-   if(student.first_name||student.last_name){
-     student.name=((student.first_name||'')+' '+(student.last_name||'')).trim();
-   }
- }
-}
 </script>
 
 
@@ -6374,6 +6200,21 @@ async function _autoLoadFromCloudImpl(){
        save();
      }
    }catch(absErr){ /* silent — non-critical */ }
+
+   // Reminder-sent records — small but worth syncing: without them the
+   // "✓ Reminded" badge is invisible on other devices, making it easy to
+   // message the same student twice. Own try/catch like the tables above.
+   try{
+     const {data:remRows,error:eRem}=await client.from('reminders_sent').select('*');
+     if(eRem){ /* table may not exist yet — silent */ }
+     else if(remRows){
+       db.remindersSent=db.remindersSent||{};
+       remRows.forEach(r=>{
+         if(r.reminder_key) db.remindersSent[r.reminder_key]=r.sent_at;
+       });
+       save();
+     }
+   }catch(remErr){ /* silent — non-critical */ }
 
    // Independent for the same reason as resources above — a newer,
    // less critical feature shouldn't be able to fail the main load.
@@ -12941,6 +12782,18 @@ function toggleWishlistItemDone(student, itemId){
 
 // Sync a student's whole wishlist as one row (upsert by student_code).
 // Degrades silently if the wishlists table/columns aren't present yet.
+// Reminder-sent records ("✓ Reminded 3h ago" badges). Without syncing
+// these, a reminder sent on one device leaves no trace on another — so
+// the same student can easily be messaged twice from a different browser.
+async function syncReminderSentToSupabase(reminderKey, sentAtIso){
+  try{
+    if(!window.supabaseClientV1 || !reminderKey) return;
+    const {error}=await window.supabaseClientV1.from('reminders_sent')
+      .upsert({reminder_key:String(reminderKey), sent_at:sentAtIso}, {onConflict:'reminder_key'});
+    if(error) console.warn('Reminder-sent sync failed:', error.message);
+  }catch(err){ console.warn('Reminder-sent sync failed:', err.message); }
+}
+
 async function syncTeacherAbsenceToSupabase(absence){
   try{
     if(!window.supabaseClientV1 || !absence) return;
