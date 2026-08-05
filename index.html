@@ -366,7 +366,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-112</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-114</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1071,9 +1071,9 @@ input::placeholder{color:var(--text-dim)}
       <div id="teacher-dashboard">
         <div class="teacher-grid">
           <div class="metric"><div class="metric-label">Taught This Week</div><div id="teacher-sessions-week" class="metric-value">0</div></div>
-          <div class="metric green"><div class="metric-label">Taught This Month</div><div id="teacher-sessions-month" class="metric-value green">0</div></div>
-          <div class="metric amber"><div class="metric-label">Excused Absences</div><div id="teacher-excused-count" class="metric-value amber">0</div></div>
-          <div class="metric red"><div class="metric-label">Days Absent (Month)</div><div id="teacher-days-absent" class="metric-value red">0</div></div>
+          <div class="metric green" title="Your pay period: the 25th of last month through the 24th of this one — not the calendar month."><div class="metric-label">Taught This Month</div><div id="teacher-sessions-month" class="metric-value green">0</div></div>
+          <div class="metric amber" title="Your pay period: the 25th of last month through the 24th of this one — not the calendar month."><div class="metric-label">Excused Absences</div><div id="teacher-excused-count" class="metric-value amber">0</div></div>
+          <div class="metric red" title="Your pay period: the 25th of last month through the 24th of this one — not the calendar month."><div class="metric-label">Days Absent (Month)</div><div id="teacher-days-absent" class="metric-value red">0</div></div>
           <div class="metric red" style="cursor:pointer" onclick="toggleTeacherMakeupsDrilldown()" title="Tap to see who's owed a make-up"><div class="metric-label">Makeups Owed (Total)</div><div id="teacher-makeups-count" class="metric-value red">0</div></div>
         </div>
         <div class="teacher-section-grid">
@@ -1176,7 +1176,6 @@ input::placeholder{color:var(--text-dim)}
             <option value="Saturday">Saturday</option>
           </select>
         </div>
-        <div id="teacher-logs-range-note" class="teacher-row-meta" style="margin-bottom:8px"></div>
         <div id="teacher-logs-needs-summary" style="margin-bottom:10px"></div>
         <div id="teacher-lesson-logs-list" class="teacher-list" style="max-height:340px;overflow-y:auto"></div>
       </div>
@@ -8483,7 +8482,20 @@ function getTeacherWorkspaceData(){
     return isDemoMode; // demo: show all
   }).filter(l=>(l.status_record||'active')!=='archived');
 
-  const lessons=allLessons.filter(l=>(l.month || String(l.date||l.lesson_date||'').slice(0,7))===selectedMonth);
+  // A teacher's "month" is their PAY PERIOD (25th of the previous month
+  // through the 24th), everywhere — the lesson count they see has to be
+  // the count they're paid for. Scoping by calendar month here also broke
+  // the Lesson Logs pairing: a session on, say, 28 Jul sits inside
+  // August's pay period, but its log was filed under July and therefore
+  // filtered out, so a properly-logged session showed as "to log".
+  const inPayPeriod=(dateStr)=>{
+    const d=String(dateStr||'').slice(0,10);
+    if(!d) return false;
+    return (typeof isLessonInPayrollPeriod==='function')
+      ? isLessonInPayrollPeriod({date:d}, selectedMonth)
+      : d.slice(0,7)===selectedMonth;
+  };
+  const lessons=allLessons.filter(l=>inPayPeriod(l.date||l.lesson_date));
   const upcomingLessons=allLessons.filter(isUpcomingLesson).sort((a,b)=>lessonDateKey(a.date||a.lesson_date).localeCompare(lessonDateKey(b.date||b.lesson_date)));
 
   const students=(db.students||[]).filter(s=>{
@@ -8506,7 +8518,7 @@ function getTeacherWorkspaceData(){
     return isDemoMode;
   });
 
-  const logs=allLogs.filter(log=>logMonth(log)===selectedMonth);
+  const logs=allLogs.filter(log=>inPayPeriod(log.lessonDate||log.lesson_date));
 
   return {allLessons,lessons,upcomingLessons,students,logs,allLogs,isDemoMode};
 }
@@ -9095,17 +9107,7 @@ function renderTeacherWorkspace(){
       </div>`;
     });
     const monthLabel=(typeof MONTHS!=='undefined' ? MONTHS.find(m=>m.key===getTeacherLogsMonth())?.label : null) || getTeacherLogsMonth();
-    // Spell out the actual date range — "August" here means the payroll
-    // window, not the calendar month, and a teacher shouldn't have to
-    // guess which one they're looking at.
-    const rangeNote=document.getElementById('teacher-logs-range-note');
-    if(rangeNote){
-      const [ry,rm]=String(logsMonthKey).split('-').map(Number);
-      let py=ry, pm=rm-1; if(pm<1){ pm=12; py-=1; }
-      const rStart=py+'-'+String(pm).padStart(2,'0')+'-25';
-      const rEnd=logsMonthKey+'-24';
-      rangeNote.textContent='Showing '+formatDateDMY(rStart)+' – '+formatDateDMY(rEnd)+' (same period as your pay).';
-    }
+
     logsList.innerHTML=renderTeacherRows(rows,'No lesson logs for '+escapeHtml(monthLabel)+(dayFilter?' on '+escapeHtml(dayFilter):'')+'.');
 
     // Needs-logging summary: total attended sessions in view with an empty
