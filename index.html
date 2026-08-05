@@ -209,9 +209,23 @@ input::placeholder{color:var(--text-dim)}
   .teacher-timeline-item{grid-template-columns:1fr}
 }
 @media(max-width:560px){
-  .teacher-nav{grid-template-columns:1fr}
-  .teacher-grid{grid-template-columns:1fr}
-  .teacher-topbar{align-items:flex-start;flex-direction:column}
+  /* Navigation was the single biggest space cost on a phone: seven
+     full-width stacked buttons pushed all actual content below the fold.
+     Turn it into a compact horizontally-scrolling pill bar instead —
+     same pattern the student portal already uses. */
+  .teacher-nav{display:flex;flex-direction:row;flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;gap:6px;padding-bottom:4px}
+  .teacher-nav-btn{width:auto;flex:0 0 auto;white-space:nowrap;padding:8px 12px;font-size:12px;text-align:center}
+  .teacher-sidebar{padding:0.6rem 0.75rem}
+  /* The brand block is pure decoration here — the app header already
+     identifies the academy, and on a phone it's competing for space. */
+  .teacher-brand{display:none}
+  /* 2rem is a desktop-scale heading; it wraps awkwardly on a phone. */
+  .teacher-page-title{font-size:1.35rem}
+  /* Title above the Refresh/Logout buttons — stacking guarantees neither
+     gets squeezed, which is the actual complaint on a narrow screen. */
+  .teacher-topbar{align-items:flex-start;flex-direction:column;margin-bottom:0.9rem;gap:0.5rem}
+  /* Small number cards read fine two-up and halve the vertical scroll. */
+  .teacher-grid{grid-template-columns:1fr 1fr;gap:8px}
   /* Stack each teacher-row's content and its right-side status/action so
      nothing is cramped on a phone; the status cluster left-aligns under
      the name/time instead of being squeezed into a narrow column. */
@@ -339,7 +353,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-109</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-110</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
