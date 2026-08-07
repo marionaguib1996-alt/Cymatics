@@ -366,7 +366,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-117</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-118</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -3367,12 +3367,42 @@ function renderRenewalsDue(){
     const remindedAt=db.remindersSent[s.id+'_renewal_'+nextMonthKey]||null;
     rows.push({s, lessonCount, amount, remindedAt, isCustomPay, deductionCount:deductions.length, nextMonthName});
   });
-  rows.sort((a,b)=>(a.s.name||'').localeCompare(b.s.name||''));
-  if(!rows.length){
+
+  // Consolidate linked courses (added via "+ Course") into a single row
+  // instead of one per course — same person, same renewal moment, so
+  // showing them separately just means clicking Reminder/Renew twice for
+  // what's really one decision. sendRenewalReminder already auto-detects
+  // and combines linked pending courses into one message; this makes the
+  // LIST agree with that instead of still listing them apart.
+  const grouped=[];
+  const consumed=new Set();
+  rows.forEach(row=>{
+    if(consumed.has(row.s.id)) return;
+    const rootId=row.s.linkedPersonId||row.s.public_id;
+    const group=rootId ? rows.filter(r=>(r.s.linkedPersonId||r.s.public_id)===rootId) : [row];
+    group.forEach(r=>consumed.add(r.s.id));
+    if(group.length===1){
+      grouped.push({...row, courses:[row.s]});
+    } else {
+      grouped.push({
+        s:group[0].s,
+        courses:group.map(r=>r.s),
+        lessonCount:group.reduce((sum,r)=>sum+r.lessonCount,0),
+        amount:group.reduce((sum,r)=>sum+r.amount,0),
+        remindedAt:group.map(r=>r.remindedAt).find(Boolean)||null,
+        isCustomPay:group.some(r=>r.isCustomPay),
+        deductionCount:group.reduce((sum,r)=>sum+r.deductionCount,0),
+        nextMonthName:group[0].nextMonthName
+      });
+    }
+  });
+  grouped.sort((a,b)=>(a.s.name||'').localeCompare(b.s.name||''));
+
+  if(!grouped.length){
     host.innerHTML='<div class="empty"><div class="empty-icon">✅</div><div class="empty-text">No renewals due — no monthly students have finished this month\'s sessions yet.</div></div>';
     return;
   }
-  host.innerHTML=rows.map(({s,lessonCount,amount,remindedAt,isCustomPay,deductionCount,nextMonthName})=>{
+  host.innerHTML=grouped.map(({s,courses,lessonCount,amount,remindedAt,isCustomPay,deductionCount,nextMonthName})=>{
     const remindedBadge = remindedAt
       ? `<span class="badge badge-blue" style="font-size:10px" title="Reminded ${escapeAttr(new Date(remindedAt).toLocaleString())}">✓ Reminded ${escapeHtml(timeAgoLabel(remindedAt))}</span>`
       : '';
@@ -3383,15 +3413,26 @@ function renderRenewalsDue(){
     const deductionBadge = (deductionCount>0 && !isCustomPay)
       ? `<span class="badge badge-amber" style="font-size:10px" title="${deductionCount} session${deductionCount===1?'':'s'} deducted — teacher absent, no make-up booked">− ${deductionCount} deducted</span>`
       : '';
+    // For a single course, the meta line is exactly as before. For a
+    // consolidated group, each course gets its own "instrument · day
+    // time" clause joined by "&", since teacher/instrument/day/time can
+    // each differ per course.
+    const metaLine = courses.length===1
+      ? `${escapeHtml(s.instrument||'')} ${s.instrument&&s.teacher?'·':''} ${escapeHtml(s.teacher||'')}${s.lesson_day?' · '+escapeHtml(s.lesson_day):''}${s.lessonTime?' '+escapeHtml(formatTime12h(s.lessonTime)):''}`
+      : courses.map(c=>`${escapeHtml(c.instrument||'')}${c.teacher?' · '+escapeHtml(c.teacher):''}${c.lesson_day?' · '+escapeHtml(c.lesson_day):''}${c.lessonTime?' '+escapeHtml(formatTime12h(c.lessonTime)):''}`).join(' &nbsp;&&nbsp; ');
+    const courseCountBadge = courses.length>1
+      ? `<span class="badge badge-purple" style="font-size:10px" title="${courses.length} linked courses">🔗 ${courses.length} courses</span>`
+      : '';
+    const renewIds=courses.map(c=>c.id).join(',');
     return `<div class="unpaid-item">
       <div>
         <div class="unpaid-name">${escapeHtml(s.name)}</div>
-        <div class="unpaid-meta">${escapeHtml(s.instrument||'')} ${s.instrument&&s.teacher?'·':''} ${escapeHtml(s.teacher||'')}${s.lesson_day?' · '+escapeHtml(s.lesson_day):''}${s.lessonTime?' '+escapeHtml(formatTime12h(s.lessonTime)):''} · <span class="badge badge-red" style="font-size:10px">Finished this month</span> ${remindedBadge} ${customPayBadge} ${deductionBadge}</div>
+        <div class="unpaid-meta">${metaLine} · <span class="badge badge-red" style="font-size:10px">Finished this month</span> ${remindedBadge} ${customPayBadge} ${deductionBadge} ${courseCountBadge}</div>
       </div>
       <div style="display:flex;align-items:center;gap:10px">
         <span style="font-size:12px;color:var(--text-muted)">${escapeHtml(nextMonthName)}: <b style="color:var(--gold)">${lessonCount} lesson${lessonCount===1?'':'s'} · ${egp(amount)}</b></span>
         <button class="btn btn-sm" onclick="sendRenewalReminder(${s.id})" title="Opens WhatsApp with the next-month payment reminder">${reminderBtnLabel}</button>
-        <button class="btn btn-sm btn-gold" onclick="renewStudentSubscription(${s.id})">🔁 Renew</button>
+        <button class="btn btn-sm btn-gold" onclick="renewStudentSubscription(${s.id},'${escapeAttr(renewIds)}')">🔁 Renew</button>
       </div>
     </div>`;
   }).join('');
@@ -3560,9 +3601,14 @@ function sendConsolidatedRenewalReminder(primary, linkedPending, phone){
 
     const monthName=courseDetails[0].monthName;
     const totalAmount=courseDetails.reduce((sum,c)=>sum+c.amount, 0);
-    const clause=courseDetails.map(c=>
+    const clauseTexts=courseDetails.map(c=>
       '('+c.lessonCount+' '+c.label+' lesson'+(c.lessonCount===1?'':'s')+' on the '+c.dateList+')'
-    ).join(' and ');
+    );
+    // All clauses but the last sit on their own line; the last one is
+    // prefixed with "&" and carries "is due Today" straight after it.
+    const clauseBlock = clauseTexts.length>1
+      ? clauseTexts.slice(0,-1).join('\n')+'\n& '+clauseTexts[clauseTexts.length-1]
+      : clauseTexts[0];
     const absenceNotes=courseDetails.map(c=>c.absenceNote).join('');
     const deductionNotes=courseDetails.map(c=>c.deductionNoteBlock).join('');
 
@@ -3575,7 +3621,8 @@ function sendConsolidatedRenewalReminder(primary, linkedPending, phone){
     const message='Hello '+firstName+'!\n'+
       'Hope you\'re having a blast at Cymatics!\n'+
       '\n'+
-      'Just a little reminder that your payment for '+monthName+' sessions '+clause+' is due Today '+ePiano+eMic+'\n'+
+      'Just a little reminder that your payment for '+monthName+' sessions:\n'+
+      clauseBlock+' is due Today '+ePiano+eMic+'\n'+
       'It\'s '+Math.round(totalAmount)+' EGP for the month — keeping things up to date means you won\'t miss a single beat of the fun!\n'+
       '\n'+
       'Instapay: 01277336092 -Mario Naguib\n'+
@@ -10101,9 +10148,10 @@ function scheduleMonthlyLessons(student, startPreference){
   return scheduleWeeklyLessonsFrom(student, firstDate, count);
 }
 
-function renewStudentSubscription(id){
+function renewStudentSubscription(id, preCheckIdsCsv){
   const student=db.students.find(x=>x.id===id);
   if(!student) return;
+  const preCheckIds=preCheckIdsCsv ? String(preCheckIdsCsv).split(',').filter(x=>x && x!==String(id)) : [];
 
   const teacherOptions=(db.teacherProfiles||[]).filter(p=>(p.status||'active')!=='archived');
   const currentProfile=teacherOptions.find(p=>p.name===student.teacher);
@@ -10119,14 +10167,14 @@ function renewStudentSubscription(id){
   // its own current settings, same as clicking Renew on it individually
   // with nothing changed.
   const linkedCourses=(typeof getLinkedCourses==='function') ? getLinkedCourses(student) : [];
-  window._renewAdditionalCourseIds=[];
+  window._renewAdditionalCourseIds=preCheckIds.slice();
   const linkedCoursesHtml = linkedCourses.length ? `
     <div class="form-field wide" style="margin-bottom:10px">
       <label>Also renew other courses?</label>
       <div class="teacher-row-meta" style="margin-bottom:6px">${escapeHtml(student.name||'This student')} is also enrolled in these — check any to renew them too, using each one's own current teacher/day/time/plan.</div>
       ${linkedCourses.map(c=>`
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:normal;margin-bottom:4px">
-          <input type="checkbox" class="rn-linked-course-check" data-course-id="${escapeAttr(String(c.id))}" style="width:auto" onchange="onRenewLinkedCourseToggle()">
+          <input type="checkbox" class="rn-linked-course-check" data-course-id="${escapeAttr(String(c.id))}" style="width:auto" ${preCheckIds.includes(String(c.id))?'checked':''} onchange="onRenewLinkedCourseToggle()">
           ${escapeHtml(c.instrument||'')} · ${escapeHtml(c.teacher||'')} · ${escapeHtml(c.lesson_day||'')}${c.lessonTime?' '+escapeHtml(formatTime12h(c.lessonTime)):''}
         </label>`).join('')}
     </div>` : '';
