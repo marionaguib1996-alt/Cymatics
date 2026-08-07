@@ -366,7 +366,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-116</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-117</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -10112,8 +10112,28 @@ function renewStudentSubscription(id){
   const timeChoices=getAvailableTimeSlots(student.teacher, student.lesson_day, student.id);
   const timeChoicesWithCurrent=(student.lessonTime && !timeChoices.includes(student.lessonTime)) ? [student.lessonTime,...timeChoices] : timeChoices;
 
+  // Other courses this same person is enrolled in (via "+ Course"). Full
+  // customization only makes sense for ONE course at a time — juggling a
+  // separate teacher/day/time/plan per course in a single modal would be
+  // unmanageable — so any additional course checked here renews using
+  // its own current settings, same as clicking Renew on it individually
+  // with nothing changed.
+  const linkedCourses=(typeof getLinkedCourses==='function') ? getLinkedCourses(student) : [];
+  window._renewAdditionalCourseIds=[];
+  const linkedCoursesHtml = linkedCourses.length ? `
+    <div class="form-field wide" style="margin-bottom:10px">
+      <label>Also renew other courses?</label>
+      <div class="teacher-row-meta" style="margin-bottom:6px">${escapeHtml(student.name||'This student')} is also enrolled in these — check any to renew them too, using each one's own current teacher/day/time/plan.</div>
+      ${linkedCourses.map(c=>`
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:normal;margin-bottom:4px">
+          <input type="checkbox" class="rn-linked-course-check" data-course-id="${escapeAttr(String(c.id))}" style="width:auto" onchange="onRenewLinkedCourseToggle()">
+          ${escapeHtml(c.instrument||'')} · ${escapeHtml(c.teacher||'')} · ${escapeHtml(c.lesson_day||'')}${c.lessonTime?' '+escapeHtml(formatTime12h(c.lessonTime)):''}
+        </label>`).join('')}
+    </div>` : '';
+
   openModal('Renew Subscription — '+(student.name||''), `
     <p style="color:var(--text-muted);margin-bottom:14px">Review or change the schedule before renewing. Leave anything unchanged to keep it as-is.</p>
+    ${linkedCoursesHtml}
     <div class="teacher-log-grid">
       <div class="form-field"><label for="rn-teacher">Teacher</label><select id="rn-teacher" onchange="onRenewTeacherChange(${id})">
         ${teacherOptions.map(p=>`<option value="${escapeAttr(p.name)}" ${p.name===student.teacher?'selected':''}>${escapeHtml(p.name)}</option>`).join('')}
@@ -10240,6 +10260,54 @@ function updateRenewCustomPreview(){
 // Toggles the payment-method choice's visibility based on whether "Mark
 // as paid?" is checked — matching the two-step question flow (paid? then
 // how?) rather than always forcing a method choice.
+function onRenewLinkedCourseToggle(){
+  window._renewAdditionalCourseIds=[...document.querySelectorAll('.rn-linked-course-check:checked')]
+    .map(el=>el.getAttribute('data-course-id'));
+}
+
+// Renews ONE course using its own current teacher/instrument/lesson_day/
+// lessonTime/plan — no modal fields involved, since this runs for every
+// additional linked course checked alongside the one being customized in
+// the main Renew modal. Mirrors confirmRenewal's own auto-plan date/count
+// logic so both paths land on the same answer for the same student.
+function renewCourseWithExistingSettings(courseId, markPaid, paymentMethod){
+  const course=(db.students||[]).find(s=>String(s.id)===String(courseId));
+  if(!course || !course.lesson_day) return {ok:false, name:course?.name||'', reason:'missing a lesson day'};
+
+  const wasTrial=course.plan==='trial' || course.plan==='group-trial';
+  const plan=wasTrial ? (isGroupPlan(course.plan)?'group-monthly':'monthly') : course.plan;
+  const lessonDay=course.lesson_day;
+
+  const existingDates=(db.lessons||[]).filter(l=>String(l.studentId)===String(course.id) && (l.status_record||'active')!=='archived')
+    .map(l=>l.date).filter(Boolean).sort();
+  const lastDate=existingDates.length ? existingDates[existingDates.length-1] : new Date().toISOString().slice(0,10);
+  const todayKey=new Date().toISOString().slice(0,10);
+  let firstNewDate=nextWeekdayStrictlyAfter(lastDate, lessonDay);
+  const soonestPossible=nextWeekdayOnOrAfter(todayKey, lessonDay);
+  if(soonestPossible && firstNewDate<soonestPossible) firstNewDate=soonestPossible;
+
+  const sessionCounts={trial:1,'group-trial':1,weekly:1,'weekly-group':1,'lesson-1':1,'lesson-2':2,'lesson-3':3};
+  const count=(plan==='monthly'||plan==='group-monthly')
+    ? weekdayOccurrencesLeftInMonth(firstNewDate, lessonDay)
+    : (sessionCounts[plan]||4);
+  if(!count) return {ok:false, name:course.name||'', reason:'no lesson-days remain this month'};
+
+  const created=scheduleWeeklyLessonsFrom(course, firstNewDate, count, course.teacher, course.lessonTime);
+  if(!created) return {ok:false, name:course.name||'', reason:'those sessions may already exist'};
+
+  course.plan=plan;
+  const month=firstNewDate.slice(0,7);
+  db.payments[course.id+'_'+month]=markPaid;
+  db.paymentMethods=db.paymentMethods||{};
+  if(markPaid) db.paymentMethods[course.id+'_'+month]=paymentMethod;
+  else delete db.paymentMethods[course.id+'_'+month];
+  if(typeof syncPaymentToggleToSupabase==='function') syncPaymentToggleToSupabase(course.id, month, markPaid, markPaid?paymentMethod:null);
+  if(course.customPay!=null) course.customPay=null;
+  save();
+  if(typeof syncStudentUpdateToSupabase==='function') syncStudentUpdateToSupabase(course);
+  return {ok:true, name:course.name||'', count:created};
+}
+
 function onRenewMarkPaidChange(){
   const checked=!!document.getElementById('rn-mark-paid')?.checked;
   const field=document.getElementById('rn-payment-method-field');
@@ -10488,10 +10556,26 @@ function confirmRenewal(id){
   if(typeof renderWeeklyRenewals==='function') renderWeeklyRenewals();
   if(typeof renderTrialFollowUp==='function') renderTrialFollowUp();
   if(typeof syncStudentUpdateToSupabase==='function') syncStudentUpdateToSupabase(student);
+
+  // Any other linked courses checked in the "Also renew other courses?"
+  // list get renewed now, each using its own current settings.
+  const additionalResults=(window._renewAdditionalCourseIds||[]).map(cid=>renewCourseWithExistingSettings(cid, markPaid, paymentMethod));
+  if(additionalResults.length){
+    if(typeof renderRenewalsDue==='function') renderRenewalsDue();
+    if(typeof renderWeeklyRenewals==='function') renderWeeklyRenewals();
+    if(typeof renderStudents==='function') renderStudents();
+  }
+  window._renewAdditionalCourseIds=[];
+
+  const additionalOk=additionalResults.filter(r=>r.ok);
+  const additionalFailed=additionalResults.filter(r=>!r.ok);
+  const additionalSummary=additionalOk.length ? ' + '+additionalOk.length+' other course'+(additionalOk.length===1?'':'s') : '';
+  const failureSummary=additionalFailed.length ? ' ('+additionalFailed.map(r=>r.name+': '+r.reason).join('; ')+' not renewed)' : '';
+
   if(created){
-    showToast(created+' session(s) scheduled starting '+formatDateDMY(firstNewDate)+' — marked '+(markPaid?'paid':'unpaid')+' for the new cycle');
+    showToast(created+' session(s) scheduled starting '+formatDateDMY(firstNewDate)+' — marked '+(markPaid?'paid':'unpaid')+' for the new cycle'+additionalSummary+failureSummary);
   } else {
-    showToast('Student details updated (no new sessions — they may already exist)');
+    showToast('Student details updated (no new sessions — they may already exist)'+additionalSummary+failureSummary);
   }
 }
 
@@ -10598,7 +10682,20 @@ function confirmRenewalCustomDates(id, student){
   if(typeof renderWeeklyRenewals==='function') renderWeeklyRenewals();
   if(typeof renderTrialFollowUp==='function') renderTrialFollowUp();
   if(typeof syncStudentUpdateToSupabase==='function') syncStudentUpdateToSupabase(student);
-  showToast(dates.length+' session(s) scheduled on custom dates ('+egp(dates.length*rate)+') — marked '+(markPaid?'paid':'unpaid'));
+
+  const additionalResults=(window._renewAdditionalCourseIds||[]).map(cid=>renewCourseWithExistingSettings(cid, markPaid, paymentMethod));
+  if(additionalResults.length){
+    if(typeof renderRenewalsDue==='function') renderRenewalsDue();
+    if(typeof renderWeeklyRenewals==='function') renderWeeklyRenewals();
+    renderStudents();
+  }
+  window._renewAdditionalCourseIds=[];
+  const additionalOk=additionalResults.filter(r=>r.ok);
+  const additionalFailed=additionalResults.filter(r=>!r.ok);
+  const additionalSummary=additionalOk.length ? ' + '+additionalOk.length+' other course'+(additionalOk.length===1?'':'s') : '';
+  const failureSummary=additionalFailed.length ? ' ('+additionalFailed.map(r=>r.name+': '+r.reason).join('; ')+' not renewed)' : '';
+
+  showToast(dates.length+' session(s) scheduled on custom dates ('+egp(dates.length*rate)+') — marked '+(markPaid?'paid':'unpaid')+additionalSummary+failureSummary);
 }
 
 (function(){
