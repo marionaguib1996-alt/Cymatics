@@ -366,7 +366,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-115</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-116</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -10526,9 +10526,37 @@ function confirmRenewalCustomDates(id, student){
   // affect this batch's price.
   student.plan = isGroup ? 'group-monthly' : 'monthly';
 
+  // Custom Dates REPLACES the student's upcoming schedule — it's not an
+  // addition on top of whatever was already booked. Without this, a
+  // pre-existing 'scheduled' lesson from their previous batch (e.g. a
+  // recurring Friday slot) is simply left in place and keeps showing up
+  // on the calendar and schedule photo indefinitely, even though the
+  // admin's intent was to give them a fresh, hand-picked schedule.
+  const pickedSet=new Set(dates);
+  const superseded=(db.lessons||[]).filter(l=>
+    String(l.studentId)===String(id) &&
+    (l.status_record||'active')!=='archived' &&
+    l.status==='scheduled' &&
+    l.date>=todayKey &&
+    !pickedSet.has(l.date)
+  );
+  superseded.forEach(l=>{
+    l.status_record='archived';
+    if(typeof syncLessonUpdateToSupabase==='function') syncLessonUpdateToSupabase(l);
+  });
+
   const rate=isGroup?750:500;
   const created=[];
   dates.forEach((date,i)=>{
+    // A picked date can legitimately coincide with a lesson that already
+    // exists (it wasn't superseded above precisely because it's one of
+    // the picked dates) — don't create a second record on top of it.
+    const already=(db.lessons||[]).some(l=>
+      String(l.studentId)===String(id) &&
+      (l.status_record||'active')!=='archived' &&
+      l.date===date
+    );
+    if(already) return;
     const lesson={
       id:Date.now()+i,
       studentId:student.id,
@@ -11174,7 +11202,25 @@ function getTeacherBookingsByTime(teacherName, dayName, targetDate, excludeStude
     (db.lessons||[]).some(l=>
       (String(l.studentId)===String(s.id) || l.student===s.name) &&
       l.status==='scheduled' && (l.status_record||'active')!=='archived'
-    )
+    ) &&
+    // AND only if targetDate is genuinely beyond what we already know —
+    // strictly after their LATEST scheduled lesson date. A student with
+    // hand-picked custom dates (e.g. Tue 4, Fri 14, Fri 21) has a real,
+    // known answer for every date up through their last one: Fri 7 isn't
+    // among their dates, so it must read as free, not get guessed at just
+    // because it shares a weekday with two of their other lessons. This
+    // projection is only for dates further out than any batch has been
+    // generated for yet, never for a gap inside a range we already have
+    // actual data for.
+    (()=>{
+      const ownScheduled=(db.lessons||[]).filter(l=>
+        (String(l.studentId)===String(s.id) || l.student===s.name) &&
+        l.status==='scheduled' && (l.status_record||'active')!=='archived'
+      ).map(l=>l.date).filter(Boolean);
+      if(!ownScheduled.length) return false;
+      const latestKnown=ownScheduled.reduce((a,b)=>a>b?a:b);
+      return targetDate>latestKnown;
+    })()
   ).forEach(s=>{
     if(!s.lessonTime || bookingsByTime[s.lessonTime]) return;
     const duration=isGroupPlan(s.plan) ? GROUP_SESSION_DURATION_MINUTES : SESSION_DURATION_MINUTES;
