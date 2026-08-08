@@ -366,7 +366,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-122</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-124</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -10430,7 +10430,14 @@ function renewCourseWithExistingSettings(courseId, markPaid, paymentMethod){
   const lastDate=existingDates.length ? existingDates[existingDates.length-1] : new Date().toISOString().slice(0,10);
   const todayKey=new Date().toISOString().slice(0,10);
   let firstNewDate=nextWeekdayStrictlyAfter(lastDate, lessonDay);
-  const soonestPossible=nextWeekdayOnOrAfter(todayKey, lessonDay);
+  // CONVERSION vs RENEWAL differ deliberately:
+  //   Converting a trial ON the lesson day  -> starts the WEEK AFTER.
+  //   Renewing ON the lesson day            -> may start that same day.
+  // A conversion is settling up a trial, so the paid plan begins the
+  // following week rather than the day the decision is made.
+  const soonestPossible = wasTrial
+    ? nextWeekdayStrictlyAfter(todayKey, lessonDay)
+    : nextWeekdayOnOrAfter(todayKey, lessonDay);
   if(soonestPossible && firstNewDate<soonestPossible) firstNewDate=soonestPossible;
 
   const sessionCounts={trial:1,'group-trial':1,weekly:1,'weekly-group':1,'lesson-1':1,'lesson-2':2,'lesson-3':3};
@@ -10512,6 +10519,9 @@ function confirmRenewal(id){
   }
 
   const wasTrial=student.plan==='trial' || student.plan==='group-trial';
+  // Captured BEFORE student.lesson_day gets overwritten below — needed to
+  // tell whether the admin actually moved this student to a different day.
+  const previousLessonDay=student.lesson_day;
 
   const teacher=document.getElementById('rn-teacher')?.value||student.teacher;
   const instrument=document.getElementById('rn-instrument')?.value||student.instrument;
@@ -10587,7 +10597,17 @@ function confirmRenewal(id){
   // times they're renewed. Not applied when the admin explicitly chose a
   // Weekly session date themselves — that's already validated separately.
   if(!(isWeeklyPlan(plan) && dmyToIso(document.getElementById('rn-date')?.value||''))){
-    const soonestPossible=nextWeekdayOnOrAfter(todayKey, lessonDay);
+    // Three cases, deliberately different:
+    //   Moved to a DIFFERENT day -> start on the NEAREST occurrence of
+    //     that new day (today counts). The "week after" rule exists to
+    //     avoid clashing with the session just completed, and a different
+    //     weekday can't clash with it, so it doesn't apply.
+    //   Converting a trial on the SAME day  -> starts the WEEK AFTER.
+    //   Renewing on the SAME day            -> may start that same day.
+    const dayChanged = previousLessonDay && lessonDay && lessonDay!==previousLessonDay;
+    const soonestPossible = (wasTrial && !dayChanged)
+      ? nextWeekdayStrictlyAfter(todayKey, lessonDay)
+      : nextWeekdayOnOrAfter(todayKey, lessonDay);
     if(soonestPossible && firstNewDate<soonestPossible){
       firstNewDate=soonestPossible;
     }
