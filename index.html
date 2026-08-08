@@ -366,7 +366,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-124</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-125</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -3404,6 +3404,24 @@ function renderRenewalsDue(){
     const nextMonthKey=studentNextBillingMonth(s);
     const nextMonthName=(typeof formatMonthName==='function') ? formatMonthName(nextMonthKey) : nextMonthKey;
     let dayNumbers=(typeof getWeekdayDatesInMonth==='function') ? getWeekdayDatesInMonth(nextMonthKey, s.lesson_day) : [];
+    // Drop occurrences a renewal wouldn't actually schedule (already
+    // passed, or before this student's computed start), so the count and
+    // price shown here match the reminder message and the real batch.
+    {
+      const todayK=new Date().toISOString().slice(0,10);
+      const own=(db.lessons||[]).filter(l=>
+        (String(l.studentId)===String(s.id) || l.student===s.name) &&
+        (l.status_record||'active')!=='archived'
+      ).map(l=>l.date).filter(Boolean).sort();
+      const last=own.length?own[own.length-1]:todayK;
+      let fnd=nextWeekdayStrictlyAfter(last, s.lesson_day);
+      const soon=nextWeekdayOnOrAfter(todayK, s.lesson_day);
+      if(soon && fnd<soon) fnd=soon;
+      const firstNum=(String(fnd||'').slice(0,7)===nextMonthKey)
+        ? Number(String(fnd).slice(8,10))
+        : (String(fnd||'')<nextMonthKey ? 0 : 99);
+      dayNumbers=dayNumbers.filter(d=>d>=firstNum);
+    }
     // Exclude any date the teacher is already marked absent for — the
     // student won't have (and shouldn't be billed for) a session that day.
     if(s.teacher && typeof isTeacherAbsentOnDate==='function'){
@@ -3523,10 +3541,30 @@ function computeRenewalCourseDetails(student){
   const month=(typeof studentNextBillingMonth==='function') ? studentNextBillingMonth(student) : getNextMonthString();
   const monthName=formatMonthName(month);
   const allDayNumbers=getWeekdayDatesInMonth(month, student.lesson_day);
-  let dayNumbers=allDayNumbers;
+
+  // Only count dates a renewal would ACTUALLY schedule. Listing every
+  // occurrence in the month meant quoting sessions on dates that had
+  // already passed (e.g. reminding on the 8th about a session on the
+  // 3rd), and billing for them — the reminder must describe the same
+  // batch confirmRenewal would create, or the student is quoted a
+  // price for lessons they'll never get.
+  const todayKey=new Date().toISOString().slice(0,10);
+  const ownDates=(db.lessons||[]).filter(l=>
+    (String(l.studentId)===String(student.id) || l.student===student.name) &&
+    (l.status_record||'active')!=='archived'
+  ).map(l=>l.date).filter(Boolean).sort();
+  const lastDate=ownDates.length ? ownDates[ownDates.length-1] : todayKey;
+  let firstNewDate=nextWeekdayStrictlyAfter(lastDate, student.lesson_day);
+  const soonest=nextWeekdayOnOrAfter(todayKey, student.lesson_day);
+  if(soonest && firstNewDate<soonest) firstNewDate=soonest;
+  const firstDayNum=(String(firstNewDate||'').slice(0,7)===month)
+    ? Number(String(firstNewDate).slice(8,10))
+    : (String(firstNewDate||'')<month ? 0 : 99);
+
+  let dayNumbers=allDayNumbers.filter(d=>d>=firstDayNum);
   const excludedDays=[];
   if(student.teacher && typeof isTeacherAbsentOnDate==='function'){
-    dayNumbers=allDayNumbers.filter(day=>{
+    dayNumbers=dayNumbers.filter(day=>{
       const dateKey=month+'-'+String(day).padStart(2,'0');
       const absent=isTeacherAbsentOnDate(student.teacher, dateKey, student.lessonTime);
       if(absent) excludedDays.push(day);
