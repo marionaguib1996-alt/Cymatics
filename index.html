@@ -366,7 +366,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-120</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-122</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1339,11 +1339,22 @@ function monthlyScheduledSessionCount(student, monthKey){
     monthKey=(typeof currentMonth==='function' && currentMonth()) ? currentMonth() : null;
     if(!monthKey){ const now=new Date(); monthKey=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0'); }
   }
-  return (db.lessons||[]).filter(l=>
-    (String(l.studentId)===String(student.id) || l.student===student.name) &&
-    (l.status_record||'active')!=='archived' &&
-    String(l.date||'').slice(0,7)===monthKey
-  ).length;
+  return (db.lessons||[]).filter(l=>{
+    if(!(String(l.studentId)===String(student.id) || l.student===student.name)) return false;
+    if((l.status_record||'active')==='archived') return false;
+    if(String(l.date||'').slice(0,7)!==monthKey) return false;
+    // A TRIAL session was paid for separately as a trial fee — counting it
+    // again in the monthly total bills the student twice for it. This is
+    // what made a mid-month trial conversion quote a full month's price
+    // instead of the remaining sessions only.
+    if(l.wasTrial) return false;
+    // A session the teacher missed with no make-up booked is CREDITED,
+    // not billed — the student already paid for it and isn't receiving
+    // it, so it must not inflate this month's count either.
+    if(l.status==='teacher_absent' && !l.makeupResolved
+       && !(typeof findMakeupLessonFor==='function' && findMakeupLessonFor(l.id))) return false;
+    return true;
+  }).length;
 }
 
 // A "Group" plan books a 1-hour lesson instead of the standard
@@ -1387,6 +1398,56 @@ function isMonthlyPlan(plan){
 // Centralized here so every place that calculates a payment amount
 // (Students page, Database, Overview revenue, Student Profile, etc.)
 // stays consistent rather than each needing its own override check.
+// ── CANONICAL PRICING ─────────────────────────────────────────────────
+// One place that answers "what does this student owe for N sessions?",
+// applying the academy's crediting rules in priority order:
+//
+//   1. Custom Pay  — a one-time flat total for THIS renewal, overrides all.
+//   2. Custom Amount — a standing PER-LESSON rate (a discount), x sessions.
+//   3. Standard per-lesson rate for the plan (weekly 600, group 750,
+//      weekly-group 850, otherwise 500).
+//
+// ...then subtracts CREDIT the student is already owed:
+//
+//   Teacher Absent, no make-up booked -> automatic credit. The student
+//     already paid for a session they won't receive, so it comes off the
+//     next bill. (Booking a make-up cancels the credit — they get the
+//     session instead of the money back.)
+//   Excused Absence -> NOT automatic. A make-up is owed, but whether it
+//     converts to a credit is the admin's call, applied via Custom Pay.
+//
+// Every renewal path must use this, otherwise the same student gets a
+// different price depending on which button was pressed.
+function computeRenewalPrice(student, sessionCount, opts){
+  const o=opts||{};
+  const count=Math.max(0, Number(sessionCount)||0);
+
+  // Credit owed: teacher-absent sessions with no make-up booked and not
+  // already resolved. Skipped when the caller has already accounted for
+  // it, or when Custom Pay is naming an explicit final figure.
+  let creditedSessions=0;
+  if(!o.skipDeductions && typeof teacherAbsenceDeductions==='function'){
+    creditedSessions=(teacherAbsenceDeductions(student)||[]).length;
+  }
+
+  if(student && student.customPay!=null && student.customPay!==''){
+    // An explicit one-time total — the admin has already decided the
+    // number, so no rate maths and no further deduction on top.
+    return {amount:Number(student.customPay)||0, rate:null, billableCount:count, creditedSessions:0, source:'customPay'};
+  }
+
+  const billableCount=Math.max(0, count-creditedSessions);
+
+  if(student && student.customAmount!=null && student.customAmount!==''){
+    const rate=Number(student.customAmount)||0;
+    return {amount:billableCount*rate, rate, billableCount, creditedSessions, source:'customAmount'};
+  }
+
+  const planForRate=o.planOverride||student?.plan;
+  const rate=(typeof whatsAppPerLessonRate==='function') ? whatsAppPerLessonRate(planForRate) : 500;
+  return {amount:billableCount*rate, rate, billableCount, creditedSessions, source:'standard'};
+}
+
 function getStudentPlanAmount(student){
   if(!student) return 0;
   // The right session count for THIS billing cycle, by plan type — needed
@@ -3326,7 +3387,15 @@ function renderRenewalsDue(){
     if((s.status||'active')==='archived' || s.frozen) return;
     if(!isMonthlyPlan(s.plan)) return; // monthly-billed plans only (incl. legacy)
     if(!studentHasPendingRenewal(s)) return; // must have finished this month AND not already renewed
-    if(!s.lesson_day) return; // can't compute next month's occurrences without one
+    // A student with no lesson day can't have their next-month dates
+    // computed — but silently dropping them made them INVISIBLE here,
+    // with nothing anywhere indicating a student still needed renewing.
+    // Surface them with a clear prompt instead of hiding the problem.
+    if(!s.lesson_day){
+      rows.push({s, lessonCount:0, amount:0, remindedAt:null, isCustomPay:false,
+                 deductionCount:0, nextMonthName:'', needsLessonDay:true});
+      return;
+    }
     // The month THIS student's next batch would actually start in — not
     // necessarily next-calendar-month-from-today. A student who's several
     // months behind on renewing still needs billing for the month right
@@ -3403,7 +3472,7 @@ function renderRenewalsDue(){
     host.innerHTML='<div class="empty"><div class="empty-icon">✅</div><div class="empty-text">No renewals due — no monthly students have finished this month\'s sessions yet.</div></div>';
     return;
   }
-  host.innerHTML=grouped.map(({s,courses,lessonCount,amount,remindedAt,isCustomPay,deductionCount,nextMonthName})=>{
+  host.innerHTML=grouped.map(({s,courses,lessonCount,amount,remindedAt,isCustomPay,deductionCount,nextMonthName,needsLessonDay})=>{
     const remindedBadge = remindedAt
       ? `<span class="badge badge-blue" style="font-size:10px" title="Reminded ${escapeAttr(new Date(remindedAt).toLocaleString())}">✓ Reminded ${escapeHtml(timeAgoLabel(remindedAt))}</span>`
       : '';
@@ -3431,7 +3500,9 @@ function renderRenewalsDue(){
         <div class="unpaid-meta">${metaLine} · <span class="badge badge-red" style="font-size:10px">Finished this month</span> ${remindedBadge} ${customPayBadge} ${deductionBadge} ${courseCountBadge}</div>
       </div>
       <div style="display:flex;align-items:center;gap:10px">
-        <span style="font-size:12px;color:var(--text-muted)">${escapeHtml(nextMonthName)}: <b style="color:var(--gold)">${lessonCount} lesson${lessonCount===1?'':'s'} · ${egp(amount)}</b></span>
+        ${needsLessonDay
+          ? `<span style="font-size:12px;color:var(--danger,#e06c6c)"><b>⚠ No lesson day set</b> — open Edit to set one</span>`
+          : `<span style="font-size:12px;color:var(--text-muted)">${escapeHtml(nextMonthName)}: <b style="color:var(--gold)">${lessonCount} lesson${lessonCount===1?'':'s'} · ${egp(amount)}</b></span>`}
         <button class="btn btn-sm" onclick="sendRenewalReminder(${s.id})" title="Opens WhatsApp with the next-month payment reminder">${reminderBtnLabel}</button>
         <button class="btn btn-sm btn-gold" onclick="renewStudentSubscription(${s.id},'${escapeAttr(renewIds)}')">🔁 Renew</button>
       </div>
@@ -10264,6 +10335,7 @@ function renewStudentSubscription(id, preCheckIdsCsv){
     <div style="text-align:right;margin-top:14px"><button class="btn btn-gold" onclick="confirmRenewal(${id})">Confirm Renewal</button></div>`);
   window._renewPaymentMethod='InstaPay';
   window._renewCustomDates=[];
+  window._renewCustomStudentId=id;
 }
 
 // Toggles between the normal auto-scheduled Plan section and the free
@@ -10311,12 +10383,25 @@ function updateRenewCustomPreview(){
   const host=document.getElementById('rn-custom-preview');
   if(!host) return;
   const dates=window._renewCustomDates||[];
+  if(!dates.length){ host.textContent='Add at least one date to see the price.'; return; }
   const isGroup=!!document.getElementById('rn-custom-is-group')?.checked;
-  const rate=isGroup?750:500;
-  const total=dates.length*rate;
-  host.textContent = dates.length
-    ? dates.length+' session'+(dates.length===1?'':'s')+' × '+rate+' EGP = '+egp(total)
-    : 'Add at least one date to see the price.';
+  const student=(db.students||[]).find(s=>String(s.id)===String(window._renewCustomStudentId));
+  // Priced through the SAME canonical function the confirmation uses, so
+  // the preview can never quote a different number than what's charged —
+  // and so credit for teacher-absent sessions is reflected here too.
+  const p=computeRenewalPrice(student||{}, dates.length, {planOverride: isGroup?'group-monthly':(student?.plan||'monthly')});
+  let line;
+  if(p.source==='customPay'){
+    line=dates.length+' session'+(dates.length===1?'':'s')+' · Custom Pay = '+egp(p.amount);
+  } else {
+    line=dates.length+' session'+(dates.length===1?'':'s')
+      +(p.creditedSessions?' − '+p.creditedSessions+' credited':'')
+      +' × '+p.rate+' EGP = '+egp(p.amount);
+  }
+  if(p.creditedSessions){
+    line+='  (credit for '+p.creditedSessions+' session'+(p.creditedSessions===1?'':'s')+' the teacher missed)';
+  }
+  host.textContent=line;
 }
 
 // Toggles the payment-method choice's visibility based on whether "Mark
@@ -10626,11 +10711,35 @@ function confirmRenewal(id){
   const additionalFailed=additionalResults.filter(r=>!r.ok);
   const additionalSummary=additionalOk.length ? ' + '+additionalOk.length+' other course'+(additionalOk.length===1?'':'s') : '';
   const failureSummary=additionalFailed.length ? ' ('+additionalFailed.map(r=>r.name+': '+r.reason).join('; ')+' not renewed)' : '';
+  // A linked course failing to renew must be stated outright, not tucked
+  // into the tail of a toast — a partly-completed renewal that LOOKS
+  // complete is how a course ends up silently unrenewed.
+  if(additionalFailed.length){
+    alert('⚠ Some linked courses were NOT renewed:\n\n'+
+      additionalFailed.map(r=>'• '+(r.name||'course')+' — '+r.reason).join('\n')+
+      '\n\nThose still need renewing. Use the "..." menu on that student\'s row → Renew Subscription.');
+  }
 
   if(created){
     showToast(created+' session(s) scheduled starting '+formatDateDMY(firstNewDate)+' — marked '+(markPaid?'paid':'unpaid')+' for the new cycle'+additionalSummary+failureSummary);
   } else {
-    showToast('Student details updated (no new sessions — they may already exist)'+additionalSummary+failureSummary);
+    // A renewal that schedules NOTHING is a failure, not a quiet no-op.
+    // The old wording ("no new sessions — they may already exist") read
+    // like success and was easy to miss entirely, which is how a silently
+    // failed renewal went unnoticed and looked like corrupted data rather
+    // than something that simply hadn't happened. Say it plainly, and
+    // block on it so it can't be scrolled past.
+    const reasons=[
+      'every date in the batch already has a lesson for this student',
+      'the room is at its 3-slot limit on those dates at '+formatTime12h(lessonTime),
+      'the teacher is marked absent for those dates'
+    ];
+    alert('⚠ NOTHING WAS SCHEDULED for '+(student.name||'this student')+'.\n\n'+
+          'No sessions were created and no payment was recorded for this course, so this renewal still needs doing.\n\n'+
+          'Most likely one of:\n• '+reasons.join('\n• ')+
+          '\n\nTry a different time slot or day, or use Custom Dates to pick specific dates.'+
+          (additionalOk.length ? '\n\n(Note: '+additionalOk.length+' other linked course'+(additionalOk.length===1?' was':'s were')+' renewed successfully.)' : ''));
+    showToast('⚠ No sessions scheduled — this renewal did not complete'+additionalSummary+failureSummary);
   }
 }
 
@@ -10684,7 +10793,13 @@ function confirmRenewalCustomDates(id, student){
     if(typeof syncLessonUpdateToSupabase==='function') syncLessonUpdateToSupabase(l);
   });
 
-  const rate=isGroup?750:500;
+  // Priced through the canonical function — respects the plan's real rate
+  // (weekly is 600, not 500), any standing Custom Amount, any one-time
+  // Custom Pay, and credit owed for teacher-absent sessions. Hardcoding
+  // 750/500 here is what made a Custom Dates renewal quietly ignore all
+  // four of those.
+  const pricing=computeRenewalPrice(student, dates.length, {planOverride: isGroup?'group-monthly':(student.plan||'monthly')});
+  const rate=pricing.rate;
   const created=[];
   dates.forEach((date,i)=>{
     // A picked date can legitimately coincide with a lesson that already
@@ -10749,8 +10864,18 @@ function confirmRenewalCustomDates(id, student){
   const additionalFailed=additionalResults.filter(r=>!r.ok);
   const additionalSummary=additionalOk.length ? ' + '+additionalOk.length+' other course'+(additionalOk.length===1?'':'s') : '';
   const failureSummary=additionalFailed.length ? ' ('+additionalFailed.map(r=>r.name+': '+r.reason).join('; ')+' not renewed)' : '';
+  // A linked course failing to renew must be stated outright, not tucked
+  // into the tail of a toast — a partly-completed renewal that LOOKS
+  // complete is how a course ends up silently unrenewed.
+  if(additionalFailed.length){
+    alert('⚠ Some linked courses were NOT renewed:\n\n'+
+      additionalFailed.map(r=>'• '+(r.name||'course')+' — '+r.reason).join('\n')+
+      '\n\nThose still need renewing. Use the "..." menu on that student\'s row → Renew Subscription.');
+  }
 
-  showToast(dates.length+' session(s) scheduled on custom dates ('+egp(dates.length*rate)+') — marked '+(markPaid?'paid':'unpaid')+additionalSummary+failureSummary);
+  showToast(dates.length+' session(s) scheduled on custom dates ('+egp(pricing.amount)
+    +(pricing.creditedSessions?' after '+pricing.creditedSessions+' credited':'')
+    +') — marked '+(markPaid?'paid':'unpaid')+additionalSummary+failureSummary);
 }
 
 (function(){
@@ -11480,7 +11605,13 @@ function studentHasPendingRenewal(student){
   // a long-dormant, effectively-abandoned record isn't resurfaced
   // indefinitely; anything older than that is a candidate for archiving
   // instead of renewal.
-  const attendedDates=ownLessons.filter(l=>l.status==='attended').map(l=>l.date).filter(Boolean).sort();
+  // Both Attended and "Absent & Paid" CONSUME a session from the
+  // student's credit — the lesson was charged for either way. Counting
+  // only 'attended' meant a student whose last sessions were all
+  // absent-but-paid had genuinely finished their batch but never showed
+  // up on Renewals Due at all.
+  const consumedDates=ownLessons.filter(l=>l.status==='attended' || l.status==='absent_paid').map(l=>l.date).filter(Boolean).sort();
+  const attendedDates=consumedDates;
   if(!attendedDates.length) return false;
   const lastAttended=attendedDates[attendedDates.length-1];
   const daysSince=Math.floor((new Date(todayKey)-new Date(lastAttended))/86400000);
