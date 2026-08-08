@@ -366,7 +366,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-118</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-119</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -10031,7 +10031,7 @@ function setDefaultJoinedDate(){
 }
 setDefaultJoinedDate();
 
-function scheduleWeeklyLessonsFrom(student, firstDate, count, teacherForAbsenceCheck, lessonTimeForAbsenceCheck){
+function scheduleWeeklyLessonsFrom(student, firstDate, count, teacherForAbsenceCheck, lessonTimeForAbsenceCheck, isGroupSession){
   if(!firstDate || !count) return 0;
   const newLessons=[];
   // Walk forward week by week until COUNT new lessons are actually
@@ -10043,6 +10043,13 @@ function scheduleWeeklyLessonsFrom(student, firstDate, count, teacherForAbsenceC
   // to the next open week. The cap below is a generous safety bound
   // (~4 years of weekly collisions) so a pathological run of clashes
   // still can't loop forever.
+  // The time to check room capacity against — NOT necessarily
+  // student.lessonTime, since a caller mid-renewal (confirmRenewal) may
+  // not have written the NEW time onto the student record yet at this
+  // point; lessonTimeForAbsenceCheck is always the correct, current one.
+  const checkTime=lessonTimeForAbsenceCheck || student.lessonTime;
+  const isGroup = isGroupSession!=null ? isGroupSession : isGroupPlan(student.plan);
+  const dur = isGroup ? GROUP_SESSION_DURATION_MINUTES : SESSION_DURATION_MINUTES;
   let i=0;
   const maxIterations=count*10+208;
   while(newLessons.length<count && i<maxIterations){
@@ -10060,7 +10067,13 @@ function scheduleWeeklyLessonsFrom(student, firstDate, count, teacherForAbsenceC
     // Skip a date the teacher is already marked absent for — they won't
     // be there, so scheduling a lesson on it would just need undoing
     // (and doesn't match the count Renewals Due already deducted for).
-    if(teacherForAbsenceCheck && typeof isTeacherAbsentOnDate==='function' && isTeacherAbsentOnDate(teacherForAbsenceCheck, date, lessonTimeForAbsenceCheck)) continue;
+    if(teacherForAbsenceCheck && typeof isTeacherAbsentOnDate==='function' && isTeacherAbsentOnDate(teacherForAbsenceCheck, date, checkTime)) continue;
+    // Skip a date where the room is already at the 3-slot limit — checked
+    // PER CANDIDATE DATE, not once against some unrelated reference date.
+    // A room being full today has no bearing on whether week 3 of this
+    // student's batch has room; each date needs its own answer, same as
+    // the teacher-absence check just above.
+    if(checkTime && typeof isRoomFullDuringRange==='function' && isRoomFullDuringRange(date, checkTime, dur, null)) continue;
     const lesson={
       id:Date.now()+i,
       studentId:student.id,
@@ -10068,7 +10081,7 @@ function scheduleWeeklyLessonsFrom(student, firstDate, count, teacherForAbsenceC
       instrument:student.instrument||'',
       teacher:student.teacher||'',
       date:date,
-      time:student.lessonTime||'',
+      time:checkTime||student.lessonTime||'',
       status:'scheduled',
       month:String(date||'').slice(0,7)
     };
@@ -10340,7 +10353,7 @@ function renewCourseWithExistingSettings(courseId, markPaid, paymentMethod){
     : (sessionCounts[plan]||4);
   if(!count) return {ok:false, name:course.name||'', reason:'no lesson-days remain this month'};
 
-  const created=scheduleWeeklyLessonsFrom(course, firstNewDate, count, course.teacher, course.lessonTime);
+  const created=scheduleWeeklyLessonsFrom(course, firstNewDate, count, course.teacher, course.lessonTime, isGroupPlan(plan));
   if(!created) return {ok:false, name:course.name||'', reason:'those sessions may already exist'};
 
   course.plan=plan;
@@ -10422,13 +10435,6 @@ function confirmRenewal(id){
 
   if(!lessonDay){ showToast('Please choose a lesson day'); return; }
   if(!lessonTime){ showToast('Please choose a time slot'); return; }
-  // Physical room capacity only — consistent with the calendar, the slot
-  // dropdown, and the Add/Edit Student guards. The student's own lesson
-  // this week isn't a conflict with themselves.
-  const rnTargetDate=nextOccurrenceOfWeekday(lessonDay);
-  const rnOwnLesson=(db.lessons||[]).find(l=>l.date===rnTargetDate && String(l.studentId)===String(id) && (l.status_record||'active')!=='archived');
-  const rnDur=isGroupPlan(plan)?GROUP_SESSION_DURATION_MINUTES:SESSION_DURATION_MINUTES;
-  if(isRoomFullDuringRange(rnTargetDate, lessonTime, rnDur, rnOwnLesson?.id||null)){ showToast('That slot is at the 3-room limit — pick another.'); return; }
 
   const sessionCounts={'trial':1,'monthly':4,'group-monthly':4,'monthly-4':4,'monthly-5':5,'weekly':1,'weekly-group':1,'lesson-1':1,'lesson-2':2,'lesson-3':3,'group':4,'group-trial':1,'group-1':1,'group-2':2,'group-3':3};
   // For the auto monthly plans the real count is computed below, once the
@@ -10523,7 +10529,7 @@ function confirmRenewal(id){
   }
   if(!count){ showToast('No lesson-days remain this month for that plan — pick a Weekly session or a date next month.'); return; }
 
-  const created=scheduleWeeklyLessonsFrom(student, firstNewDate, count, teacher, lessonTime);
+  const created=scheduleWeeklyLessonsFrom(student, firstNewDate, count, teacher, lessonTime, isGroupPlan(plan));
 
   // Ask (via the modal's own fields) rather than assume: was this renewal
   // actually paid, and if so, how? By the time an admin is confirming a
