@@ -366,7 +366,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-125</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-126</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -3929,6 +3929,14 @@ function addLesson(studentId){
   save();
  renderLessons();
  renderTeachers();
+ if(typeof renderOverview==='function') renderOverview();
+ // Logging a trial session as attended here should surface that student
+ // in Trial Follow-up immediately — this is the most common place a
+ // trial gets recorded, so waiting for a page switch made it look like
+ // the student simply never appeared.
+ if(typeof renderTrialFollowUp==='function') renderTrialFollowUp();
+ if(typeof renderRenewalsDue==='function') renderRenewalsDue();
+ if(typeof renderWeeklyRenewals==='function') renderWeeklyRenewals();
  if(typeof syncLessonToSupabase==='function') syncLessonToSupabase(lesson);
  if(newLog && typeof syncLessonLogToSupabase==='function') syncLessonLogToSupabase(newLog);
  showToast('Lesson logged ✓');
@@ -4345,6 +4353,12 @@ function saveEditLesson(id){
  closeModal();
  renderLessons(); renderTeachers(); renderOverview();
  if(typeof renderCalendarPage==='function') renderCalendarPage();
+ // Changing a lesson's status here can equally make a student due for
+ // follow-up or renewal (e.g. setting a trial to Attended), so these
+ // lists must refresh too rather than waiting for a page switch.
+ if(typeof renderTrialFollowUp==='function') renderTrialFollowUp();
+ if(typeof renderRenewalsDue==='function') renderRenewalsDue();
+ if(typeof renderWeeklyRenewals==='function') renderWeeklyRenewals();
  if(typeof syncLessonLogFromLesson==='function') syncLessonLogFromLesson(id);
  if(typeof syncLessonUpdateToSupabase==='function') syncLessonUpdateToSupabase(l);
  if(typeof renderTeacherWorkspace==='function') renderTeacherWorkspace();
@@ -4396,6 +4410,13 @@ function markLessonAttended(id){
  renderLessons();
  renderTeachers();
  renderOverview();
+ // Marking a trial student attended makes them due for follow-up RIGHT
+ // NOW — without this the Renewals lists only caught up on the next page
+ // switch, so a just-attended trial appeared to be missing from Trial
+ // Follow-up. Each is a no-op when its own page isn't showing.
+ if(typeof renderTrialFollowUp==='function') renderTrialFollowUp();
+ if(typeof renderRenewalsDue==='function') renderRenewalsDue();
+ if(typeof renderWeeklyRenewals==='function') renderWeeklyRenewals();
  if(typeof syncLessonUpdateToSupabase==='function') syncLessonUpdateToSupabase(l);
  if(typeof syncLessonLogFromLesson==='function') syncLessonLogFromLesson(id);
  if(typeof renderTeacherWorkspace==='function') renderTeacherWorkspace();
