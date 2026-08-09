@@ -107,6 +107,7 @@ tr:hover td{background:rgba(255,255,255,0.02)}
 .badge-amber{background:var(--amber-bg);color:var(--amber-text);border:1px solid rgba(212,160,23,0.2)}
 .badge-blue{background:var(--blue-bg);color:var(--blue-text);border:1px solid rgba(91,155,213,0.2)}
 .badge-purple{background:rgba(139,92,246,0.15);color:#c4b5fd;border:1px solid rgba(139,92,246,0.25)}
+.badge-teal{background:rgba(45,212,191,0.15);color:#5eead4;border:1px solid rgba(45,212,191,0.28)}
 .free-slot-chip{font-family:'Space Mono',monospace;font-size:13px;padding:6px 12px;border-radius:8px;background:var(--surface2,#242220);border:1px solid var(--border);color:var(--text-light,#e8e4d8);cursor:pointer;transition:all 0.12s}
 .free-slot-chip:hover{border-color:var(--gold-light,#e2c47a)}
 .free-slot-chip.selected{background:var(--gold-light,#e2c47a);color:#1a1815;border-color:var(--gold-light,#e2c47a);font-weight:700}
@@ -366,7 +367,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-127</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-128</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -474,6 +475,13 @@ input::placeholder{color:var(--text-dim)}
           <option value="group-trial">Group Trial — 1hr (750 EGP)</option>
           <option value="weekly-group">Weekly Group Session — 1hr (850 EGP)</option>
         </select>
+      </div>
+      <div class="form-field">
+        <label>Session Type</label>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:normal;text-transform:none;letter-spacing:normal;font-size:13px;color:var(--text);margin-top:6px">
+          <input id="s-online" type="checkbox" style="width:auto">
+          Online student
+        </label>
       </div>
     </div>
     <button class="btn btn-gold" onclick="addStudent()">+ Add student</button>
@@ -2845,12 +2853,13 @@ function renderStudents(){
     const amt=isWeeklyPlan(s.plan)?egp(getStudentPlanAmount(s))+' / session':egp(getStudentPlanAmount(s));
     const linkedCourses=getLinkedCourses(s);
     const linkedBadge=linkedCourses.length ? ` <span class="badge badge-purple" style="cursor:help" title="Also enrolled in: ${escapeAttr(linkedCourses.map(c=>c.instrument+' with '+c.teacher).join(', '))}">🔗 +${linkedCourses.length}</span>` : '';
+    const onlineBadge=s.isOnline ? ' <span class="badge badge-teal" title="This student attends online">💻 Online</span>' : '';
     const frozenBadge=s.frozen ? ` <span class="badge badge-blue" style="cursor:help" title="${escapeAttr('Frozen since '+(s.frozenSince?formatDateDMY(s.frozenSince):'—')+(s.frozenReason?': '+s.frozenReason:''))}">❄️ Frozen</span>` : '';
     const health=getStudentHealthFlags(s);
     const healthDot=health.level==='ok' ? '' :
       `<span title="${escapeAttr(health.reasons.join(' · '))}" style="display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:7px;vertical-align:middle;background:${health.level==='risk'?'#e05c5c':'#d4a017'}"></span>`;
     return `<tr>
-      <td>${healthDot}<strong>${escapeHtml(s.name)}</strong>${linkedBadge}${frozenBadge}</td>
+      <td>${healthDot}<strong>${escapeHtml(s.name)}</strong>${onlineBadge}${linkedBadge}${frozenBadge}</td>
       <td>${escapeHtml(s.instrument)||'—'}</td>
       <td>${escapeHtml(s.teacher)||'—'}</td>
       <td>${PLAN_LABELS[s.plan]}</td>
@@ -2896,6 +2905,12 @@ function editStudent(id){
      <div class="form-field"><label for="es-plan">Payment Plan</label><select id="es-plan" onchange="onEditStudentDayChange(${s.id})">
        ${planOptionsHtml(s.plan)}
      </select></div>
+     <div class="form-field"><label>Session Type</label>
+       <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:normal;text-transform:none;letter-spacing:normal;font-size:13px;color:var(--text);margin-top:6px">
+         <input id="es-online" type="checkbox" style="width:auto" ${s.isOnline?'checked':''}>
+         Online student
+       </label>
+     </div>
      <div class="form-field"><label for="es-custom-amount">Custom Amount — per lesson (EGP)</label><input id="es-custom-amount" type="number" min="0" step="1" placeholder="Standard: ${whatsAppPerLessonRate(s.plan)}/lesson" value="${s.customAmount!=null?escapeAttr(s.customAmount):''}"><small style="color:var(--text-muted);display:block;margin-top:2px">Leave blank for the standard per-lesson rate. Set a value for a standing discount — multiplied by however many lessons fall in each billing cycle.</small></div>
      <div class="form-field"><label for="es-custom-pay">Custom Pay — next renewal only (EGP)</label><input id="es-custom-pay" type="number" min="0" step="1" placeholder="e.g. couldn't reschedule a make-up" value="${s.customPay!=null?escapeAttr(s.customPay):''}"><small style="color:var(--text-muted);display:block;margin-top:2px">A one-time flat total for the NEXT renewal only (e.g. adjusting for a make-up that couldn't be rescheduled). Clears itself automatically once that renewal is processed.</small></div>
      <div class="form-field"><label for="es-dob">Date of Birth</label><div style="display:flex;gap:4px"><input id="es-dob" type="text" placeholder="dd/mm/yyyy" maxlength="10" oninput="maskDateInput(this)" value="${escapeAttr(isoToDmy(s.dob))}"><button type="button" class="btn btn-sm" onclick="openDatePicker('es-dob')">📅</button></div></div>
@@ -2949,6 +2964,7 @@ function saveEditStudent(id){
  s.email=document.getElementById('es-email')?.value||'';
  s.lesson_day=document.getElementById('es-day')?.value||'';
  s.lessonTime=document.getElementById('es-time')?.value||'';
+ s.isOnline=!!document.getElementById('es-online')?.checked;
  s.plan=document.getElementById('es-plan')?.value||s.plan;
  const customAmountRaw=document.getElementById('es-custom-amount')?.value;
  s.customAmount=(customAmountRaw==null||customAmountRaw==='')?null:Number(customAmountRaw);
@@ -4132,6 +4148,12 @@ if(sum){sum.innerHTML=`<div class="metric"><div class="metric-label">Lessons</di
      // A lesson that WAS a trial (stamped at conversion) keeps its Trial
      // badge even though the student is no longer on a trial plan — the
      // badge otherwise derives only from the current plan and would vanish.
+     // Online students get a badge here for the same reason trials and
+     // make-ups do — it changes how the session is run, so it needs to be
+     // visible at a glance rather than encoded in the student's name.
+     if(matchedStudent?.isOnline){
+       planBadges=(planBadges?planBadges+' ':'')+'<span class="badge badge-teal" title="This student attends online">💻 Online</span>';
+     }
      if(l.wasTrial && !/>Trial</.test(planBadges)){
        planBadges=(planBadges?planBadges+' ':'')+'<span class="badge badge-blue">Trial</span>';
      }
@@ -5784,6 +5806,7 @@ addStudent=function(){
    email:document.getElementById('s-parent-email')?.value||'',
    lesson_day:document.getElementById('s-day')?.value||'',
    lessonTime:document.getElementById('s-time')?.value||'',
+   isOnline:!!document.getElementById('s-online')?.checked,
    plan:document.getElementById('s-plan').value,
    joined_date:dmyToIso(document.getElementById('s-joined-date')?.value||''),
    created_at: new Date().toISOString(),
@@ -9183,6 +9206,10 @@ function renderTeacherWorkspace(){
           ? ' <span class="badge badge-amber" title="A make-up session is still owed for this lesson">Make-Up Owed</span>' : '';
         const makeupBadge=(l.makeupForLessonId && !l.isDoubleSession) ? ' <span class="badge badge-purple" title="This session is a makeup for a previously missed lesson">🔁 Makeup</span>' : '';
         const doubleBadge=l.isDoubleSession ? ' <span class="badge badge-purple" title="Absorbs a missed lesson as a double session">Double Session</span>' : '';
+        // Teachers need to know a session is online BEFORE it starts —
+        // it changes how they prepare and where they need to be.
+        const stu=(db.students||[]).find(x=>String(x.id)===String(l.studentId) || x.name===(l.student_name||l.student));
+        const onlineBadge=stu?.isOnline ? ' <span class="badge badge-teal" title="This student attends online">💻 Online</span>' : '';
         // Admin notes are private unless explicitly shared with the teacher.
         const noteVisible=!!(l.notes && l.notesShowToTeacher);
         const notesBadge=noteVisible ? ` <span class="badge badge-purple" style="cursor:pointer" onclick="toggleLessonNote('note-${l.id}')" title="Tap to read note">📝 Notes</span>` : '';
@@ -9196,7 +9223,7 @@ function renderTeacherWorkspace(){
             </div>
           </div>
           <div style="text-align:right">
-            <span class="badge ${statusClass}">${escapeHtml(statusText)}</span>${owedBadge}${makeupBadge}${doubleBadge}${notesBadge}
+            <span class="badge ${statusClass}">${escapeHtml(statusText)}</span>${onlineBadge}${owedBadge}${makeupBadge}${doubleBadge}${notesBadge}
           </div>
           ${noteVisible ? `<div id="note-${l.id}" style="display:none;grid-column:1/-1;margin-top:6px;padding:8px 10px;background:var(--surface,#1a1916);border-radius:6px;font-size:13px;color:var(--text-light,#e8e4d8);white-space:pre-wrap">${escapeHtml(l.notes)}</div>` : ''}
         </div>`;
