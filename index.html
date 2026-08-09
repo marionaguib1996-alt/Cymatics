@@ -367,7 +367,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-130</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-131</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -10623,10 +10623,18 @@ function renewCourseWithExistingSettings(courseId, markPaid, paymentMethod){
   const plan=wasTrial ? (isGroupPlan(course.plan)?'group-monthly':'monthly') : course.plan;
   const lessonDay=course.lesson_day;
 
-  const existingDates=(db.lessons||[]).filter(l=>String(l.studentId)===String(course.id) && (l.status_record||'active')!=='archived')
-    .map(l=>l.date).filter(Boolean).sort();
-  const lastDate=existingDates.length ? existingDates[existingDates.length-1] : new Date().toISOString().slice(0,10);
   const todayKey=new Date().toISOString().slice(0,10);
+  // When renewing ON the student's own session day, TODAY'S session is
+  // the first of the new cycle and is billed in it — so it must not be
+  // treated as the previous cycle's last lesson (which would push the
+  // new batch out a week and drop that session from the count).
+  const renewingOnLessonDay = !wasTrial && todayKey===nextWeekdayOnOrAfter(todayKey, lessonDay);
+  const existingDates=(db.lessons||[]).filter(l=>
+      String(l.studentId)===String(course.id) &&
+      (l.status_record||'active')!=='archived' &&
+      !(renewingOnLessonDay && l.date===todayKey)
+    ).map(l=>l.date).filter(Boolean).sort();
+  const lastDate=existingDates.length ? existingDates[existingDates.length-1] : todayKey;
   let firstNewDate=nextWeekdayStrictlyAfter(lastDate, lessonDay);
   // CONVERSION vs RENEWAL differ deliberately:
   //   Converting a trial ON the lesson day  -> starts the WEEK AFTER.
@@ -10757,13 +10765,21 @@ function confirmRenewal(id){
   student.lessonTime=lessonTime;
   student.plan=plan;
 
+  const now=new Date();
+  const todayKey=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');
+  // Renewing ON the student's own session day means TODAY'S session is
+  // the first of the NEW cycle and is billed in it. So today's lesson
+  // must not count as the previous cycle's last one — otherwise the new
+  // batch starts a week later and that session drops out of the count
+  // entirely. Doesn't apply to a trial conversion, where the trial is a
+  // separate transaction that the new plan follows.
+  const renewingOnLessonDay = !wasTrial && todayKey===nextWeekdayOnOrAfter(todayKey, lessonDay);
   const existingDates=(db.lessons||[])
     .filter(l=>String(l.studentId)===String(id) && (l.status_record||'active')!=='archived')
+    .filter(l=>!(renewingOnLessonDay && l.date===todayKey))
     .map(l=>l.date)
     .filter(Boolean)
     .sort();
-  const now=new Date();
-  const todayKey=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');
   const lastDate=existingDates.length ? existingDates[existingDates.length-1] : todayKey;
 
   let firstNewDate=nextWeekdayStrictlyAfter(lastDate, lessonDay);
@@ -10830,6 +10846,19 @@ function confirmRenewal(id){
       return isTeacherAbsentOnDate(teacher, dateKey, lessonTime);
     }).length;
     count=Math.max(0, count-absentCount);
+  }
+  // If today's session already exists and today IS the start of this new
+  // cycle, it counts as the cycle's FIRST session — so only the REMAINING
+  // ones need creating. Without this the scheduler skips over today (it's
+  // already booked), still creates the full count, and the batch spills an
+  // extra week into the next month.
+  if(renewingOnLessonDay && firstNewDate===todayKey){
+    const alreadyToday=(db.lessons||[]).some(l=>
+      String(l.studentId)===String(id) &&
+      (l.status_record||'active')!=='archived' &&
+      l.date===todayKey
+    );
+    if(alreadyToday) count=Math.max(0, count-1);
   }
   if(!count){ showToast('No lesson-days remain this month for that plan — pick a Weekly session or a date next month.'); return; }
 
