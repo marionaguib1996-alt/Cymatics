@@ -367,7 +367,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-129</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-130</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -5857,11 +5857,26 @@ addStudent=function(){
    milestones:[],
    linkedPersonId:linkedPersonId
  });
+ const newStudent=db.students[db.students.length-1];
+ // A trial is paid for up front, before the session happens — so a
+ // student added on a trial plan is already settled and shouldn't show
+ // as owing money. Marked against the month their trial actually falls
+ // in (their start date), not necessarily today's month.
+ if(newStudent && (newStudent.plan==='trial' || newStudent.plan==='group-trial')){
+   const trialMonth=String(newStudent.joined_date||'').slice(0,7)
+     || (typeof currentMonth==='function' ? currentMonth() : new Date().toISOString().slice(0,7));
+   const payKey=newStudent.id+'_'+trialMonth;
+   db.payments[payKey]=true;
+   db.paymentMethods=db.paymentMethods||{};
+   db.paymentMethods[payKey]='InstaPay';
+   if(typeof syncPaymentToggleToSupabase==='function'){
+     syncPaymentToggleToSupabase(newStudent.id, trialMonth, true, 'InstaPay');
+   }
+ }
  save(); renderStudents(); renderOverview(); renderDatabase();
  // Push the new student record itself to the cloud — previously only
  // their scheduled lessons synced, leaving the student record local-only
  // (lost on next cloud download, invisible on other devices).
- const newStudent=db.students[db.students.length-1];
  if(newStudent){
    if(typeof addStudentToSupabase==='function') addStudentToSupabase(newStudent);
    else if(typeof syncStudentUpdateToSupabase==='function') syncStudentUpdateToSupabase(newStudent);
