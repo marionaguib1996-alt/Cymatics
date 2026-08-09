@@ -366,7 +366,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-126</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-127</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -2112,6 +2112,50 @@ function migrateLessonLogs(){
   }
 }
 
+// A lesson with no studentId can only be found by an EXACT name match,
+// so renaming a student orphans every one of their older lessons at
+// once — they disappear from Trial Follow-up, Renewals Due, make-up
+// counts, and every other per-student lookup simultaneously, with
+// nothing to indicate why. Backfilling the id repairs all of those
+// together instead of patching each lookup.
+// Normalises a student name for MATCHING only (never for display):
+// lowercased, trimmed, and with any trailing parenthetical annotation
+// removed — admins append things like "(online)" to a name after
+// lessons already exist, and those older lessons keep the original
+// name, so a literal comparison silently stops matching them.
+function normalizeStudentNameForMatch(name){
+  return String(name||'').replace(/\s*\([^)]*\)\s*$/,'').trim().toLowerCase();
+}
+
+function migrateBackfillLessonStudentIds(){
+  const byName={};
+  (db.students||[]).forEach(s=>{
+    if((s.status||'active')==='archived') return;
+    const key=normalizeStudentNameForMatch(s.name);
+    if(!key) return;
+    (byName[key]=byName[key]||[]).push(s);
+  });
+  let fixed=0, ambiguous=0;
+  for(const l of (db.lessons||[])){
+    if(l.studentId!=null && l.studentId!=='') continue;
+    const key=normalizeStudentNameForMatch(l.student);
+    if(!key) continue;
+    const matches=byName[key]||[];
+    // Only when unambiguous — two students sharing a name must not have
+    // lessons guessed onto one of them.
+    if(matches.length===1){ l.studentId=matches[0].id; fixed++; }
+    else if(matches.length>1){ ambiguous++; }
+  }
+  if(fixed){
+    save();
+    console.log('Repaired '+fixed+' lesson record(s) missing studentId.');
+  }
+  if(ambiguous){
+    console.warn(ambiguous+' lesson(s) have no studentId and an ambiguous name — left unchanged.');
+  }
+}
+migrateBackfillLessonStudentIds();
+
 function migrateLessonMonthsAndStatus(){
   const VALID_STATUSES=['attended','absent_paid','absent_excused','teacher_absent','scheduled'];
   let fixed=0;
@@ -3823,8 +3867,13 @@ function renderTrialFollowUp(){
   (db.students||[]).forEach(s=>{
     if((s.status||'active')==='archived' || s.frozen) return;
     if(s.plan!=='trial' && s.plan!=='group-trial') return;
+    // Matched by id first; the name fallback also tolerates a renamed
+    // student by comparing against student_code, so adding something
+    // like "(online)" to a name can't orphan their trial record.
     const attendedTrial=(db.lessons||[]).find(l=>
-      (String(l.studentId)===String(s.id) || l.student===s.name) &&
+      (String(l.studentId)===String(s.id)
+        || normalizeStudentNameForMatch(l.student)===normalizeStudentNameForMatch(s.name)
+        || (l.student_code && s.student_code && l.student_code===s.student_code)) &&
       (l.status_record||'active')!=='archived' &&
       l.status==='attended'
     );
