@@ -367,7 +367,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-128</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-129</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -440,7 +440,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="form-field"><label for="s-phone1">Phone</label><input id="s-phone1"></div>
       <div class="form-field"><label for="s-phone2">Parent Phone</label><input id="s-phone2"></div>
       <div class="form-field"><label for="s-parent-email">Email</label><input id="s-parent-email" type="email"></div>
-      <div class="form-field"><label for="s-dob">Date of Birth</label><div style="display:flex;gap:4px"><input id="s-dob" type="text" placeholder="dd/mm/yyyy" maxlength="10" oninput="maskDateInput(this)"><button type="button" class="btn btn-sm" onclick="openDatePicker('s-dob')">📅</button></div></div>
+      <div class="form-field"><label for="s-age">Age</label><input id="s-age" type="number" min="1" max="120" step="1" placeholder="e.g. 10"></div>
       <div class="form-field"><label for="s-joined-date">Starting Date</label><div style="display:flex;gap:4px"><input id="s-joined-date" type="text" placeholder="dd/mm/yyyy" maxlength="10" oninput="maskDateInput(this)"><button type="button" class="btn btn-sm" onclick="openDatePicker('s-joined-date')">📅</button></div></div>
       <div class="form-field"><label for="s-day">Lesson Day</label><select id="s-day">
       <option>Sunday</option><option>Monday</option><option>Tuesday</option><option>Wednesday</option><option>Thursday</option><option>Friday</option><option>Saturday</option>
@@ -977,7 +977,7 @@ input::placeholder{color:var(--text-dim)}
 <input id="db-search" placeholder="Search students..." oninput="renderDatabase()" style="max-width:280px;margin-bottom:12px">
 <div class="table-wrap">
 <table>
-<thead><tr><th>ID</th><th>First Name</th><th>Last Name</th><th>Email</th><th>Attended</th><th>Absent Paid</th><th>Teacher Absent</th><th>Makeups Owed</th><th>Age</th><th>DOB</th><th>Starting Date</th><th>Phone</th><th>Parent Phone</th><th>Teacher</th><th>Instrument</th><th>Day</th><th>Time</th><th>Actions</th></tr></thead>
+<thead><tr><th>ID</th><th>First Name</th><th>Last Name</th><th>Email</th><th>Attended</th><th>Absent Paid</th><th>Teacher Absent</th><th>Makeups Owed</th><th>Age</th><th>Starting Date</th><th>Phone</th><th>Parent Phone</th><th>Teacher</th><th>Instrument</th><th>Day</th><th>Time</th><th>Actions</th></tr></thead>
 <tbody id="database-body"></tbody>
 </table>
 </div>
@@ -2913,7 +2913,7 @@ function editStudent(id){
      </div>
      <div class="form-field"><label for="es-custom-amount">Custom Amount — per lesson (EGP)</label><input id="es-custom-amount" type="number" min="0" step="1" placeholder="Standard: ${whatsAppPerLessonRate(s.plan)}/lesson" value="${s.customAmount!=null?escapeAttr(s.customAmount):''}"><small style="color:var(--text-muted);display:block;margin-top:2px">Leave blank for the standard per-lesson rate. Set a value for a standing discount — multiplied by however many lessons fall in each billing cycle.</small></div>
      <div class="form-field"><label for="es-custom-pay">Custom Pay — next renewal only (EGP)</label><input id="es-custom-pay" type="number" min="0" step="1" placeholder="e.g. couldn't reschedule a make-up" value="${s.customPay!=null?escapeAttr(s.customPay):''}"><small style="color:var(--text-muted);display:block;margin-top:2px">A one-time flat total for the NEXT renewal only (e.g. adjusting for a make-up that couldn't be rescheduled). Clears itself automatically once that renewal is processed.</small></div>
-     <div class="form-field"><label for="es-dob">Date of Birth</label><div style="display:flex;gap:4px"><input id="es-dob" type="text" placeholder="dd/mm/yyyy" maxlength="10" oninput="maskDateInput(this)" value="${escapeAttr(isoToDmy(s.dob))}"><button type="button" class="btn btn-sm" onclick="openDatePicker('es-dob')">📅</button></div></div>
+     <div class="form-field"><label for="es-age">Age</label><input id="es-age" type="number" min="1" max="120" step="1" placeholder="e.g. 10" value="${escapeAttr(studentAge(s))}">${s.dob?`<small style="color:var(--text-muted);display:block;margin-top:2px">From date of birth ${escapeHtml(formatDateDMY(s.dob))}. Typing an age here replaces it.</small>`:''}</div>
      <div class="form-field"><label for="es-joined">Starting Date</label><div style="display:flex;gap:4px"><input id="es-joined" type="text" placeholder="dd/mm/yyyy" maxlength="10" oninput="maskDateInput(this)" value="${escapeAttr(isoToDmy(s.joined_date))}"><button type="button" class="btn btn-sm" onclick="openDatePicker('es-joined')">📅</button></div></div>
      <div class="form-field"><label for="es-phone1">Phone</label><input id="es-phone1" value="${escapeAttr(s.phone1)}"></div>
      <div class="form-field"><label for="es-phone2">Parent Phone</label><input id="es-phone2" value="${escapeAttr(s.phone2)}"></div>
@@ -2970,7 +2970,22 @@ function saveEditStudent(id){
  s.customAmount=(customAmountRaw==null||customAmountRaw==='')?null:Number(customAmountRaw);
  const customPayRaw=document.getElementById('es-custom-pay')?.value;
  s.customPay=(customPayRaw==null||customPayRaw==='')?null:Number(customPayRaw);
- s.dob=dmyToIso(document.getElementById('es-dob')?.value||'');
+ // Age is stored with the date it was entered so it can be rolled
+ // forward accurately instead of silently going stale. Only rewritten
+ // when the value actually changes, so simply opening and saving the
+ // modal doesn't reset the recorded-on date.
+ {
+   const raw=document.getElementById('es-age')?.value;
+   const entered=(raw===''||raw==null)?null:Number(raw);
+   const current=studentAge(s);
+   if(entered==null){
+     s.age=null; s.ageRecordedAt=null;
+   } else if(Number.isFinite(entered) && entered!==current){
+     s.age=entered;
+     s.ageRecordedAt=new Date().toISOString().slice(0,10);
+     s.dob=null; // an explicitly entered age supersedes the old birth date
+   }
+ }
  s.joined_date=dmyToIso(document.getElementById('es-joined')?.value||'');
 
  const now=new Date();
@@ -4512,6 +4527,32 @@ function showHistory(studentId){
 }
 function closeHistory(){document.getElementById('history-modal').style.display='none';}
 
+// A student's CURRENT age.
+//
+// Age is now captured directly (easier than asking for a birthday), but a
+// bare number goes stale — a student entered as 10 would still read 10
+// three years later. So the date the age was recorded is stored with it
+// and the age is rolled forward from there. Accurate to within a year,
+// which is exactly as precise as the information given.
+//
+// Records created before this change still hold a real date of birth, and
+// that's strictly better information, so it takes priority when present.
+function studentAge(s){
+  if(!s) return '';
+  if(s.dob) return calcAge(s.dob);
+  if(s.age==null || s.age==='') return '';
+  const base=Number(s.age);
+  if(!Number.isFinite(base)) return '';
+  if(!s.ageRecordedAt) return base;
+  const rec=new Date(s.ageRecordedAt);
+  const now=new Date();
+  if(isNaN(rec.getTime())) return base;
+  let years=now.getFullYear()-rec.getFullYear();
+  const m=now.getMonth()-rec.getMonth();
+  if(m<0 || (m===0 && now.getDate()<rec.getDate())) years--;
+  return base+Math.max(0, years);
+}
+
 function calcAge(dob){
  if(!dob) return '';
  const d=new Date(dob);
@@ -4534,8 +4575,8 @@ function renderDatabase(){
 <td>${db.lessons.filter(l=>(String(l.studentId)===String(s.id) || l.student===s.name) && l.status==='absent_paid').length}</td>
 <td>${db.lessons.filter(l=>(String(l.studentId)===String(s.id) || l.student===s.name) && l.status==='teacher_absent').length}</td>
 <td>${db.lessons.filter(l=>(String(l.studentId)===String(s.id) || l.student===s.name) && isMakeupOwed(l)).length}</td>
-<td>${calcAge(s.dob)}</td>
-<td>${escapeHtml(formatDateDMY(s.dob))}</td><td>${escapeHtml(formatDateDMY(s.joined_date))}</td>
+<td>${studentAge(s)}</td>
+<td>${escapeHtml(formatDateDMY(s.joined_date))}</td>
 <td>${escapeHtml(s.phone1)}</td>
 <td>${escapeHtml(s.phone2)}</td>
 <td>${escapeHtml(s.teacher)}</td>
@@ -5324,7 +5365,7 @@ async function pushAllDataToCloud(){
   for(const s of (db.students||[])){
     const payload={
       student_code:s.student_code||'', first_name:s.first_name||'', last_name:s.last_name||'',
-      dob:(s.dob && /^\d{4}-\d{2}$/.test(s.dob))?s.dob+'-01':(s.dob||null), joined_date:(s.joined_date && /^\d{4}-\d{2}$/.test(s.joined_date))?s.joined_date+'-01':(s.joined_date||null), phone1:s.phone1||'', phone2:s.phone2||'',
+      dob:(s.dob && /^\d{4}-\d{2}$/.test(s.dob))?s.dob+'-01':(s.dob||null), age:(s.age==null||s.age==='')?null:Number(s.age), age_recorded_at:s.ageRecordedAt||null, joined_date:(s.joined_date && /^\d{4}-\d{2}$/.test(s.joined_date))?s.joined_date+'-01':(s.joined_date||null), phone1:s.phone1||'', phone2:s.phone2||'',
       email:s.email||'', teacher:s.teacher||'', instrument:s.instrument||'',
       lesson_day:s.lesson_day||'', lesson_time:s.lessonTime||'', plan:s.plan||'trial',
       status:s.status||'active', created_at:s.created_at||new Date().toISOString(),
@@ -5737,7 +5778,7 @@ function openAddCourseForm(studentId){
 
   document.getElementById('s-first').value=student.first_name||'';
   document.getElementById('s-last').value=student.last_name||'';
-  document.getElementById('s-dob').value=isoToDmy(student.dob);
+  document.getElementById('s-age').value=studentAge(student);
   document.getElementById('s-phone1').value=student.phone1||'';
   document.getElementById('s-phone2').value=student.phone2||'';
   document.getElementById('s-parent-email').value=student.email||'';
@@ -5798,7 +5839,8 @@ addStudent=function(){
    first_name:first,
    last_name:last,
    name:(first+' '+last).trim(),
-   dob:dmyToIso(document.getElementById('s-dob')?.value||''),
+   age:(function(){ const v=document.getElementById('s-age')?.value; return (v===''||v==null)?null:Number(v); })(),
+   ageRecordedAt:(function(){ const v=document.getElementById('s-age')?.value; return (v===''||v==null)?null:new Date().toISOString().slice(0,10); })(),
    teacher:document.getElementById('s-teacher').value,
    instrument:document.getElementById('s-instrument').value,
    phone1:document.getElementById('s-phone1')?.value||'',
@@ -5827,7 +5869,7 @@ addStudent=function(){
  if(typeof cancelAddCourseForm==='function') cancelAddCourseForm();
 
  // Reset the form for the next entry
- ['s-first','s-last','s-dob','s-phone1','s-phone2','s-parent-email','s-joined-date'].forEach(id=>{
+ ['s-first','s-last','s-age','s-phone1','s-phone2','s-parent-email','s-joined-date'].forEach(id=>{
    const el=document.getElementById(id);
    if(el) el.value='';
  });
@@ -6219,6 +6261,8 @@ async function _autoLoadFromCloudImpl(){
        last_name: s.last_name||'',
        name: (((s.first_name||'')+' '+(s.last_name||'')).trim() || s.name || 'Unknown Student'),
        dob: s.dob||'',
+       age: (s.age==null)?null:s.age,
+       ageRecordedAt: s.age_recorded_at||null,
        joined_date: s.joined_date||'',
        phone1: s.phone1||'',
        phone2: s.phone2||'',
@@ -6978,6 +7022,8 @@ async function addStudentToSupabase(student){
       first_name: student.first_name || '',
       last_name: student.last_name || '',
       dob: student.dob || null,
+      age: (student.age==null||student.age==='')?null:Number(student.age),
+      age_recorded_at: student.ageRecordedAt || null,
       joined_date: (student.joined_date && /^\d{4}-\d{2}$/.test(student.joined_date)) ? student.joined_date+'-01' : (student.joined_date || null),
       phone1: student.phone1 || '',
       phone2: student.phone2 || '',
@@ -7083,6 +7129,8 @@ async function syncStudentUpdateToSupabase(student){
       first_name: student.first_name || '',
       last_name: student.last_name || '',
       dob: student.dob || null,
+      age: (student.age==null||student.age==='')?null:Number(student.age),
+      age_recorded_at: student.ageRecordedAt || null,
       joined_date: student.joined_date || null,
       phone1: student.phone1 || '',
       phone2: student.phone2 || '',
