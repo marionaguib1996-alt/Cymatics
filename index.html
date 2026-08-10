@@ -367,7 +367,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-131</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-132</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -3277,6 +3277,21 @@ function renderOverview(){
     // yet — otherwise a student who simply hasn't renewed gets counted as
     // owing money for a cycle they haven't started.
     if(!paid && (studentFinishedMonth(s, month) || (typeof studentHasPendingRenewal==='function' && studentHasPendingRenewal(s)))) return;
+    // Only chase someone who has actually HAD a lesson this month. A
+    // student whose sessions are all still upcoming hasn't received
+    // anything yet, so listing them as owing money is premature — it
+    // inflates the outstanding figure and makes the list a poor
+    // to-do list. "Had a lesson" counts Attended and Absent & Paid,
+    // since both consume a session either way.
+    if(!paid){
+      const hasConsumedThisMonth=(db.lessons||[]).some(l=>
+        (String(l.studentId)===String(s.id) || l.student===s.name) &&
+        (l.status_record||'active')!=='archived' &&
+        String(l.date||'').slice(0,7)===month &&
+        (l.status==='attended' || l.status==='absent_paid')
+      );
+      if(!hasConsumedThisMonth) return;
+    }
     if(!isWeeklyPlan(s.plan)){
       const amt=getStudentPlanAmount(s);
       if(paid)collected+=amt; else{outstanding+=amt;unpaid.push(s);}
@@ -11669,7 +11684,10 @@ function computeEffectiveSlots(baseSlots, bookingsByTime){
     }
     const booking=bookingsByTime[cursor];
     const duration=booking ? (booking.durationMinutes||SESSION_DURATION_MINUTES) : SESSION_DURATION_MINUTES;
-    result.push({time:cursor, occupiedBy:booking?booking.label:null, duration});
+    // heldForRenewal marks a slot kept for a student who hasn't renewed
+    // yet — occupied (so it can't be given away) but flagged so the UI
+    // can show it differently from a confirmed booking.
+    result.push({time:cursor, occupiedBy:booking?booking.label:null, duration, heldForRenewal:!!(booking&&booking.heldForRenewal)});
     cursor=addSlotMinutes(cursor, duration);
   }
   return result;
@@ -11749,6 +11767,47 @@ function getTeacherBookingsByTime(teacherName, dayName, targetDate, excludeStude
     if(!s.lessonTime || bookingsByTime[s.lessonTime]) return;
     const duration=isGroupPlan(s.plan) ? GROUP_SESSION_DURATION_MINUTES : SESSION_DURATION_MINUTES;
     bookingsByTime[s.lessonTime]={label:s.name||'Booked', durationMinutes:duration};
+  });
+
+  // ── HELD SLOTS for students who haven't renewed yet ──────────────────
+  // When a new month starts, a student who finished last month but hasn't
+  // renewed has no lessons booked — so their long-standing slot would
+  // instantly read as free and could be given away while they're still
+  // deciding. Their slot is HELD (shown with their name, not bookable)
+  // up to and including what would have been their first session of the
+  // new month. Once that date passes without a renewal, the hold expires
+  // and the slot genuinely frees up.
+  (db.students||[]).filter(s=>
+    (s.status||'active')!=='archived' && !s.frozen &&
+    s.teacher===teacherName && s.lesson_day===dayName && s.lessonTime &&
+    !(excludeStudent && String(s.id)===String(excludeStudent.id)) &&
+    !studentsWithRealLessonThisWeek.has(String(s.id)) &&
+    !namesWithRealLessonThisWeek.has(s.name) &&
+    // No upcoming scheduled lesson at all — i.e. genuinely not renewed.
+    !(db.lessons||[]).some(l=>
+      (String(l.studentId)===String(s.id) || l.student===s.name) &&
+      l.status==='scheduled' && (l.status_record||'active')!=='archived'
+    ) &&
+    (typeof studentHasPendingRenewal==='function' && studentHasPendingRenewal(s))
+  ).forEach(s=>{
+    if(bookingsByTime[s.lessonTime]) return;
+    // The hold runs until their first session day of the month FOLLOWING
+    // their last lesson — the date they'd have started had they renewed.
+    const own=(db.lessons||[]).filter(l=>
+      (String(l.studentId)===String(s.id) || l.student===s.name) &&
+      (l.status_record||'active')!=='archived'
+    ).map(l=>l.date).filter(Boolean).sort();
+    if(!own.length) return;
+    const lastDate=own[own.length-1];
+    const holdUntil=(typeof nextWeekdayStrictlyAfter==='function')
+      ? nextWeekdayStrictlyAfter(lastDate, s.lesson_day) : null;
+    if(!holdUntil || targetDate>holdUntil) return; // hold expired — slot is free
+    const duration=isGroupPlan(s.plan) ? GROUP_SESSION_DURATION_MINUTES : SESSION_DURATION_MINUTES;
+    bookingsByTime[s.lessonTime]={
+      label:(s.name||'Reserved'),
+      durationMinutes:duration,
+      heldForRenewal:true
+    };
   });
 
   return bookingsByTime;
