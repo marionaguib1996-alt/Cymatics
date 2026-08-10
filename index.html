@@ -367,7 +367,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-132</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-133</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -7088,7 +7088,36 @@ async function addStudentToSupabase(student){
       // with the real serial id, and without this the temp-id copy can
       // linger alongside it. (The student_code-based merge also guards
       // this, but aligning the id removes the mismatch at the source.)
-      if(data[0].id!=null) student.id=data[0].id;
+      if(data[0].id!=null && String(data[0].id)!==String(student.id)){
+        const oldId=student.id;
+        const newId=data[0].id;
+        student.id=newId;
+        // Anything already keyed to the TEMPORARY id must be re-pointed,
+        // or it's silently orphaned the moment the real id arrives:
+        //   * payments  — a trial marked paid on creation would show as
+        //     Unpaid, because its key still names the old id.
+        //   * lessons   — the first session(s) would vanish from the
+        //     ledger/calendar, since nothing links them to the student.
+        //   * lessonLogs / wishlists — same problem, one step removed.
+        // This is the same class of bug as the lesson-id reconciliation
+        // already handled elsewhere; it just surfaces differently here.
+        (db.lessons||[]).forEach(l=>{ if(String(l.studentId)===String(oldId)) l.studentId=newId; });
+        (db.lessonLogs||[]).forEach(lg=>{ if(String(lg.studentId)===String(oldId)) lg.studentId=newId; });
+        ['payments','paymentMethods','wishlists'].forEach(coll=>{
+          const map=db[coll];
+          if(!map || typeof map!=='object') return;
+          Object.keys(map).forEach(k=>{
+            // Keys are "<studentId>_<month>" for payments/methods, and a
+            // bare student id for wishlists.
+            if(k===String(oldId)){ map[newId]=map[k]; delete map[k]; return; }
+            const idx=k.indexOf('_');
+            if(idx>0 && k.slice(0,idx)===String(oldId)){
+              map[newId+k.slice(idx)]=map[k];
+              delete map[k];
+            }
+          });
+        });
+      }
       if(data[0].public_id) student.public_id=data[0].public_id;
       save();
       // Re-render any id-bearing views so their row action buttons pick up
