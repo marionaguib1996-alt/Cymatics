@@ -367,7 +367,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-134</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-135</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -2164,6 +2164,41 @@ function migrateBackfillLessonStudentIds(){
 }
 migrateBackfillLessonStudentIds();
 
+// Repairs students already converted from a trial before that flagging
+// existed (or via the Edit-plan path, which didn't set it). Their trial
+// session sits unflagged and is billed a second time inside the monthly
+// total. Identifies it conservatively: a student who is NOW on a monthly
+// plan, whose very FIRST lesson is a lone attended session standing more
+// than a week before their next one — the shape a trial-then-converted
+// student always has. Anything ambiguous is left alone.
+function migrateFlagUnmarkedTrialLessons(){
+  let fixed=0;
+  (db.students||[]).forEach(s=>{
+    if(typeof isMonthlyPlan!=='function' || !isMonthlyPlan(s.plan)) return;
+    const own=(db.lessons||[]).filter(l=>
+      (String(l.studentId)===String(s.id) || l.student===s.name) &&
+      (l.status_record||'active')!=='archived' && l.date
+    ).sort((a,b)=>String(a.date).localeCompare(String(b.date)));
+    if(own.length<2) return;
+    const first=own[0];
+    if(first.wasTrial) return;                       // already flagged
+    if(String(first.status||'')!=='attended') return; // a trial is always attended
+    // A converted trial sits clearly apart from the batch that follows it
+    // (the new plan starts the following week at the earliest). A normal
+    // weekly batch has exactly 7-day gaps, so a gap of MORE than 7 days
+    // marks the first lesson as separate from the run.
+    const gap=Math.round((new Date(own[1].date)-new Date(first.date))/86400000);
+    if(gap<=7) return;
+    first.wasTrial=true;
+    fixed++;
+  });
+  if(fixed){
+    save();
+    console.log('Flagged '+fixed+' previously-unmarked trial lesson(s) so they are not billed twice.');
+  }
+}
+migrateFlagUnmarkedTrialLessons();
+
 function migrateLessonMonthsAndStatus(){
   const VALID_STATUSES=['attended','absent_paid','absent_excused','teacher_absent','scheduled'];
   let fixed=0;
@@ -2965,7 +3000,25 @@ function saveEditStudent(id){
  s.lesson_day=document.getElementById('es-day')?.value||'';
  s.lessonTime=document.getElementById('es-time')?.value||'';
  s.isOnline=!!document.getElementById('es-online')?.checked;
- s.plan=document.getElementById('es-plan')?.value||s.plan;
+ // Changing the plan AWAY from trial here must flag the existing trial
+ // lesson(s), exactly as converting through the Renew flow does. Without
+ // this, that already-paid trial session stays unflagged and gets counted
+ // again in the monthly total — billing the student for 4 sessions when
+ // only 3 were scheduled.
+ {
+   const prevPlan=s.plan;
+   const nextPlan=document.getElementById('es-plan')?.value||s.plan;
+   const leavingTrial=(prevPlan==='trial'||prevPlan==='group-trial') && nextPlan!=='trial' && nextPlan!=='group-trial';
+   if(leavingTrial){
+     (db.lessons||[]).forEach(l=>{
+       if((String(l.studentId)===String(s.id) || l.student===s.name) && (l.status_record||'active')!=='archived'){
+         l.wasTrial=true;
+         if(typeof syncLessonUpdateToSupabase==='function') syncLessonUpdateToSupabase(l);
+       }
+     });
+   }
+   s.plan=nextPlan;
+ }
  const customAmountRaw=document.getElementById('es-custom-amount')?.value;
  s.customAmount=(customAmountRaw==null||customAmountRaw==='')?null:Number(customAmountRaw);
  const customPayRaw=document.getElementById('es-custom-pay')?.value;
