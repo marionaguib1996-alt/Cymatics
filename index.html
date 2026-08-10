@@ -367,7 +367,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-133</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-134</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -11198,6 +11198,9 @@ function promptStudentStartWhen(student){
   const todayLabel=formatDateDMY(todayKey);
   const nextKey=nextWeekdayStrictlyAfter(todayKey, student.lesson_day);
   const nextLabel=formatDateDMY(nextKey);
+  // Remember a STABLE handle for this student — their id may be replaced
+  // by the real database id while this dialog is still open.
+  window._pendingStartStudentCode=student.student_code||null;
   openModal('When will '+escapeHtml(student.name||'the student')+' start?', `
     <p style="color:var(--text-muted);margin-bottom:16px">Today is ${escapeHtml(student.lesson_day)} — their lesson day. When should their first ${escapeHtml(student.plan==='trial'||student.plan==='group-trial'?'trial ':'')}session be scheduled?</p>
     <div style="display:flex;flex-direction:column;gap:10px">
@@ -11207,9 +11210,22 @@ function promptStudentStartWhen(student){
 }
 
 function chooseStudentStart(studentId, when){
-  const student=(db.students||[]).find(s=>String(s.id)===String(studentId));
   closeModal();
-  if(!student) return;
+  // The student's id can CHANGE between this dialog opening and the admin
+  // clicking a button: the cloud insert returns the real database id a
+  // moment later and the record is re-keyed to it. The button still holds
+  // the temporary id, so looking up by id alone silently finds nothing and
+  // no lesson is ever created — the reported "clicked Today, nothing
+  // happened". student_code never changes, so it's the reliable handle.
+  let student=(db.students||[]).find(s=>String(s.id)===String(studentId));
+  if(!student && window._pendingStartStudentCode){
+    student=(db.students||[]).find(s=>s.student_code===window._pendingStartStudentCode);
+  }
+  window._pendingStartStudentCode=null;
+  if(!student){
+    showToast('Could not find that student to schedule — open their row and use Renew Subscription.');
+    return;
+  }
   finalizeNewStudentSchedule(student, when==='next' ? 'next' : 'today');
 }
 
