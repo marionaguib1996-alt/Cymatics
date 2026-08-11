@@ -367,7 +367,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-135</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-143</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -528,7 +528,7 @@ input::placeholder{color:var(--text-dim)}
 <div class="card">
     <div class="card-title">All students</div>
     <div class="table-wrap"><table>
-      <thead><tr><th>Name</th><th>Instrument</th><th>Teacher</th><th>Plan</th><th>Amount</th><th>Status</th><th>History</th><th>Actions</th></tr></thead>
+      <thead><tr><th>Name</th><th>Instrument</th><th>Teacher</th><th>Schedule</th><th>Plan</th><th>Amount</th><th>Status</th><th>History</th><th>Actions</th></tr></thead>
       <tbody id="students-tbody"></tbody>
     </table></div>
   </div>
@@ -1331,8 +1331,14 @@ function planOptionsHtml(currentPlan){
 // Per-session rate by plan family: group sessions bill 750, everything
 // else 500. The auto monthly plans multiply this by however many sessions
 // the student actually has scheduled in the current month.
+// Per-session rate by plan. Deliberately delegates to
+// whatsAppPerLessonRate so there is ONE table of rates — the two used to
+// disagree about weekly (600 vs 500), so the same student was priced
+// differently depending on which one happened to be called.
 function planPerSessionRate(plan){
+  if(typeof whatsAppPerLessonRate==='function') return whatsAppPerLessonRate(plan);
   if(plan==='weekly-group') return 850;
+  if(plan==='weekly') return 600;
   return (plan==='group-monthly' || isGroupPlan(plan)) ? 750 : 500;
 }
 
@@ -1348,7 +1354,7 @@ function monthlyScheduledSessionCount(student, monthKey){
     if(!monthKey){ const now=new Date(); monthKey=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0'); }
   }
   return (db.lessons||[]).filter(l=>{
-    if(!(String(l.studentId)===String(student.id) || l.student===student.name)) return false;
+    if(!lessonBelongsToStudent(l, student)) return false;
     if((l.status_record||'active')==='archived') return false;
     if(String(l.date||'').slice(0,7)!==monthKey) return false;
     // A TRIAL session was paid for separately as a trial fee — counting it
@@ -1447,8 +1453,15 @@ function computeRenewalPrice(student, sessionCount, opts){
   const billableCount=Math.max(0, count-creditedSessions);
 
   if(student && student.customAmount!=null && student.customAmount!==''){
-    const rate=Number(student.customAmount)||0;
-    return {amount:billableCount*rate, rate, billableCount, creditedSessions, source:'customAmount'};
+    // Custom Amount is a flat MONTHLY fee — the agreed price for the
+    // month regardless of how many sessions fall in it. (It used to be a
+    // per-lesson rate, which meant the figure moved every month as the
+    // session count changed.) Credit for teacher-missed sessions is still
+    // deducted at the standard per-session rate.
+    const monthly=Number(student.customAmount)||0;
+    const creditRate=(typeof whatsAppPerLessonRate==='function') ? whatsAppPerLessonRate(o.planOverride||student.plan) : 500;
+    const amount=Math.max(0, monthly-(creditedSessions*creditRate));
+    return {amount, rate:null, billableCount, creditedSessions, source:'customAmount', monthlyFee:monthly};
   }
 
   const planForRate=o.planOverride||student?.plan;
@@ -1461,17 +1474,22 @@ function getStudentPlanAmount(student){
   // The right session count for THIS billing cycle, by plan type — needed
   // whether a custom per-lesson rate applies or the standard rate does.
   let sessionCount;
-  if(student.plan==='monthly' || student.plan==='group-monthly'){
+  const isWeekly=(typeof isWeeklyPlan==='function') && isWeeklyPlan(student.plan);
+  if(student.plan==='monthly' || student.plan==='group-monthly' || isWeekly){
+    // Weekly students are billed per session too — so if a month happens
+    // to contain five of their day instead of four, the amount rises with
+    // it. Treating weekly as one fixed figure under-billed those months.
     const n=monthlyScheduledSessionCount(student);
-    sessionCount = n>0 ? n : 4; // fallback estimate before lessons exist
+    sessionCount = n>0 ? n : (isWeekly ? 1 : 4);
   } else {
     sessionCount = (typeof getPlanSessionCount==='function' ? getPlanSessionCount(student.plan) : 0) || 1;
   }
   if(student.customAmount!=null && student.customAmount!==''){
-    const rate=Number(student.customAmount);
-    if(!Number.isNaN(rate)) return rate*sessionCount;
+    // Flat MONTHLY fee — no longer multiplied by the session count.
+    const monthly=Number(student.customAmount);
+    if(!Number.isNaN(monthly)) return monthly;
   }
-  if(student.plan==='monthly' || student.plan==='group-monthly'){
+  if(student.plan==='monthly' || student.plan==='group-monthly' || isWeekly){
     const rate=planPerSessionRate(student.plan);
     return sessionCount*rate;
   }
@@ -1501,7 +1519,12 @@ function getWhatsAppLessonPricing(student, planForRate){
   const todayDay=now.getDate();
   let remaining=[];
   if(student && student.lesson_day){
-    remaining=getWeekdayDatesInMonth(month, student.lesson_day).filter(d=>d>=todayDay);
+    // STRICTLY after today. The trial session itself is paid for
+    // separately, so the day it happened must not appear in the list of
+    // sessions being quoted — otherwise a student reminded on their trial
+    // day is billed for that same session twice. Matches the conversion
+    // rule: converting on the trial day starts the following week.
+    remaining=getWeekdayDatesInMonth(month, student.lesson_day).filter(d=>d>todayDay);
   }
   const lessonCount=remaining.length;
   let price;
@@ -1601,7 +1624,7 @@ function getNextMonthString(){
 function studentNextBillingMonth(student){
   if(!student || !student.lesson_day) return getNextMonthString();
   const ownLessons=(db.lessons||[]).filter(l=>
-    (String(l.studentId)===String(student.id) || l.student===student.name) &&
+    lessonBelongsToStudent(l, student) &&
     (l.status_record||'active')!=='archived'
   );
   const dates=ownLessons.map(l=>l.date).filter(Boolean).sort();
@@ -1724,7 +1747,7 @@ function confirmFreezeStudent(id){
   // date, rather than losing track of how many they were owed.
   const todayKey=s.frozenSince;
   const futureScheduled=(db.lessons||[]).filter(l=>
-    (String(l.studentId)===String(s.id) || l.student===s.name) &&
+    lessonBelongsToStudent(l, s) &&
     l.status==='scheduled' &&
     (l.status_record||'active')!=='archived' &&
     l.date>=todayKey
@@ -1842,7 +1865,7 @@ async function confirmRefund(studentId){
   let clearedMakeups=0;
   const archivedMakeupIds=[];
   (db.lessons||[]).forEach(l=>{
-    const isThisStudent=(String(l.studentId)===String(s.id) || l.student===s.name);
+    const isThisStudent=lessonBelongsToStudent(l, s);
     if(!isThisStudent) return;
     if(isMakeupOwed(l)){
       l.makeupResolved=true;
@@ -1928,10 +1951,15 @@ function sendTrialConversionMessage(studentId){
       ? (pricing.lessonCount===1 ? ' (for 1 lesson on the '+dateList+')' : ' (for '+pricing.lessonCount+' lessons on the '+dateList+')')
       : '';
 
+    // Exact spacing per the agreed format: the greeting pair sits together,
+    // then a blank line before each following paragraph.
     const message='Hey '+firstName+'! '+eSmile+eMultiNotes+'\n'+
       'We hope you had an awesome first session at Cymatics and enjoyed the vibes! '+eGuitar+eSparkles+'\n'+
+      '\n'+
       'If you\'d like to keep the music going at your agreed time, just send over the payment of '+Math.round(price)+' EGP'+lessonPhrase+' by tonight to lock in your spot '+eMusicNote+'\n'+
+      '\n'+
       'You can use InstaPay on 01277336092 (Mario Naguib), and don\'t forget to send us a quick screenshot to confirm '+eRaisedHands+'\n'+
+      '\n'+
       'Can\'t wait to have you back for the next session! '+eMultiNotes+eFire;
 
     // Using api.whatsapp.com's direct /send endpoint instead of the wa.me
@@ -1979,7 +2007,7 @@ sel.value=(MONTHS.find(m=>m.key===currentKey)||MONTHS[0]).key;
 function currentMonth(){return document.getElementById('global-month').value;}
 
 // State
-let db = JSON.parse(localStorage.getItem('musicacademy_db')||'{"students":[],"payments":{},"expenses":[],"lessons":[],"lessonLogs":[]}'); db.lessons=db.lessons||[]; db.lessonLogs=db.lessonLogs||[]; db.instruments=db.instruments||[]; db.teacherProfiles=db.teacherProfiles||[]; db.payrollPaid=db.payrollPaid||{}; db.practiceSessions=db.practiceSessions||[]; db.paymentMethods=db.paymentMethods||{}; db.resources=db.resources||[]; db.refunds=db.refunds||[]; db.otherRevenue=db.otherRevenue||[]; db.wishlists=db.wishlists||{}; db.remindersSent=db.remindersSent||{}; db.teacherAbsences=db.teacherAbsences||[];
+let db = JSON.parse(localStorage.getItem('musicacademy_db')||'{"students":[],"payments":{},"expenses":[],"lessons":[],"lessonLogs":[]}'); db.lessons=db.lessons||[]; db.lessonLogs=db.lessonLogs||[]; db.instruments=db.instruments||[]; db.teacherProfiles=db.teacherProfiles||[]; db.payrollPaid=db.payrollPaid||{}; db.practiceSessions=db.practiceSessions||[]; db.paymentMethods=db.paymentMethods||{}; db.resources=db.resources||[]; db.refunds=db.refunds||[]; db.otherRevenue=db.otherRevenue||[]; db.wishlists=db.wishlists||{}; db.remindersSent=db.remindersSent||{}; db.teacherAbsences=db.teacherAbsences||[]; db.renewalsDismissed=db.renewalsDismissed||{};
 function save(){try{localStorage.setItem('musicacademy_db',JSON.stringify(db));}catch(e){console.error('save() failed:',e);}}
 
 // Updates the "Last Sync" label on the Cloud tab. Previously this was
@@ -2135,6 +2163,27 @@ function normalizeStudentNameForMatch(name){
   return String(name||'').replace(/\s*\([^)]*\)\s*$/,'').trim().toLowerCase();
 }
 
+// Does this lesson belong to this student record?
+//
+// CRITICAL for linked courses: one person enrolled in two courses has TWO
+// student records with the SAME NAME and different ids. Matching "id OR
+// name" therefore matched BOTH records against BOTH courses' lessons, so
+// each course counted the other's sessions too — a 4-lesson course billed
+// as 8. The rule that fixes it: if the lesson carries a studentId, that id
+// is authoritative and the name is not consulted at all. The name is only
+// a fallback for older records that have no studentId.
+function lessonBelongsToStudent(l, s){
+  if(!l || !s) return false;
+  if(l.studentId!=null && l.studentId!=='') return String(l.studentId)===String(s.id);
+  const ln=(typeof normalizeStudentNameForMatch==='function')
+    ? normalizeStudentNameForMatch(l.student!=null?l.student:l.student_name)
+    : String(l.student||l.student_name||'').trim().toLowerCase();
+  const sn=(typeof normalizeStudentNameForMatch==='function')
+    ? normalizeStudentNameForMatch(s.name)
+    : String(s.name||'').trim().toLowerCase();
+  return !!ln && ln===sn;
+}
+
 function migrateBackfillLessonStudentIds(){
   const byName={};
   (db.students||[]).forEach(s=>{
@@ -2176,7 +2225,7 @@ function migrateFlagUnmarkedTrialLessons(){
   (db.students||[]).forEach(s=>{
     if(typeof isMonthlyPlan!=='function' || !isMonthlyPlan(s.plan)) return;
     const own=(db.lessons||[]).filter(l=>
-      (String(l.studentId)===String(s.id) || l.student===s.name) &&
+      lessonBelongsToStudent(l, s) &&
       (l.status_record||'active')!=='archived' && l.date
     ).sort((a,b)=>String(a.date).localeCompare(String(b.date)));
     if(own.length<2) return;
@@ -2674,11 +2723,22 @@ function syncPaymentToggleToSupabase(id, month, paid, method){
   if(studentCode && codeColOk) payload.student_code=studentCode;
   const selectCols = codeColOk ? 'id,student_id,student_name,student_code' : 'id,student_id,student_name';
   const finishFromRows=(data)=>{
-      const rows=(data||[]).filter(r=>
-        (codeColOk && studentCode && r.student_code && String(r.student_code)===String(studentCode)) ||
-        String(r.student_id)===String(id) ||
-        (studentName && r.student_name===studentName)
+      // Matching is STRICTLY by identity, in priority order. The old
+      // version also matched on student_name, which is catastrophic for
+      // linked courses: one person enrolled twice has two payment rows
+      // under the SAME NAME, so marking course A paid would find course
+      // B's row, overwrite it, and delete the "duplicate" — course A's
+      // own payment never persisted, and on refresh it read as unpaid
+      // again (with the other course's record quietly destroyed).
+      // A name is only usable when the row carries no identity at all.
+      const byCode = (codeColOk && studentCode)
+        ? (data||[]).filter(r=>r.student_code && String(r.student_code)===String(studentCode))
+        : [];
+      const byId = byCode.length ? [] : (data||[]).filter(r=>r.student_id!=null && String(r.student_id)===String(id));
+      const byName = (byCode.length || byId.length) ? [] : (data||[]).filter(r=>
+        r.student_id==null && !r.student_code && studentName && r.student_name===studentName
       );
+      const rows=byCode.length ? byCode : (byId.length ? byId : byName);
       if(rows.length){
         const keep=rows[0];
         const dupes=rows.slice(1);
@@ -2718,21 +2778,29 @@ function syncPaymentToggleToSupabase(id, month, paid, method){
 function archiveStudent(id){
   const s=db.students.find(x=>x.id===id);
   if(!s) return;
-  if(!confirm('Archive this student? Their lessons will be archived too.')) return;
+  if(!confirm('Archive this student?\n\nTheir UPCOMING sessions will be removed from the schedule. Lessons they already attended stay on the record, so teacher payroll and past reports are unaffected.')) return;
   s.status='archived';
   s._localModifiedAt=Date.now();
   let lessonsArchived=0;
   const archivedLessonIds=[];
   (db.lessons||[]).forEach(l=>{
-    const matches=String(l.studentId)===String(id) ||
-      String(l.studentId)===String(s.public_id||'') ||
-      l.student===s.name;
-    if(matches && (l.status_record||'active')!=='archived'){
-      l.status_record='archived';
-      l.archivedWithStudent=true;
-      archivedLessonIds.push(l.id);
-      lessonsArchived++;
-    }
+    // Same linked-course hazard as elsewhere: two courses share a name,
+    // so a bare name match would archive/restore the OTHER course's
+    // lessons too. lessonBelongsToStudent trusts the id when present.
+    const matches=lessonBelongsToStudent(l, s) || String(l.studentId)===String(s.public_id||'');
+    if(!matches || (l.status_record||'active')==='archived') return;
+    // A lesson that ALREADY HAPPENED is a historical fact — the teacher
+    // taught it and was paid for it, and it belongs in past reports.
+    // Archiving those rewrote history: payroll totals and attendance
+    // counts silently dropped when a student left. Only sessions that
+    // haven't happened yet are removed from the schedule.
+    const consumed = l.status==='attended' || l.status==='absent_paid'
+      || l.status==='absent_excused' || l.status==='teacher_absent';
+    if(consumed) return;
+    l.status_record='archived';
+    l.archivedWithStudent=true;
+    archivedLessonIds.push(l.id);
+    lessonsArchived++;
   });
   save();
   renderStudents();
@@ -2790,14 +2858,14 @@ function getStudentHealthFlags(student){
   //    a lesson this month — a brand-new mid-month signup isn't "overdue").
   const paid=!!db.payments[student.id+'_'+month];
   const hadLessonThisMonth=(db.lessons||[]).some(l=>
-    (String(l.studentId)===String(student.id) || l.student===student.name) &&
+    lessonBelongsToStudent(l, student) &&
     (l.month===month) && (l.date||'')<=todayKey && (l.status_record||'active')!=='archived'
   );
   if(!paid && hadLessonThisMonth){ reasons.push('Payment overdue this month'); risk=true; }
 
   // 2) Make-ups piling up (owed but not yet booked).
   const makeupsOwed=(db.lessons||[]).filter(l=>
-    (String(l.studentId)===String(student.id) || l.student===student.name) &&
+    lessonBelongsToStudent(l, student) &&
     (l.status_record||'active')!=='archived' && isMakeupOwed(l)
   ).length;
   if(makeupsOwed>=2){ reasons.push(makeupsOwed+' make-ups owed'); risk=true; }
@@ -2806,7 +2874,7 @@ function getStudentHealthFlags(student){
   // 3) Recent absence streak — of this student's last 3 lessons that have
   //    already happened, 2+ were absences (any kind). A sign of disengagement.
   const pastLessons=(db.lessons||[]).filter(l=>
-    (String(l.studentId)===String(student.id) || l.student===student.name) &&
+    lessonBelongsToStudent(l, student) &&
     (l.status_record||'active')!=='archived' && (l.date||'')<=todayKey &&
     ['attended','absent_paid','absent_excused','teacher_absent'].includes(l.status)
   ).sort((a,b)=>String(b.date).localeCompare(String(a.date))).slice(0,3);
@@ -2816,7 +2884,7 @@ function getStudentHealthFlags(student){
   // 4) Stalled trial — still on a trial plan after the trial lesson passed.
   if((student.plan==='trial'||student.plan==='group-trial')){
     const trialPassed=(db.lessons||[]).some(l=>
-      (String(l.studentId)===String(student.id) || l.student===student.name) &&
+      lessonBelongsToStudent(l, student) &&
       (l.date||'')<todayKey && (l.status_record||'active')!=='archived'
     );
     if(trialPassed){ reasons.push('Trial ended — not yet converted'); risk=true; }
@@ -2851,13 +2919,22 @@ function renderStudents(){
 
   const sort=(document.getElementById('student-sort')||{}).value||'name_asc';
   students.sort((a,b)=>{
-    if(sort==='name_asc') return (a.name||'').localeCompare(b.name||'');
-    if(sort==='name_desc') return (b.name||'').localeCompare(a.name||'');
-    if(sort==='teacher_asc') return (a.teacher||'').localeCompare(b.teacher||'');
-    if(sort==='teacher_desc') return (b.teacher||'').localeCompare(a.teacher||'');
-    if(sort==='instrument_asc') return (a.instrument||'').localeCompare(b.instrument||'');
-    if(sort==='instrument_desc') return (b.instrument||'').localeCompare(a.instrument||'');
-    return 0;
+    let r=0;
+    if(sort==='name_asc') r=(a.name||'').localeCompare(b.name||'');
+    else if(sort==='name_desc') r=(b.name||'').localeCompare(a.name||'');
+    else if(sort==='teacher_asc') r=(a.teacher||'').localeCompare(b.teacher||'');
+    else if(sort==='teacher_desc') r=(b.teacher||'').localeCompare(a.teacher||'');
+    else if(sort==='instrument_asc') r=(a.instrument||'').localeCompare(b.instrument||'');
+    else if(sort==='instrument_desc') r=(b.instrument||'').localeCompare(a.instrument||'');
+    if(r!==0) return r;
+    // Tie-break so one person's courses always sit TOGETHER and in a
+    // stable order. Sorting by teacher or instrument could otherwise
+    // scatter someone's two courses to opposite ends of the list, which
+    // is the main thing that makes multi-course students hard to follow.
+    const ga=String(a.linkedPersonId||a.public_id||a.id);
+    const gb=String(b.linkedPersonId||b.public_id||b.id);
+    if(ga!==gb) return ga.localeCompare(gb);
+    return String(a.student_code||a.id).localeCompare(String(b.student_code||b.id));
   });
 
   const sum=document.getElementById('student-summary');
@@ -2873,7 +2950,15 @@ function renderStudents(){
     const weekly=activeStudents.filter(s=>isWeeklyPlan(s.plan)||s.plan==='trial').length;
     const monthly=activeStudents.length-weekly;
     const flagged=activeStudents.filter(s=>getStudentHealthFlags(s).level!=='ok').length;
-    sum.innerHTML=`<div class="metric"><div class="metric-label">Students</div><div class="metric-value">${countUniquePeople(activeStudents)}</div></div>
+    // "Students" counts the paying roster: people on a monthly plan who
+    // have paid for the month being viewed. Trials, weekly one-offs and
+    // unpaid months aren't the recurring student base, so including them
+    // overstated it. Counted as PEOPLE, so someone taking two courses
+    // still counts once.
+    const monthlyPaidPeople=countUniquePeople(
+      activeStudents.filter(s=>isMonthlyPlan(s.plan) && db.payments[s.id+'_'+month])
+    );
+    sum.innerHTML=`<div class="metric" title="Monthly-plan students who have paid for this month. Counted per person, so two courses count once."><div class="metric-label">Students</div><div class="metric-value">${monthlyPaidPeople}</div></div>
     <div class="metric green"><div class="metric-label">Paid</div><div class="metric-value green">${paid}</div></div>
     <div class="metric red"><div class="metric-label">Unpaid</div><div class="metric-value red">${unpaid}</div></div>
     <div class="metric amber" title="Finished their last cycle and haven't renewed yet — see the Renewals tab"><div class="metric-label">Pending Renewal</div><div class="metric-value amber">${pendingRenewal}</div></div>
@@ -2883,11 +2968,24 @@ function renderStudents(){
   if(!students.length){tb.innerHTML='<tr><td colspan="7"><div class="empty"><div class="empty-icon">🎓</div><div class="empty-text">No students yet. Add your first student above.</div></div></td></tr>';return;}
   tb.innerHTML=students.map(s=>{
     const key=s.id+'_'+currentMonth();
-    const paid=!!db.payments[key];
+    // Weekly sessions are settled at the session itself, so a weekly
+    // student never carries a balance — they always read as paid rather
+    // than sitting in the unpaid list waiting to be chased.
+    const paid=!!db.payments[key] || isWeeklyPlan(s.plan);
     const method=(db.paymentMethods||{})[key];
-    const amt=isWeeklyPlan(s.plan)?egp(getStudentPlanAmount(s))+' / session':egp(getStudentPlanAmount(s));
+    // The amount is the month's total (sessions x rate), which rises in a
+    // month containing five of their day rather than four.
+    const amt=egp(getStudentPlanAmount(s));
     const linkedCourses=getLinkedCourses(s);
-    const linkedBadge=linkedCourses.length ? ` <span class="badge badge-purple" style="cursor:help" title="Also enrolled in: ${escapeAttr(linkedCourses.map(c=>c.instrument+' with '+c.teacher).join(', '))}">🔗 +${linkedCourses.length}</span>` : '';
+    // Spell out WHICH course this row is, rather than a bare "+1" — two
+    // courses can look identical (same name, instrument, teacher, plan),
+    // so the row needs to say plainly that it's one of several and which.
+    let linkedBadge='';
+    if(linkedCourses.length){
+      const group=[s,...linkedCourses].sort((a,b)=>String(a.student_code||a.id).localeCompare(String(b.student_code||b.id)));
+      const pos=group.findIndex(x=>String(x.id)===String(s.id))+1;
+      linkedBadge=` <span class="badge badge-purple" style="cursor:help" title="This person takes ${group.length} courses: ${escapeAttr(group.map(c=>(c.instrument||'?')+' · '+(c.lesson_day||'?')+' with '+(c.teacher||'?')).join('  |  '))}">🔗 Course ${pos} of ${group.length}</span>`;
+    }
     const onlineBadge=s.isOnline ? ' <span class="badge badge-teal" title="This student attends online">💻 Online</span>' : '';
     const frozenBadge=s.frozen ? ` <span class="badge badge-blue" style="cursor:help" title="${escapeAttr('Frozen since '+(s.frozenSince?formatDateDMY(s.frozenSince):'—')+(s.frozenReason?': '+s.frozenReason:''))}">❄️ Frozen</span>` : '';
     const health=getStudentHealthFlags(s);
@@ -2897,6 +2995,7 @@ function renderStudents(){
       <td>${healthDot}<strong>${escapeHtml(s.name)}</strong>${onlineBadge}${linkedBadge}${frozenBadge}</td>
       <td>${escapeHtml(s.instrument)||'—'}</td>
       <td>${escapeHtml(s.teacher)||'—'}</td>
+      <td style="white-space:nowrap">${s.lesson_day?escapeHtml(s.lesson_day):'<span style="color:var(--danger,#e06c6c)">no day set</span>'}${s.lessonTime?'<br><span style="color:var(--text-muted);font-size:12px">'+escapeHtml(formatTime12h(s.lessonTime))+'</span>':''}</td>
       <td>${PLAN_LABELS[s.plan]}</td>
       <td style="font-weight:600">${amt}</td>
       <td><span class="badge ${paid?'badge-green':'badge-red'}">${paid?'✓ Paid':'✗ Unpaid'}</span>${paid && method ? ` <span class="badge" style="opacity:0.8">${escapeHtml(method)}</span>` : ''}</td>
@@ -2946,7 +3045,7 @@ function editStudent(id){
          Online student
        </label>
      </div>
-     <div class="form-field"><label for="es-custom-amount">Custom Amount — per lesson (EGP)</label><input id="es-custom-amount" type="number" min="0" step="1" placeholder="Standard: ${whatsAppPerLessonRate(s.plan)}/lesson" value="${s.customAmount!=null?escapeAttr(s.customAmount):''}"><small style="color:var(--text-muted);display:block;margin-top:2px">Leave blank for the standard per-lesson rate. Set a value for a standing discount — multiplied by however many lessons fall in each billing cycle.</small></div>
+     <div class="form-field"><label for="es-custom-amount">Custom Amount — per MONTH (EGP)</label><input id="es-custom-amount" type="number" min="0" step="1" placeholder="e.g. 1800 for the whole month" value="${s.customAmount!=null?escapeAttr(s.customAmount):''}"><small style="color:var(--text-muted);display:block;margin-top:2px">A flat agreed price for the month, whatever the session count. Leave blank to charge the standard rate per session. Credit for sessions the teacher misses still comes off this.</small></div>
      <div class="form-field"><label for="es-custom-pay">Custom Pay — next renewal only (EGP)</label><input id="es-custom-pay" type="number" min="0" step="1" placeholder="e.g. couldn't reschedule a make-up" value="${s.customPay!=null?escapeAttr(s.customPay):''}"><small style="color:var(--text-muted);display:block;margin-top:2px">A one-time flat total for the NEXT renewal only (e.g. adjusting for a make-up that couldn't be rescheduled). Clears itself automatically once that renewal is processed.</small></div>
      <div class="form-field"><label for="es-age">Age</label><input id="es-age" type="number" min="1" max="120" step="1" placeholder="e.g. 10" value="${escapeAttr(studentAge(s))}">${s.dob?`<small style="color:var(--text-muted);display:block;margin-top:2px">From date of birth ${escapeHtml(formatDateDMY(s.dob))}. Typing an age here replaces it.</small>`:''}</div>
      <div class="form-field"><label for="es-joined">Starting Date</label><div style="display:flex;gap:4px"><input id="es-joined" type="text" placeholder="dd/mm/yyyy" maxlength="10" oninput="maskDateInput(this)" value="${escapeAttr(isoToDmy(s.joined_date))}"><button type="button" class="btn btn-sm" onclick="openDatePicker('es-joined')">📅</button></div></div>
@@ -2954,6 +3053,12 @@ function editStudent(id){
      <div class="form-field"><label for="es-phone2">Parent Phone</label><input id="es-phone2" value="${escapeAttr(s.phone2)}"></div>
      <div class="form-field wide"><label for="es-email">Email</label><input id="es-email" type="email" value="${escapeAttr(s.email)}"></div>
    </div>
+   ${isMonthlyPlan(s.plan) ? `
+   <div class="form-field wide" style="margin-top:12px;border-top:1px solid var(--border);padding-top:12px">
+     <label>Schedule</label>
+     <div class="teacher-row-meta" style="margin-bottom:6px">Replace this student's upcoming sessions with specific hand-picked dates instead of the regular weekly pattern.</div>
+     <button type="button" class="btn btn-sm" onclick="openCustomDatesForStudent(${s.id})">📅 Set Custom Dates…</button>
+   </div>` : ''}
    <div style="text-align:right;margin-top:14px"><button class="btn btn-gold" onclick="saveEditStudent(${s.id})">Save Student</button></div>`);
 }
 
@@ -3011,7 +3116,7 @@ function saveEditStudent(id){
    const leavingTrial=(prevPlan==='trial'||prevPlan==='group-trial') && nextPlan!=='trial' && nextPlan!=='group-trial';
    if(leavingTrial){
      (db.lessons||[]).forEach(l=>{
-       if((String(l.studentId)===String(s.id) || l.student===s.name) && (l.status_record||'active')!=='archived'){
+       if(lessonBelongsToStudent(l, s) && (l.status_record||'active')!=='archived'){
          l.wasTrial=true;
          if(typeof syncLessonUpdateToSupabase==='function') syncLessonUpdateToSupabase(l);
        }
@@ -3054,7 +3159,7 @@ function saveEditStudent(id){
 
  if((scheduleChanged || planChanged) && s.lesson_day && s.lessonTime){
    const futureScheduled=(db.lessons||[]).filter(l=>
-     (String(l.studentId)===String(s.id) || l.student===s.name) &&
+     lessonBelongsToStudent(l, s) &&
      l.status==='scheduled' &&
      (l.status_record||'active')!=='archived' &&
      l.date>=todayKey
@@ -3338,7 +3443,7 @@ function renderOverview(){
     // since both consume a session either way.
     if(!paid){
       const hasConsumedThisMonth=(db.lessons||[]).some(l=>
-        (String(l.studentId)===String(s.id) || l.student===s.name) &&
+        lessonBelongsToStudent(l, s) &&
         (l.status_record||'active')!=='archived' &&
         String(l.date||'').slice(0,7)===month &&
         (l.status==='attended' || l.status==='absent_paid')
@@ -3424,7 +3529,7 @@ function studentFinishedMonth(student, monthKey){
   if(!student) return false;
   const todayKey=new Date().toISOString().slice(0,10);
   const monthLessons=(db.lessons||[]).filter(l=>
-    (String(l.studentId)===String(student.id) || l.student===student.name) &&
+    lessonBelongsToStudent(l, student) &&
     (l.status_record||'active')!=='archived' &&
     String(l.date||l.month||'').slice(0,7)===monthKey
   );
@@ -3470,7 +3575,7 @@ function timeAgoLabel(isoString){
 function teacherAbsenceDeductions(student){
   if(!student) return [];
   return (db.lessons||[]).filter(l=>
-    (String(l.studentId)===String(student.id) || l.student===student.name) &&
+    lessonBelongsToStudent(l, student) &&
     (l.status_record||'active')!=='archived' &&
     l.status==='teacher_absent' &&
     !l.makeupResolved &&
@@ -3520,6 +3625,29 @@ function buildDeductionNotes(student, deductions){
   });
 }
 
+// Hides a student (and all their linked courses) from Renewals Due
+// without touching their record — for someone who has said they're not
+// continuing, so the list stays a genuine to-do rather than accumulating
+// people you've already dealt with. Scoped to the billing month, so if
+// they later renew or a new cycle comes round they reappear normally.
+function dismissFromRenewalsDue(idsCsv){
+  const ids=String(idsCsv||'').split(',').filter(Boolean);
+  if(!ids.length) return;
+  const first=(db.students||[]).find(s=>String(s.id)===String(ids[0]));
+  const who=first?(first.name||'this student'):'this student';
+  if(!confirm('Hide '+who+' from Renewals Due?\n\nTheir record is not changed — this only clears them from this list. They will reappear if they renew or when a new cycle is due.')) return;
+  db.renewalsDismissed=db.renewalsDismissed||{};
+  ids.forEach(id=>{
+    const s=(db.students||[]).find(x=>String(x.id)===String(id));
+    if(!s) return;
+    const month=(typeof studentNextBillingMonth==='function') ? studentNextBillingMonth(s) : '';
+    db.renewalsDismissed[id+'_'+month]=new Date().toISOString();
+  });
+  save();
+  renderRenewalsDue();
+  showToast(who+' hidden from Renewals Due');
+}
+
 function renderRenewalsDue(){
   const host=document.getElementById('renewals-due-list');
   if(!host) return;
@@ -3545,6 +3673,8 @@ function renderRenewalsDue(){
     // after their last completed one, matching what confirmRenewal would
     // actually schedule if Renew were clicked right now.
     const nextMonthKey=studentNextBillingMonth(s);
+    // Skip anyone explicitly dismissed for this billing month.
+    if((db.renewalsDismissed||{})[s.id+'_'+nextMonthKey]) return;
     const nextMonthName=(typeof formatMonthName==='function') ? formatMonthName(nextMonthKey) : nextMonthKey;
     let dayNumbers=(typeof getWeekdayDatesInMonth==='function') ? getWeekdayDatesInMonth(nextMonthKey, s.lesson_day) : [];
     // Drop occurrences a renewal wouldn't actually schedule (already
@@ -3553,7 +3683,7 @@ function renderRenewalsDue(){
     {
       const todayK=new Date().toISOString().slice(0,10);
       const own=(db.lessons||[]).filter(l=>
-        (String(l.studentId)===String(s.id) || l.student===s.name) &&
+        lessonBelongsToStudent(l, s) &&
         (l.status_record||'active')!=='archived'
       ).map(l=>l.date).filter(Boolean).sort();
       const last=own.length?own[own.length-1]:todayK;
@@ -3587,11 +3717,11 @@ function renderRenewalsDue(){
       amount=Number(s.customPay)||0;
       isCustomPay=true;
     } else if(s.customAmount!=null && s.customAmount!==''){
-      // A Custom Amount is a PER-LESSON rate (e.g. a discounted rate), not
-      // a flat total — it must scale with however many lessons actually
-      // fall in the month being billed, the same as the standard rate does.
-      const customRate=Number(s.customAmount)||0;
-      amount=billableCount*customRate;
+      // Custom Amount is a flat MONTHLY fee — the agreed price for the
+      // month, not a per-lesson rate. Credit for sessions the teacher
+      // missed still comes off at the standard per-session rate.
+      const monthlyFee=Number(s.customAmount)||0;
+      amount=Math.max(0, monthlyFee-(deductions.length*rate));
     } else {
       amount=billableCount*rate;
     }
@@ -3666,6 +3796,7 @@ function renderRenewalsDue(){
           : `<span style="font-size:12px;color:var(--text-muted)">${escapeHtml(nextMonthName)}: <b style="color:var(--gold)">${lessonCount} lesson${lessonCount===1?'':'s'} · ${egp(amount)}</b></span>`}
         <button class="btn btn-sm" onclick="sendRenewalReminder(${s.id})" title="Opens WhatsApp with the next-month payment reminder">${reminderBtnLabel}</button>
         <button class="btn btn-sm btn-gold" onclick="renewStudentSubscription(${s.id},'${escapeAttr(renewIds)}')">🔁 Renew</button>
+        <button class="btn btn-sm" title="Hide from this list — for someone who isn't continuing. Doesn't archive or change the student." onclick="dismissFromRenewalsDue('${escapeAttr(renewIds)}')">✕</button>
       </div>
     </div>`;
   }).join('');
@@ -3693,7 +3824,7 @@ function computeRenewalCourseDetails(student){
   // price for lessons they'll never get.
   const todayKey=new Date().toISOString().slice(0,10);
   const ownDates=(db.lessons||[]).filter(l=>
-    (String(l.studentId)===String(student.id) || l.student===student.name) &&
+    lessonBelongsToStudent(l, student) &&
     (l.status_record||'active')!=='archived'
   ).map(l=>l.date).filter(Boolean).sort();
   const lastDate=ownDates.length ? ownDates[ownDates.length-1] : todayKey;
@@ -3724,8 +3855,9 @@ function computeRenewalCourseDetails(student){
   if(student.customPay!=null && student.customPay!==''){
     amount=Number(student.customPay)||0;
   } else if(student.customAmount!=null && student.customAmount!==''){
-    const customRate=Number(student.customAmount)||0;
-    amount=billableCount*customRate;
+    // Flat monthly fee (see computeRenewalPrice).
+    const monthlyFee=Number(student.customAmount)||0;
+    amount=Math.max(0, monthlyFee-(deductions.length*whatsAppPerLessonRate(student.plan)));
   } else {
     const rate=whatsAppPerLessonRate(student.plan);
     amount=billableCount*rate;
@@ -3923,7 +4055,7 @@ function studentWeeklyPendingDecision(student){
   if(typeof isWeeklyPlan!=='function' || !isWeeklyPlan(student.plan)) return false;
   const todayKey=new Date().toISOString().slice(0,10);
   const own=(db.lessons||[]).filter(l=>
-    (String(l.studentId)===String(student.id) || l.student===student.name) &&
+    lessonBelongsToStudent(l, student) &&
     (l.status_record||'active')!=='archived'
   );
   if(!own.length) return false;
@@ -3938,7 +4070,7 @@ function renderWeeklyRenewals(){
   const rows=[];
   (db.students||[]).forEach(s=>{
     if(!studentWeeklyPendingDecision(s)) return;
-    const own=(db.lessons||[]).filter(l=>(String(l.studentId)===String(s.id)||l.student===s.name) && (l.status_record||'active')!=='archived');
+    const own=(db.lessons||[]).filter(l=>lessonBelongsToStudent(l, s) && (l.status_record||'active')!=='archived');
     const lastDate=own.map(l=>l.date).filter(Boolean).sort().slice(-1)[0]||null;
     rows.push({s, lastDate});
   });
@@ -4639,10 +4771,10 @@ function renderDatabase(){
  ).map(s=>`<tr${s.status==='archived'?' style="opacity:0.5"':''}>
 <td>${escapeHtml(s.public_id||'Pending Sync')}${s.status==='archived'?' <span class="badge badge-red" style="font-size:9px">Archived</span>':''}</td>
 <td>${escapeHtml(s.first_name)}</td><td>${escapeHtml(s.last_name)}</td><td>${escapeHtml(s.email)}</td>
-<td>${db.lessons.filter(l=>(String(l.studentId)===String(s.id) || l.student===s.name) && l.status==='attended').length}</td>
-<td>${db.lessons.filter(l=>(String(l.studentId)===String(s.id) || l.student===s.name) && l.status==='absent_paid').length}</td>
-<td>${db.lessons.filter(l=>(String(l.studentId)===String(s.id) || l.student===s.name) && l.status==='teacher_absent').length}</td>
-<td>${db.lessons.filter(l=>(String(l.studentId)===String(s.id) || l.student===s.name) && isMakeupOwed(l)).length}</td>
+<td>${db.lessons.filter(l=>lessonBelongsToStudent(l, s) && l.status==='attended').length}</td>
+<td>${db.lessons.filter(l=>lessonBelongsToStudent(l, s) && l.status==='absent_paid').length}</td>
+<td>${db.lessons.filter(l=>lessonBelongsToStudent(l, s) && l.status==='teacher_absent').length}</td>
+<td>${db.lessons.filter(l=>lessonBelongsToStudent(l, s) && isMakeupOwed(l)).length}</td>
 <td>${studentAge(s)}</td>
 <td>${escapeHtml(formatDateDMY(s.joined_date))}</td>
 <td>${escapeHtml(s.phone1)}</td>
@@ -4796,9 +4928,10 @@ function restoreStudent(id){
   let lessonsRestored=0;
   const restoredLessonIds=[];
   (db.lessons||[]).forEach(l=>{
-    const matches=String(l.studentId)===String(id) ||
-      String(l.studentId)===String(s.public_id||'') ||
-      l.student===s.name;
+    // Same linked-course hazard as elsewhere: two courses share a name,
+    // so a bare name match would archive/restore the OTHER course's
+    // lessons too. lessonBelongsToStudent trusts the id when present.
+    const matches=lessonBelongsToStudent(l, s) || String(l.studentId)===String(s.public_id||'');
     if(matches && l.archivedWithStudent){
       l.status_record='active';
       delete l.archivedWithStudent;
@@ -4843,7 +4976,7 @@ function renderReports(){
    // A student whose make-ups are all booked or attended has nothing left
    // to schedule, so they drop off the dashboard entirely.
    let rows=db.students.filter(s=>(s.status||'active')!=='archived').map(s=>{
-      let owedLessons=db.lessons.filter(l=>(String(l.studentId)===String(s.id) || l.student===s.name) && isMakeupOwed(l) && (l.status_record||'active')!=='archived');
+      let owedLessons=db.lessons.filter(l=>lessonBelongsToStudent(l, s) && isMakeupOwed(l) && (l.status_record||'active')!=='archived');
       // A student who takes more than one instrument can exist as several
       // records (Vocals with one teacher, Guitar with another). Matching a
       // make-up to a record by NAME alone would count every make-up in
@@ -4957,7 +5090,7 @@ function renderReports(){
      if(s.plan!=='trial' && s.plan!=='group-trial') return false;
      // Their trial session must have been ATTENDED and be more than a day old.
      const attendedTrials=(db.lessons||[]).filter(l=>
-       (String(l.studentId)===String(s.id) || l.student===s.name) &&
+       lessonBelongsToStudent(l, s) &&
        (l.status_record||'active')!=='archived' &&
        l.status==='attended' &&
        (l.date||'')<cutoffKey
@@ -4965,7 +5098,7 @@ function renderReports(){
      return attendedTrials.length>0;
    }).map(s=>{
      const trialLessons=(db.lessons||[]).filter(l=>
-       (String(l.studentId)===String(s.id) || l.student===s.name) &&
+       lessonBelongsToStudent(l, s) &&
        (l.status_record||'active')!=='archived' &&
        l.status==='attended'
      ).sort((a,b)=>String(a.date).localeCompare(String(b.date)));
@@ -5930,7 +6063,10 @@ addStudent=function(){
  // student added on a trial plan is already settled and shouldn't show
  // as owing money. Marked against the month their trial actually falls
  // in (their start date), not necessarily today's month.
- if(newStudent && (newStudent.plan==='trial' || newStudent.plan==='group-trial')){
+ // Trials AND weekly sessions are both paid up front, before the session
+ // happens — so neither should ever show as owing money on creation.
+ if(newStudent && (newStudent.plan==='trial' || newStudent.plan==='group-trial'
+     || ((typeof isWeeklyPlan==='function') && isWeeklyPlan(newStudent.plan)))){
    const trialMonth=String(newStudent.joined_date||'').slice(0,7)
      || (typeof currentMonth==='function' ? currentMonth() : new Date().toISOString().slice(0,7));
    const payKey=newStudent.id+'_'+trialMonth;
@@ -6436,9 +6572,17 @@ async function _autoLoadFromCloudImpl(){
        // and name edits), then by id, then by name as a last resort for
        // older rows written before student_code existed. Same identity
        // resolution order as the student merge and the payment write path.
-       const student=(p.student_code && (db.students||[]).find(s=>String(s.student_code)===String(p.student_code)))
-         || (db.students||[]).find(s=>String(s.id)===String(p.student_id))
-         || (db.students||[]).find(s=>s.name===p.student_name);
+       // Identity only, in priority order. The name fallback is used ONLY
+       // when the row carries no identity at all AND exactly one active
+       // student bears that name — two linked courses share a name, so
+       // guessing would attach the payment to the wrong course and make
+       // the other look unpaid.
+       let student=(p.student_code && (db.students||[]).find(s=>String(s.student_code)===String(p.student_code)))
+         || (p.student_id!=null && (db.students||[]).find(s=>String(s.id)===String(p.student_id)));
+       if(!student && p.student_id==null && !p.student_code && p.student_name){
+         const named=(db.students||[]).filter(s=>s.name===p.student_name);
+         if(named.length===1) student=named[0];
+       }
        if(student && p.month){
          newPayments[student.id+'_'+p.month]=!!p.paid;
        }
@@ -8559,7 +8703,7 @@ window.addEventListener('load', function(){
      const flagged=(db.students||[]).filter(s=>(s.status||'active')!=='archived' && !s.frozen).map(s=>{
        const studentLessons=(db.lessons||[]).filter(l=>
          (l.status_record||'active')!=='archived' &&
-         (String(l.studentId)===String(s.id) || l.student===s.name)
+         lessonBelongsToStudent(l, s)
        );
 
        const reasons=[];
@@ -9858,7 +10002,7 @@ function openTeacherStudentWorkspace(studentId){
   // lessons still owed a makeup.
   const absentTotal=absentPaid+excused+teacherAbsent;
   const makeupsOwed=(db.lessons||[]).filter(l=>
-    (String(l.studentId)===String(student.id) || l.student===student.name) &&
+    lessonBelongsToStudent(l, student) &&
     (l.status_record||'active')!=='archived' && isMakeupOwed(l)
   ).length;
   const homeworkHistory=studentLogs.filter(l=>l.homework);
@@ -10061,7 +10205,7 @@ function openAdminStudentProfile(studentId,studentName){
   const currentGoal=studentLogs.find(l=>l.nextLessonGoal)?.nextLessonGoal || 'No current goal set.';
 
   const studentLessons=(db.lessons||[])
-    .filter(l=>(String(l.studentId)===String(student.id) || l.student===student.name) && (l.status_record||'active')!=='archived')
+    .filter(l=>lessonBelongsToStudent(l, student) && (l.status_record||'active')!=='archived')
     .sort((a,b)=>String(b.date||'').localeCompare(String(a.date||'')));
   const makeupsOwed=studentLessons.filter(l=>isMakeupOwed(l)).length;
 
@@ -10330,7 +10474,7 @@ function renderStudentScheduleView(){
   // genuinely run out.
   const nextLesson=(db.lessons||[])
     .filter(l=>(l.status_record||'active')!=='archived'
-      && (String(l.studentId)===String(student.id) || l.student===student.name)
+      && lessonBelongsToStudent(l, student)
       && l.status==='scheduled'
       && (l.date||'')>=todayKey)
     .sort((a,b)=>String(a.date||'').localeCompare(String(b.date||'')))[0]||null;
@@ -10344,7 +10488,7 @@ function renderStudentScheduleView(){
   const nextIsMakeup = !!(nextLesson && nextLesson.makeupForLessonId);
   const recentLessons=(db.lessons||[])
     .filter(l=>(l.status_record||'active')!=='archived'
-      && (String(l.studentId)===String(student.id) || l.student===student.name)
+      && lessonBelongsToStudent(l, student)
       && l.status!=='scheduled'
       && (l.date||'')<=todayKey)
     .sort((a,b)=>String(b.date||'').localeCompare(String(a.date||'')))
@@ -10848,7 +10992,7 @@ function confirmRenewal(id){
   // that specific past lesson.
   if(wasTrial){
     (db.lessons||[]).forEach(l=>{
-      if((String(l.studentId)===String(id) || l.student===student.name) && (l.status_record||'active')!=='archived'){
+      if(lessonBelongsToStudent(l, student) && (l.status_record||'active')!=='archived'){
         l.wasTrial=true;
       }
     });
@@ -11260,6 +11404,21 @@ function promptStudentStartWhen(student){
       <button class="btn btn-gold" onclick="chooseStudentStart(${student.id}, 'today')">Today — ${escapeHtml(todayLabel)}</button>
       <button class="btn" onclick="chooseStudentStart(${student.id}, 'next')">Next ${escapeHtml(student.lesson_day)} — ${escapeHtml(nextLabel)}</button>
     </div>`);
+}
+
+// Opens the existing (already-tested) Custom Dates flow for a student
+// straight from Edit Student. Deliberately reuses the Renew modal rather
+// than duplicating the date picker, the pricing and the schedule-
+// replacement logic — three things that must not be allowed to drift
+// apart between two copies.
+function openCustomDatesForStudent(id){
+  closeModal();
+  renewStudentSubscription(id);
+  const toggle=document.getElementById('rn-custom-dates-toggle');
+  if(toggle){
+    toggle.checked=true;
+    if(typeof onRenewCustomDatesToggle==='function') onRenewCustomDatesToggle(id);
+  }
 }
 
 function chooseStudentStart(studentId, when){
@@ -11839,9 +11998,17 @@ function getTeacherBookingsByTime(teacherName, dayName, targetDate, excludeStude
     // this check a trial student who already had (and used) their one
     // session would phantom-occupy that slot forever and block new
     // students from booking it.
+    // A MAKE-UP is deliberately excluded here. It's a one-off replacement
+    // for a session already missed — not evidence of an ongoing weekly
+    // commitment. Counting it meant a student whose only remaining
+    // booking was a make-up on some other day still phantom-occupied
+    // their regular slot, showing the teacher as "busy with" someone who
+    // has already made that session up (and putting them in the
+    // downloaded schedule).
     (db.lessons||[]).some(l=>
-      (String(l.studentId)===String(s.id) || l.student===s.name) &&
-      l.status==='scheduled' && (l.status_record||'active')!=='archived'
+      lessonBelongsToStudent(l, s) &&
+      l.status==='scheduled' && (l.status_record||'active')!=='archived' &&
+      !l.makeupForLessonId
     ) &&
     // AND only if targetDate is genuinely beyond what we already know —
     // strictly after their LATEST scheduled lesson date. A student with
@@ -11854,8 +12021,9 @@ function getTeacherBookingsByTime(teacherName, dayName, targetDate, excludeStude
     // actual data for.
     (()=>{
       const ownScheduled=(db.lessons||[]).filter(l=>
-        (String(l.studentId)===String(s.id) || l.student===s.name) &&
-        l.status==='scheduled' && (l.status_record||'active')!=='archived'
+        lessonBelongsToStudent(l, s) &&
+        l.status==='scheduled' && (l.status_record||'active')!=='archived' &&
+        !l.makeupForLessonId
       ).map(l=>l.date).filter(Boolean);
       if(!ownScheduled.length) return false;
       const latestKnown=ownScheduled.reduce((a,b)=>a>b?a:b);
@@ -11883,7 +12051,7 @@ function getTeacherBookingsByTime(teacherName, dayName, targetDate, excludeStude
     !namesWithRealLessonThisWeek.has(s.name) &&
     // No upcoming scheduled lesson at all — i.e. genuinely not renewed.
     !(db.lessons||[]).some(l=>
-      (String(l.studentId)===String(s.id) || l.student===s.name) &&
+      lessonBelongsToStudent(l, s) &&
       l.status==='scheduled' && (l.status_record||'active')!=='archived'
     ) &&
     (typeof studentHasPendingRenewal==='function' && studentHasPendingRenewal(s))
@@ -11892,7 +12060,7 @@ function getTeacherBookingsByTime(teacherName, dayName, targetDate, excludeStude
     // The hold runs until their first session day of the month FOLLOWING
     // their last lesson — the date they'd have started had they renewed.
     const own=(db.lessons||[]).filter(l=>
-      (String(l.studentId)===String(s.id) || l.student===s.name) &&
+      lessonBelongsToStudent(l, s) &&
       (l.status_record||'active')!=='archived'
     ).map(l=>l.date).filter(Boolean).sort();
     if(!own.length) return;
@@ -11988,7 +12156,7 @@ function studentHasPendingRenewal(student){
 
   const todayKey=new Date().toISOString().slice(0,10);
   const ownLessons=(db.lessons||[]).filter(l=>
-    (String(l.studentId)===String(student.id) || l.student===student.name) &&
+    lessonBelongsToStudent(l, student) &&
     (l.status_record||'active')!=='archived'
   );
   if(!ownLessons.length) return false;
@@ -12439,6 +12607,19 @@ function renderCalendarPage(){
       s.name!==attendingName
     );
     if(!original) return null;
+    // A profile's lesson_day/lessonTime persist even after the student has
+    // finished their sessions (trial used up, plan lapsed, never renewed).
+    // Without checking for a live commitment, any such stale profile makes
+    // an ordinary booking look like a substitution — "originally (Name)"
+    // for someone who no longer holds that slot at all. Require a real
+    // ongoing commitment: a scheduled lesson that isn't a one-off make-up.
+    const originalStillCommitted=(db.lessons||[]).some(l=>
+      lessonBelongsToStudent(l, original) &&
+      l.status==='scheduled' &&
+      (l.status_record||'active')!=='archived' &&
+      !l.makeupForLessonId
+    );
+    if(!originalStillCommitted) return null;
     // Confirm the original holder isn't themselves attending this slot
     // this week (guards the odd case of two students sharing a default
     // slot in the data — only call it a substitution if A really is out).
@@ -13694,7 +13875,7 @@ function renderStudentPortalAttendance(){
 
   const lessons=(db.lessons||[]).filter(l=>
     (l.status_record||'active')!=='archived' &&
-    (String(l.studentId)===String(student.id) || l.student===student.name)
+    lessonBelongsToStudent(l, student)
   );
   const attended=lessons.filter(l=>l.status==='attended').length;
   const absent=lessons.filter(l=>l.status==='absent_paid' || l.status==='absent_excused' || l.status==='teacher_absent').length;
