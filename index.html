@@ -367,7 +367,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-143</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-144</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1582,6 +1582,17 @@ function formatMonthName(monthStr){
 // leading 0, e.g. "01277336092") into the international format WhatsApp's
 // click-to-chat links require (leading 0 replaced with Egypt's country
 // code, 20). Assumes Egyptian numbers, matching the academy's location.
+// Builds the WhatsApp link.
+//
+// web.whatsapp.com/send goes STRAIGHT to WhatsApp Web with the message
+// loaded. api.whatsapp.com and wa.me both bounce through an interstitial
+// that offers to open the desktop app first, so every reminder needed a
+// "Cancel" then "continue to WhatsApp Web" before it could be sent.
+// This endpoint skips that entirely — no extension or redirector needed.
+function whatsAppSendUrl(phone, message){
+  return 'https://web.whatsapp.com/send?phone='+phone+'&text='+encodeURIComponent(message);
+}
+
 function toWhatsAppNumber(phone){
   let digits=String(phone||'').replace(/\D/g,'');
   if(!digits) return '';
@@ -1962,12 +1973,9 @@ function sendTrialConversionMessage(studentId){
       '\n'+
       'Can\'t wait to have you back for the next session! '+eMultiNotes+eFire;
 
-    // Using api.whatsapp.com's direct /send endpoint instead of the wa.me
-    // short-link redirector — wa.me's own redirect step appears to mangle
-    // certain Unicode symbol characters in the text parameter (confirmed
-    // reproducible across multiple browsers and devices), while this older,
-    // direct endpoint passes the text straight through.
-    const win=window.open('https://api.whatsapp.com/send?phone='+phone+'&text='+encodeURIComponent(message), '_blank');
+    // See whatsAppSendUrl: web.whatsapp.com avoids both the "open the app"
+    // interstitial and the wa.me redirect that mangles some emoji.
+    const win=window.open(whatsAppSendUrl(phone, message), '_blank');
     if(!win){
       showToast('Your browser blocked the WhatsApp popup — allow popups for this site, then try again.');
       return;
@@ -2220,6 +2228,67 @@ migrateBackfillLessonStudentIds();
 // plan, whose very FIRST lesson is a lone attended session standing more
 // than a week before their next one — the shape a trial-then-converted
 // student always has. Anything ambiguous is left alone.
+// Archives trial students who attended their trial but never converted,
+// two weeks on. They otherwise linger indefinitely: cluttering the roster,
+// holding a slot that could be sold, and skewing counts.
+//
+// Deliberately conservative — a student is only archived when ALL hold:
+//   * still on a trial plan (a converted student is never touched)
+//   * their trial was ATTENDED (a no-show or cancelled trial is a
+//     different conversation, and may still be rebooked)
+//   * more than 14 days have passed since that session
+//   * they have NO upcoming scheduled lesson (anything booked means the
+//     relationship is live, whatever the plan field says)
+//   * they aren't frozen (that's a deliberate hold, not neglect)
+//
+// Archiving keeps attended lessons on the record, so teacher payroll and
+// past reports are unaffected, and it can be undone from the Database tab.
+const TRIAL_AUTO_ARCHIVE_DAYS = 14;
+function autoArchiveStaleTrials(){
+  const todayKey=new Date().toISOString().slice(0,10);
+  const archived=[];
+  (db.students||[]).forEach(s=>{
+    if((s.status||'active')==='archived' || s.frozen) return;
+    if(s.plan!=='trial' && s.plan!=='group-trial') return;
+    const own=(db.lessons||[]).filter(l=>
+      lessonBelongsToStudent(l, s) && (l.status_record||'active')!=='archived'
+    );
+    if(own.some(l=>l.status==='scheduled')) return; // something is still booked
+    const attended=own.filter(l=>l.status==='attended' && l.date).map(l=>l.date).sort();
+    if(!attended.length) return;
+    const last=attended[attended.length-1];
+    const days=Math.floor((new Date(todayKey)-new Date(last))/86400000);
+    if(days<=TRIAL_AUTO_ARCHIVE_DAYS) return;
+    s.status='archived';
+    s._localModifiedAt=Date.now();
+    s.autoArchivedAsStaleTrial=true;
+    // Only FUTURE sessions are withdrawn; lessons already taught stay put
+    // (consistent with manual archiving).
+    own.forEach(l=>{
+      if(l.status==='scheduled'){
+        l.status_record='archived';
+        l.archivedWithStudent=true;
+        if(typeof syncLessonUpdateToSupabase==='function') syncLessonUpdateToSupabase(l);
+      }
+    });
+    if(typeof syncStudentUpdateToSupabase==='function') syncStudentUpdateToSupabase(s);
+    archived.push(s.name||'student');
+  });
+  if(archived.length){
+    save();
+    console.log('Auto-archived '+archived.length+' stale trial student(s): '+archived.join(', '));
+    // Surfaced rather than silent — an automatic change to the roster
+    // should never be something you only discover later.
+    setTimeout(()=>{
+      if(typeof showToast==='function'){
+        showToast(archived.length+' trial student'+(archived.length===1?'':'s')+' auto-archived (no conversion after '+TRIAL_AUTO_ARCHIVE_DAYS+' days): '+archived.slice(0,3).join(', ')+(archived.length>3?'…':''));
+      }
+      if(typeof renderStudents==='function') renderStudents();
+      if(typeof renderTrialFollowUp==='function') renderTrialFollowUp();
+    }, 1200);
+  }
+}
+
 function migrateFlagUnmarkedTrialLessons(){
   let fixed=0;
   (db.students||[]).forEach(s=>{
@@ -2247,6 +2316,7 @@ function migrateFlagUnmarkedTrialLessons(){
   }
 }
 migrateFlagUnmarkedTrialLessons();
+autoArchiveStaleTrials();
 
 function migrateLessonMonthsAndStatus(){
   const VALID_STATUSES=['attended','absent_paid','absent_excused','teacher_absent','scheduled'];
@@ -3928,8 +3998,8 @@ function sendRenewalReminder(studentId){
 
     // Emojis built at runtime from code points so the source stays pure
     // ASCII (immune to any file-encoding/hosting corruption). These render
-    // correctly now that links go through api.whatsapp.com rather than the
-    // wa.me redirector, which was corrupting multi-byte characters.
+    // correctly because the link goes straight to web.whatsapp.com rather
+    // than through a redirector that corrupts multi-byte characters.
     const ePiano=String.fromCodePoint(0x1F3B9), eMic=String.fromCodePoint(0x1F3A4), eSparkle=String.fromCodePoint(0x1F4AB);
     const message='Hello '+firstName+'!\n'+
       'Hope you\'re having a blast at Cymatics!\n'+
@@ -3943,12 +4013,9 @@ function sendRenewalReminder(studentId){
       absenceNote+
       deductionNoteBlock;
 
-    // Using api.whatsapp.com's direct /send endpoint instead of the wa.me
-    // short-link redirector — wa.me's own redirect step appears to mangle
-    // certain Unicode symbol characters in the text parameter (confirmed
-    // reproducible across multiple browsers and devices), while this older,
-    // direct endpoint passes the text straight through.
-    const win=window.open('https://api.whatsapp.com/send?phone='+phone+'&text='+encodeURIComponent(message), '_blank');
+    // See whatsAppSendUrl: web.whatsapp.com avoids both the "open the app"
+    // interstitial and the wa.me redirect that mangles some emoji.
+    const win=window.open(whatsAppSendUrl(phone, message), '_blank');
     if(!win){
       showToast('Your browser blocked the WhatsApp popup — allow popups for this site, then try again.');
       return;
@@ -4016,7 +4083,7 @@ function sendConsolidatedRenewalReminder(primary, linkedPending, phone){
       absenceNotes+
       deductionNotes;
 
-    const win=window.open('https://api.whatsapp.com/send?phone='+phone+'&text='+encodeURIComponent(message), '_blank');
+    const win=window.open(whatsAppSendUrl(phone, message), '_blank');
     if(!win){
       showToast('Your browser blocked the WhatsApp popup — allow popups for this site, then try again.');
       return;
