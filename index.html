@@ -367,7 +367,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-144</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-145</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -11987,34 +11987,47 @@ function getLessonDurationMinutes(lesson){
 // honor bookings that align with a slot it actually visits.
 function computeEffectiveSlots(baseSlots, bookingsByTime){
   if(!baseSlots || !baseSlots.length) return [];
-  const result=[];
-  let cursor=baseSlots[0];
 
-  // Iterating by the base slot COUNT (not a time cutoff) is what keeps
-  // this predictable: a day with N nominal slots always produces exactly
-  // N effective slots, each one's start time cascaded forward by
-  // whatever ran long before it — never a different count depending on
-  // how the math happens to land near the end of the day.
-  for(let i=0;i<baseSlots.length;i++){
-    // If nothing has pushed the cursor behind where this slot naturally
-    // falls, snap to its own real, intended time rather than blindly
-    // continuing a fixed +45/+60 cascade from the previous one. This is
-    // what makes irregular grids (Friday's first gap is 60 minutes, not
-    // the usual 45, for a lunch/prayer break) work correctly — without
-    // this, every slot after the irregular gap silently drifts away from
-    // its real time, even with zero bookings anywhere that day.
-    if(timeToMinutes(cursor)<timeToMinutes(baseSlots[i])){
-      cursor=baseSlots[i];
-    }
-    const booking=bookingsByTime[cursor];
-    const duration=booking ? (booking.durationMinutes||SESSION_DURATION_MINUTES) : SESSION_DURATION_MINUTES;
-    // heldForRenewal marks a slot kept for a student who hasn't renewed
-    // yet — occupied (so it can't be given away) but flagged so the UI
-    // can show it differently from a confirmed booking.
-    result.push({time:cursor, occupiedBy:booking?booking.label:null, duration, heldForRenewal:!!(booking&&booking.heldForRenewal)});
-    cursor=addSlotMinutes(cursor, duration);
-  }
-  return result;
+  // A session that runs longer than the grid spacing (a 60-minute group
+  // on a 45-minute grid) displaces ONLY what follows it, not the whole
+  // rest of the day. Expressed directly:
+  //
+  //   candidates = every scheduled slot
+  //              + the END time of any session that over-runs its slot
+  //                (a group starting 3:30 ends 4:30, so 4:30 is bookable)
+  //   then drop any candidate that falls INSIDE a session's span
+  //                (4:15 is unusable while the group is still running)
+  //
+  // Everything after the run-over returns to the teacher's normal times,
+  // rather than staying shifted for the rest of the evening.
+  const lastSlotMin=timeToMinutes(baseSlots[baseSlots.length-1]);
+  const candidates=new Set();
+  baseSlots.forEach(t=>candidates.add(timeToMinutes(t)));
+
+  const spans=[];
+  Object.keys(bookingsByTime||{}).forEach(t=>{
+    const b=bookingsByTime[t];
+    const startMin=timeToMinutes(t);
+    const dur=(b && b.durationMinutes) || SESSION_DURATION_MINUTES;
+    spans.push([startMin, startMin+dur]);
+    // The moment this session frees up is itself a usable slot when it
+    // over-runs — that's the 4:30 the admin needs to see.
+    if(dur>SESSION_DURATION_MINUTES && (startMin+dur)<=lastSlotMin) candidates.add(startMin+dur);
+  });
+
+  return [...candidates]
+    .sort((a,b)=>a-b)
+    .filter(t=>t<=lastSlotMin)
+    .filter(t=>!spans.some(([s,e])=>t>s && t<e))
+    .map(min=>{
+      const time=addSlotMinutes('00:00', min);
+      const booking=bookingsByTime[time];
+      const duration=booking ? (booking.durationMinutes||SESSION_DURATION_MINUTES) : SESSION_DURATION_MINUTES;
+      // heldForRenewal marks a slot kept for a student who hasn't renewed
+      // yet — occupied (so it can't be given away) but flagged so the UI
+      // can show it differently from a confirmed booking.
+      return {time, occupiedBy:booking?booking.label:null, duration, heldForRenewal:!!(booking&&booking.heldForRenewal)};
+    });
 }
 
 // Builds the bookingsByTime map for one teacher's actual day — real
