@@ -367,7 +367,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-146</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-147</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -6390,8 +6390,15 @@ function payableSessionCount(lessons){
 // amount calculation and the Print Lessons breakdown so both agree on
 // what counts as "Grp".
 function isPayrollGroupSession(l){
+  // A DOUBLE session also carries isExtendedDuration (it occupies 90
+  // minutes on the calendar), but it is NOT a group class — it's two
+  // ordinary lessons run back to back, and it's already paid as 2
+  // sessions by payableSessionCount. Treating it as a group applied the
+  // 1.5x multiplier instead, so a double session paid 1.5 rather than 2
+  // and was labelled "Grp" on the payslip.
+  if(l.isDoubleSession) return false;
   if(l.isExtendedDuration) return true;
-  const st=(db.students||[]).find(s=>String(s.id)===String(l.studentId) || s.name===l.student);
+  const st=(db.students||[]).find(s=>lessonBelongsToStudent(l, s));
   return !!(st && typeof isGroupPlan==='function' && isGroupPlan(st.plan));
 }
 
