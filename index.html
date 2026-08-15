@@ -367,7 +367,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-145</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-146</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -3020,15 +3020,15 @@ function renderStudents(){
     const weekly=activeStudents.filter(s=>isWeeklyPlan(s.plan)||s.plan==='trial').length;
     const monthly=activeStudents.length-weekly;
     const flagged=activeStudents.filter(s=>getStudentHealthFlags(s).level!=='ok').length;
-    // "Students" counts the paying roster: people on a monthly plan who
-    // have paid for the month being viewed. Trials, weekly one-offs and
-    // unpaid months aren't the recurring student base, so including them
-    // overstated it. Counted as PEOPLE, so someone taking two courses
+    // "Students" = the enrolled roster: everyone on a MONTHLY or WEEKLY
+    // plan, paid or not. Trials are excluded (they haven't enrolled yet),
+    // and archived students are already excluded upstream via
+    // activeStudents. Counted as PEOPLE, so someone taking two courses
     // still counts once.
-    const monthlyPaidPeople=countUniquePeople(
-      activeStudents.filter(s=>isMonthlyPlan(s.plan) && db.payments[s.id+'_'+month])
+    const enrolledPeople=countUniquePeople(
+      activeStudents.filter(s=>isMonthlyPlan(s.plan) || isWeeklyPlan(s.plan))
     );
-    sum.innerHTML=`<div class="metric" title="Monthly-plan students who have paid for this month. Counted per person, so two courses count once."><div class="metric-label">Students</div><div class="metric-value">${monthlyPaidPeople}</div></div>
+    sum.innerHTML=`<div class="metric" title="Enrolled students on a monthly or weekly plan, paid or not. Excludes trials and archived students. Counted per person, so two courses count once."><div class="metric-label">Students</div><div class="metric-value">${enrolledPeople}</div></div>
     <div class="metric green"><div class="metric-label">Paid</div><div class="metric-value green">${paid}</div></div>
     <div class="metric red"><div class="metric-label">Unpaid</div><div class="metric-value red">${unpaid}</div></div>
     <div class="metric amber" title="Finished their last cycle and haven't renewed yet — see the Renewals tab"><div class="metric-label">Pending Renewal</div><div class="metric-value amber">${pendingRenewal}</div></div>
