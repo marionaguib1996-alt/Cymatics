@@ -367,7 +367,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-148</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-149</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -544,8 +544,18 @@ input::placeholder{color:var(--text-dim)}
     <div class="form-grid">
       <div class="form-field"><label for="wl-name">Full name</label><input id="wl-name" placeholder="First and last name"></div>
       <div class="form-field"><label for="wl-phone">Phone</label><input id="wl-phone" placeholder="e.g. 01012345678"></div>
-      <div class="form-field"><label for="wl-instrument">Instrument</label><select id="wl-instrument"></select></div>
-      <div class="form-field"><label for="wl-existing">Existing student? (optional)</label><select id="wl-existing" onchange="onWaitingExistingChange()"><option value="">— Not registered (enquiry) —</option></select></div>
+      <div class="form-field"><label for="wl-instrument">Instrument</label>
+        <input id="wl-instrument" list="wl-instrument-options" placeholder="Type or pick an instrument" autocomplete="off">
+        <datalist id="wl-instrument-options"></datalist>
+        <small style="color:var(--text-muted);display:block;margin-top:2px">Pick a taught instrument, or type a new one someone is asking for.</small>
+      </div>
+      <div class="form-field" style="position:relative"><label for="wl-existing-search">Existing student? (optional)</label>
+        <input id="wl-existing-search" placeholder="Search by name — leave blank for an enquiry" autocomplete="off"
+               oninput="onWaitingStudentSearch()" onfocus="onWaitingStudentSearch()">
+        <input type="hidden" id="wl-existing" value="">
+        <div id="wl-existing-results" style="display:none;position:absolute;z-index:40;left:0;right:0;top:100%;max-height:220px;overflow-y:auto;background:var(--surface);border:1px solid var(--border);border-radius:6px;box-shadow:0 6px 18px rgba(0,0,0,0.4)"></div>
+        <small id="wl-existing-chosen" style="color:var(--text-muted);display:block;margin-top:2px"></small>
+      </div>
     </div>
     <div class="form-field wide" style="margin-top:8px">
       <label>Days they can attend</label>
@@ -12369,39 +12379,82 @@ function setWaitingDayPreset(group){
 
 // Pre-fills name/phone when an existing student is chosen, so a day-change
 // request doesn't need retyping (and can't drift from their real details).
-function onWaitingExistingChange(){
-  const id=document.getElementById('wl-existing')?.value;
-  if(!id) return;
+
+// Type-to-search over existing students. A dropdown becomes unusable once
+// the roster grows past a screenful and can't be scanned by phone number
+// or instrument — searching handles all three.
+function onWaitingStudentSearch(){
+  const box=document.getElementById('wl-existing-search');
+  const results=document.getElementById('wl-existing-results');
+  if(!box || !results) return;
+  const q=String(box.value||'').trim().toLowerCase();
+  if(!q){
+    results.style.display='none';
+    const h=document.getElementById('wl-existing'); if(h) h.value='';
+    const chosen=document.getElementById('wl-existing-chosen'); if(chosen) chosen.textContent='';
+    return;
+  }
+  const matches=(db.students||[])
+    .filter(s=>(s.status||'active')!=='archived')
+    .filter(s=>
+      String(s.name||'').toLowerCase().includes(q) ||
+      String(s.phone1||'').includes(q) ||
+      String(s.phone2||'').includes(q) ||
+      String(s.instrument||'').toLowerCase().includes(q))
+    .slice(0,12);
+  if(!matches.length){
+    results.innerHTML='<div style="padding:8px 10px;color:var(--text-muted);font-size:13px">No student found — leave blank to add as an enquiry.</div>';
+    results.style.display='block';
+    return;
+  }
+  results.innerHTML=matches.map(s=>
+    '<div style="padding:8px 10px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--border)"'
+    +' onmousedown="pickWaitingStudent(\''+escapeAttr(String(s.id))+'\')">'
+    +'<b>'+escapeHtml(s.name||'')+'</b>'
+    +'<span style="color:var(--text-muted)"> · '+escapeHtml(s.instrument||'')
+    +(s.lesson_day?' · '+escapeHtml(s.lesson_day):'')
+    +(s.lessonTime?' '+escapeHtml(formatTime12h(s.lessonTime)):'')+'</span></div>').join('');
+  results.style.display='block';
+}
+
+function pickWaitingStudent(id){
   const s=(db.students||[]).find(x=>String(x.id)===String(id));
   if(!s) return;
+  const h=document.getElementById('wl-existing'); if(h) h.value=String(s.id);
+  const box=document.getElementById('wl-existing-search'); if(box) box.value=s.name||'';
+  const results=document.getElementById('wl-existing-results'); if(results) results.style.display='none';
+  // Pre-fill from the real record so a day-change request can't drift
+  // from the student's actual details.
   const n=document.getElementById('wl-name'); if(n) n.value=s.name||'';
   const ph=document.getElementById('wl-phone'); if(ph) ph.value=s.phone1||s.phone2||'';
   const inst=document.getElementById('wl-instrument'); if(inst && s.instrument) inst.value=s.instrument;
+  const chosen=document.getElementById('wl-existing-chosen');
+  if(chosen) chosen.innerHTML='✓ Linked to <b>'+escapeHtml(s.name||'')+'</b> — <a href="#" onclick="clearWaitingStudent();return false;" style="color:var(--gold)">clear</a>';
+}
+
+function clearWaitingStudent(){
+  const h=document.getElementById('wl-existing'); if(h) h.value='';
+  const box=document.getElementById('wl-existing-search'); if(box) box.value='';
+  const chosen=document.getElementById('wl-existing-chosen'); if(chosen) chosen.textContent='';
+  const results=document.getElementById('wl-existing-results'); if(results) results.style.display='none';
 }
 
 function populateWaitingSelectors(){
-  const instSel=document.getElementById('wl-instrument');
-  if(instSel){
-    // Every instrument any active teacher actually teaches — waiting for
-    // something nobody teaches could never be matched.
-    const taught=new Set();
+  const dl=document.getElementById('wl-instrument-options');
+  if(dl){
+    // SUGGESTIONS, not a fixed menu. Instruments currently taught are
+    // offered for convenience, but the field stays free text so demand
+    // for something nobody teaches yet can still be recorded — that
+    // demand is exactly the signal worth capturing before deciding
+    // whether to hire for it.
+    const known=new Set();
     (db.teacherProfiles||[]).forEach(p=>{
       if((p.status||'active')==='archived') return;
-      (Array.isArray(p.instruments)?p.instruments:(p.instruments?[p.instruments]:[])).forEach(i=>i&&taught.add(i));
+      (Array.isArray(p.instruments)?p.instruments:(p.instruments?[p.instruments]:[])).forEach(i=>i&&known.add(i));
     });
-    const list=[...taught].sort();
-    const prev=instSel.value;
-    instSel.innerHTML=list.map(i=>`<option value="${escapeAttr(i)}">${escapeHtml(i)}</option>`).join('');
-    if(prev && list.includes(prev)) instSel.value=prev;
-  }
-  const exSel=document.getElementById('wl-existing');
-  if(exSel){
-    const prev=exSel.value;
-    const actives=(db.students||[]).filter(s=>(s.status||'active')!=='archived')
-      .sort((a,b)=>(a.name||'').localeCompare(b.name||''));
-    exSel.innerHTML='<option value="">— Not registered (enquiry) —</option>'+
-      actives.map(s=>`<option value="${escapeAttr(String(s.id))}">${escapeHtml(s.name||'')}${s.instrument?' · '+escapeHtml(s.instrument):''}${s.lesson_day?' · '+escapeHtml(s.lesson_day):''}</option>`).join('');
-    if(prev) exSel.value=prev;
+    (db.instruments||[]).forEach(i=>{ if(i&&i.name) known.add(i.name); });
+    (db.waitingList||[]).forEach(e=>{ if(e&&e.instrument) known.add(e.instrument); });
+    dl.innerHTML=[...known].sort().map(i=>`<option value="${escapeAttr(i)}"></option>`).join('');
   }
   renderWaitingDayCheckboxes();
 }
@@ -12495,7 +12548,12 @@ function renderWaitingList(){
     const isStudent=!!e.studentId;
     const phone=(e.phone||'').trim();
     const waitingSince=(typeof timeAgoLabel==='function' && e.addedAt) ? timeAgoLabel(e.addedAt) : '';
-    const matchHtml = matches.length
+    const teachesIt=(db.teacherProfiles||[]).some(p=>
+      (p.status||'active')!=='archived' &&
+      (Array.isArray(p.instruments)?p.instruments:(p.instruments?[p.instruments]:[])).includes(e.instrument));
+    const matchHtml = !teachesIt
+      ? `<div style="margin-top:6px;padding:8px 10px;background:rgba(245,158,11,0.10);border:1px solid rgba(245,158,11,0.28);border-radius:6px;font-size:12px;color:#fbbf24">⚠ No active teacher currently teaches ${escapeHtml(e.instrument||'this')} — this is unmet demand, not a scheduling gap.</div>`
+      : matches.length
       ? `<div style="margin-top:6px;padding:8px 10px;background:rgba(45,212,191,0.10);border:1px solid rgba(45,212,191,0.28);border-radius:6px">
            <div style="font-weight:600;color:#5eead4;font-size:13px">✅ ${matches.length} matching slot${matches.length===1?'':'s'} open now</div>
            <div style="font-size:12px;color:var(--text-muted);margin-top:3px">${matches.slice(0,6).map(m=>escapeHtml(m.day+' '+formatTime12h(m.time)+' · '+m.teacher)).join('<br>')}${matches.length>6?'<br>…and '+(matches.length-6)+' more':''}</div>
