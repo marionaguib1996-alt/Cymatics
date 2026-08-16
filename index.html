@@ -367,7 +367,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-147</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-148</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -389,6 +389,7 @@ input::placeholder{color:var(--text-dim)}
   <button class="nav-btn active" onclick="switchPage('overview',this)">📊 Overview</button>
   <button class="nav-btn" onclick="switchPage('students',this)">🎓 Students</button>
   <button class="nav-btn" onclick="switchPage('renewals',this)">🔁 Renewals</button>
+  <button class="nav-btn" onclick="switchPage('waiting',this)">⏳ Waiting List <span id="waiting-nav-badge" style="display:none;background:var(--gold);color:#1a1916;border-radius:10px;padding:1px 6px;font-size:11px;font-weight:700;margin-left:4px"></span></button>
   <button class="nav-btn" onclick="switchPage('teachers',this)">💰 Payroll</button>
   <button class="nav-btn" onclick="switchPage('profiles',this)">👨‍🏫 Teacher Management</button>
   <button class="nav-btn" onclick="switchPage('lessons',this)">📅 Lessons</button>
@@ -536,6 +537,36 @@ input::placeholder{color:var(--text-dim)}
 </div>
 
 <!-- RENEWALS -->
+<div id="page-waiting" class="page">
+  <div class="card">
+    <div class="card-title">Add to Waiting List</div>
+    <div class="teacher-row-meta" style="margin-bottom:12px">For anyone waiting on a slot — an existing student who wants to change day, or an enquirer who isn't registered yet. Matching is by INSTRUMENT and DAY, across every teacher who teaches it.</div>
+    <div class="form-grid">
+      <div class="form-field"><label for="wl-name">Full name</label><input id="wl-name" placeholder="First and last name"></div>
+      <div class="form-field"><label for="wl-phone">Phone</label><input id="wl-phone" placeholder="e.g. 01012345678"></div>
+      <div class="form-field"><label for="wl-instrument">Instrument</label><select id="wl-instrument"></select></div>
+      <div class="form-field"><label for="wl-existing">Existing student? (optional)</label><select id="wl-existing" onchange="onWaitingExistingChange()"><option value="">— Not registered (enquiry) —</option></select></div>
+    </div>
+    <div class="form-field wide" style="margin-top:8px">
+      <label>Days they can attend</label>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin:6px 0">
+        <button type="button" class="btn btn-sm" onclick="setWaitingDayPreset('weekdays')">Weekdays</button>
+        <button type="button" class="btn btn-sm" onclick="setWaitingDayPreset('weekend')">Weekend</button>
+        <button type="button" class="btn btn-sm" onclick="setWaitingDayPreset('any')">Any day</button>
+        <button type="button" class="btn btn-sm" onclick="setWaitingDayPreset('none')">Clear</button>
+      </div>
+      <div id="wl-days" style="display:flex;gap:10px;flex-wrap:wrap"></div>
+    </div>
+    <div class="form-field wide"><label for="wl-notes">Notes (optional)</label><input id="wl-notes" placeholder="e.g. prefers evenings, can start immediately"></div>
+    <button class="btn btn-gold" style="margin-top:10px" onclick="addToWaitingList()">+ Add to waiting list</button>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Waiting List</div>
+    <div id="waiting-list-body"></div>
+  </div>
+</div>
+
 <div id="page-renewals" class="page">
   <div class="card">
     <div class="card-title">Renewals Due</div>
@@ -2015,7 +2046,7 @@ sel.value=(MONTHS.find(m=>m.key===currentKey)||MONTHS[0]).key;
 function currentMonth(){return document.getElementById('global-month').value;}
 
 // State
-let db = JSON.parse(localStorage.getItem('musicacademy_db')||'{"students":[],"payments":{},"expenses":[],"lessons":[],"lessonLogs":[]}'); db.lessons=db.lessons||[]; db.lessonLogs=db.lessonLogs||[]; db.instruments=db.instruments||[]; db.teacherProfiles=db.teacherProfiles||[]; db.payrollPaid=db.payrollPaid||{}; db.practiceSessions=db.practiceSessions||[]; db.paymentMethods=db.paymentMethods||{}; db.resources=db.resources||[]; db.refunds=db.refunds||[]; db.otherRevenue=db.otherRevenue||[]; db.wishlists=db.wishlists||{}; db.remindersSent=db.remindersSent||{}; db.teacherAbsences=db.teacherAbsences||[]; db.renewalsDismissed=db.renewalsDismissed||{};
+let db = JSON.parse(localStorage.getItem('musicacademy_db')||'{"students":[],"payments":{},"expenses":[],"lessons":[],"lessonLogs":[]}'); db.lessons=db.lessons||[]; db.lessonLogs=db.lessonLogs||[]; db.instruments=db.instruments||[]; db.teacherProfiles=db.teacherProfiles||[]; db.payrollPaid=db.payrollPaid||{}; db.practiceSessions=db.practiceSessions||[]; db.paymentMethods=db.paymentMethods||{}; db.resources=db.resources||[]; db.refunds=db.refunds||[]; db.otherRevenue=db.otherRevenue||[]; db.wishlists=db.wishlists||{}; db.remindersSent=db.remindersSent||{}; db.teacherAbsences=db.teacherAbsences||[]; db.renewalsDismissed=db.renewalsDismissed||{}; db.waitingList=db.waitingList||[];
 function save(){try{localStorage.setItem('musicacademy_db',JSON.stringify(db));}catch(e){console.error('save() failed:',e);}}
 
 // Updates the "Last Sync" label on the Cloud tab. Previously this was
@@ -2727,6 +2758,11 @@ function renderAllAdminViews(){
   if(typeof renderProfiles==='function') renderProfiles();
   if(typeof populateTeacherDropdowns==='function') populateTeacherDropdowns();
   if(typeof renderDatabase==='function') renderDatabase();
+  // Recompute the waiting-list alert whenever the admin views refresh —
+  // a slot freeing up (a student archived, a renewal lapsing) should
+  // surface straight away rather than waiting for a page visit.
+  if(typeof updateWaitingBadge==='function') updateWaitingBadge();
+  if(typeof renderWaitingList==='function' && document.getElementById('page-waiting')?.classList.contains('active')) renderWaitingList();
 }
 
 
@@ -6310,6 +6346,10 @@ function switchPage(page, btn){
   if(page==='renewals' && typeof renderRenewalsDue==='function') renderRenewalsDue();
   if(page==='renewals' && typeof renderWeeklyRenewals==='function') renderWeeklyRenewals();
   if(page==='renewals' && typeof renderTrialFollowUp==='function') renderTrialFollowUp();
+  if(page==='waiting'){
+    if(typeof populateWaitingSelectors==='function') populateWaitingSelectors();
+    if(typeof renderWaitingList==='function') renderWaitingList();
+  }
   if(page==='database')renderDatabase(); if(page==='cloud'){}
   if(page==='notes' && typeof renderNotesPage==='function')renderNotesPage();
 }
@@ -12288,6 +12328,207 @@ function pendingRenewalStudentForSlot(teacherName, dayName, timeStr){
     s.teacher===teacherName && s.lesson_day===dayName && s.lessonTime===timeStr &&
     studentHasPendingRenewal(s)
   ) || null;
+}
+
+// ── WAITING LIST ──────────────────────────────────────────────────────
+// People waiting for a slot on a given INSTRUMENT and set of DAYS. Two
+// kinds of entry share one list, because the need is identical:
+//   * an enquirer who isn't registered yet (name + phone only)
+//   * an existing student who wants to move day
+// Matching is across EVERY teacher who teaches that instrument, per
+// Mario's rule — the student cares about the instrument and the day, not
+// which teacher delivers it.
+
+const WEEKDAY_GROUP={
+  weekdays:['Sunday','Monday','Tuesday','Wednesday','Thursday'],
+  weekend:['Friday','Saturday'],
+  any:null // null = every day
+};
+
+function waitingDaysFor(entry){
+  if(!entry) return [];
+  if(entry.dayGroup==='any') return WEEKDAY_NAMES.slice();
+  if(entry.dayGroup && WEEKDAY_GROUP[entry.dayGroup]) return WEEKDAY_GROUP[entry.dayGroup].slice();
+  return Array.isArray(entry.days)?entry.days.slice():[];
+}
+
+function renderWaitingDayCheckboxes(){
+  const host=document.getElementById('wl-days');
+  if(!host) return;
+  host.innerHTML=WEEKDAY_NAMES.map(d=>
+    `<label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:normal;text-transform:none;letter-spacing:normal;font-size:13px;color:var(--text)">
+       <input type="checkbox" class="wl-day-check" value="${escapeAttr(d)}" style="width:auto"> ${escapeHtml(d)}
+     </label>`).join('');
+}
+
+function setWaitingDayPreset(group){
+  const boxes=[...document.querySelectorAll('.wl-day-check')];
+  const set=(group==='none')?[]:(group==='any'?WEEKDAY_NAMES:(WEEKDAY_GROUP[group]||[]));
+  boxes.forEach(b=>{ b.checked=set.includes(b.value); });
+}
+
+// Pre-fills name/phone when an existing student is chosen, so a day-change
+// request doesn't need retyping (and can't drift from their real details).
+function onWaitingExistingChange(){
+  const id=document.getElementById('wl-existing')?.value;
+  if(!id) return;
+  const s=(db.students||[]).find(x=>String(x.id)===String(id));
+  if(!s) return;
+  const n=document.getElementById('wl-name'); if(n) n.value=s.name||'';
+  const ph=document.getElementById('wl-phone'); if(ph) ph.value=s.phone1||s.phone2||'';
+  const inst=document.getElementById('wl-instrument'); if(inst && s.instrument) inst.value=s.instrument;
+}
+
+function populateWaitingSelectors(){
+  const instSel=document.getElementById('wl-instrument');
+  if(instSel){
+    // Every instrument any active teacher actually teaches — waiting for
+    // something nobody teaches could never be matched.
+    const taught=new Set();
+    (db.teacherProfiles||[]).forEach(p=>{
+      if((p.status||'active')==='archived') return;
+      (Array.isArray(p.instruments)?p.instruments:(p.instruments?[p.instruments]:[])).forEach(i=>i&&taught.add(i));
+    });
+    const list=[...taught].sort();
+    const prev=instSel.value;
+    instSel.innerHTML=list.map(i=>`<option value="${escapeAttr(i)}">${escapeHtml(i)}</option>`).join('');
+    if(prev && list.includes(prev)) instSel.value=prev;
+  }
+  const exSel=document.getElementById('wl-existing');
+  if(exSel){
+    const prev=exSel.value;
+    const actives=(db.students||[]).filter(s=>(s.status||'active')!=='archived')
+      .sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+    exSel.innerHTML='<option value="">— Not registered (enquiry) —</option>'+
+      actives.map(s=>`<option value="${escapeAttr(String(s.id))}">${escapeHtml(s.name||'')}${s.instrument?' · '+escapeHtml(s.instrument):''}${s.lesson_day?' · '+escapeHtml(s.lesson_day):''}</option>`).join('');
+    if(prev) exSel.value=prev;
+  }
+  renderWaitingDayCheckboxes();
+}
+
+function addToWaitingList(){
+  const name=(document.getElementById('wl-name')?.value||'').trim();
+  const phone=(document.getElementById('wl-phone')?.value||'').trim();
+  const instrument=document.getElementById('wl-instrument')?.value||'';
+  const existingId=document.getElementById('wl-existing')?.value||'';
+  const days=[...document.querySelectorAll('.wl-day-check:checked')].map(b=>b.value);
+  const notes=(document.getElementById('wl-notes')?.value||'').trim();
+
+  if(!name){ showToast('Enter the full name.'); return; }
+  if(!phone && !existingId){ showToast('Enter a phone number so they can be contacted.'); return; }
+  if(!instrument){ showToast('Choose an instrument.'); return; }
+  if(!days.length){ showToast('Choose at least one day they can attend.'); return; }
+
+  db.waitingList=db.waitingList||[];
+  db.waitingList.push({
+    id:(crypto.randomUUID?crypto.randomUUID():String(Date.now())),
+    name, phone,
+    studentId: existingId || null,   // set = existing student wanting a change
+    instrument,
+    days,
+    dayGroup: days.length===WEEKDAY_NAMES.length ? 'any' : null,
+    notes,
+    addedAt:new Date().toISOString(),
+    status:'waiting'
+  });
+  save();
+  ['wl-name','wl-phone','wl-notes'].forEach(id=>{ const e=document.getElementById(id); if(e) e.value=''; });
+  const ex=document.getElementById('wl-existing'); if(ex) ex.value='';
+  setWaitingDayPreset('none');
+  renderWaitingList();
+  updateWaitingBadge();
+  showToast(name+' added to the waiting list');
+}
+
+function removeFromWaitingList(id){
+  const e=(db.waitingList||[]).find(x=>String(x.id)===String(id));
+  if(!e) return;
+  if(!confirm('Remove '+(e.name||'this person')+' from the waiting list?')) return;
+  db.waitingList=(db.waitingList||[]).filter(x=>String(x.id)!==String(id));
+  save(); renderWaitingList(); updateWaitingBadge();
+  showToast('Removed from waiting list');
+}
+
+// Free slots matching one waiting entry, across ALL teachers of that
+// instrument. Reuses the same availability engine the Free Slots view
+// uses, so the two can never disagree about what's actually open.
+function waitingMatchesFor(entry){
+  const wantDays=waitingDaysFor(entry);
+  const teachers=(db.teacherProfiles||[]).filter(p=>
+    (p.status||'active')!=='archived' &&
+    (Array.isArray(p.instruments)?p.instruments:(p.instruments?[p.instruments]:[])).includes(entry.instrument)
+  );
+  const out=[];
+  const todayKey=new Date().toISOString().slice(0,10);
+  const weekStart=(typeof getFridayWeekStart==='function') ? getFridayWeekStart(todayKey) : todayKey;
+  teachers.forEach(t=>{
+    wantDays.forEach(dayName=>{
+      if(!(((t.timeSlots||{})[dayName])||[]).length) return;
+      const dayIdx=WEEKDAY_NAMES.indexOf(dayName);
+      const offsetFromFriday=(dayIdx-5+7)%7;
+      const dateThisWeek=(typeof addDaysToDateStringLocal==='function')
+        ? addDaysToDateStringLocal(weekStart, offsetFromFriday) : null;
+      // An existing student's own slot isn't a "free slot" for them —
+      // excluding it stops a day-change request matching where they
+      // already are.
+      const slots=getEffectiveTeacherDaySlots(t.name, dayName, entry.studentId||null, dateThisWeek);
+      slots.filter(s=>!s.occupiedBy).forEach(s=>{
+        out.push({teacher:t.name, day:dayName, time:s.time});
+      });
+    });
+  });
+  return out;
+}
+
+function renderWaitingList(){
+  const host=document.getElementById('waiting-list-body');
+  if(!host) return;
+  const list=(db.waitingList||[]).slice().sort((a,b)=>String(a.addedAt).localeCompare(String(b.addedAt)));
+  if(!list.length){
+    host.innerHTML='<div class="empty"><div class="empty-icon">⏳</div><div class="empty-text">Nobody is waiting right now.</div></div>';
+    return;
+  }
+  host.innerHTML=list.map(e=>{
+    const matches=waitingMatchesFor(e);
+    const dayLabel=(e.dayGroup==='any' || waitingDaysFor(e).length===WEEKDAY_NAMES.length)
+      ? 'Any day' : waitingDaysFor(e).join(', ');
+    const isStudent=!!e.studentId;
+    const phone=(e.phone||'').trim();
+    const waitingSince=(typeof timeAgoLabel==='function' && e.addedAt) ? timeAgoLabel(e.addedAt) : '';
+    const matchHtml = matches.length
+      ? `<div style="margin-top:6px;padding:8px 10px;background:rgba(45,212,191,0.10);border:1px solid rgba(45,212,191,0.28);border-radius:6px">
+           <div style="font-weight:600;color:#5eead4;font-size:13px">✅ ${matches.length} matching slot${matches.length===1?'':'s'} open now</div>
+           <div style="font-size:12px;color:var(--text-muted);margin-top:3px">${matches.slice(0,6).map(m=>escapeHtml(m.day+' '+formatTime12h(m.time)+' · '+m.teacher)).join('<br>')}${matches.length>6?'<br>…and '+(matches.length-6)+' more':''}</div>
+         </div>`
+      : `<div style="margin-top:6px;font-size:12px;color:var(--text-muted)">No matching slot free yet.</div>`;
+    const waMsg=encodeURIComponent('Hi '+(e.name||'')+'! Good news — a '+(e.instrument||'')+' slot has opened up at Cymatics'+(matches.length?' on '+matches[0].day+' at '+formatTime12h(matches[0].time):'')+'. Would you like it?');
+    const contactBtn = (phone && matches.length)
+      ? `<a class="btn btn-sm btn-gold" href="https://web.whatsapp.com/send?phone=${escapeAttr(toWhatsAppNumber(phone))}&text=${waMsg}" target="_blank" rel="noopener">💬 Offer slot</a>`
+      : '';
+    return `<div class="unpaid-item" style="align-items:flex-start">
+      <div style="min-width:0">
+        <div class="unpaid-name">${escapeHtml(e.name||'')}
+          ${isStudent?'<span class="badge badge-purple" style="font-size:10px" title="Existing student wanting to change day">🔄 Day change</span>':'<span class="badge badge-blue" style="font-size:10px" title="Not registered yet">✉️ Enquiry</span>'}
+        </div>
+        <div class="unpaid-meta">${escapeHtml(e.instrument||'')} · ${escapeHtml(dayLabel)}${phone?' · '+escapeHtml(phone):''}${waitingSince?' · waiting '+escapeHtml(waitingSince):''}</div>
+        ${e.notes?`<div class="teacher-row-meta" style="margin-top:2px">${escapeHtml(e.notes)}</div>`:''}
+        ${matchHtml}
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
+        ${contactBtn}
+        <button class="btn btn-sm" onclick="removeFromWaitingList('${escapeAttr(String(e.id))}')" title="Remove from the waiting list">✕</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// Nav badge — how many waiting people currently have a slot available.
+function updateWaitingBadge(){
+  const badge=document.getElementById('waiting-nav-badge');
+  if(!badge) return;
+  const ready=(db.waitingList||[]).filter(e=>waitingMatchesFor(e).length>0).length;
+  if(ready>0){ badge.textContent=ready; badge.style.display='inline-block'; }
+  else badge.style.display='none';
 }
 
 function renderFreeSlotsOverview(){
