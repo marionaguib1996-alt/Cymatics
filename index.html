@@ -367,7 +367,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-149</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.08.17-150</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1458,7 +1458,10 @@ function isMonthlyPlan(plan){
 // applying the academy's crediting rules in priority order:
 //
 //   1. Custom Pay  — a one-time flat total for THIS renewal, overrides all.
-//   2. Custom Amount — a standing PER-LESSON rate (a discount), x sessions.
+//   2. Custom Amount — a flat MONTHLY fee (a discount), applied as-is
+//      regardless of session count. (It was once a per-lesson rate × sessions;
+//      the implementation below is flat monthly, with teacher-absent credit
+//      still deducted at the standard per-session rate.)
 //   3. Standard per-lesson rate for the plan (weekly 600, group 750,
 //      weekly-group 850, otherwise 500).
 //
@@ -3535,6 +3538,17 @@ function renderOtherRevenue(){
 }
 
 // --- OVERVIEW ---
+// NOT DEAD CODE. This declaration is wrapped several times below by a chain
+// of `renderOverview = function(){ oldRenderOverview(); ... }` decorators
+// (search "renderOverview=function"). The last reassignment is what callers
+// invoke, but every decorator calls the previous one first, so THIS base
+// still runs on every render — it is the sole author of the #profit-banner
+// and #income-summary figures, plus the initial #metrics block. Its
+// outstanding/collected gates (archived/frozen excluded, finished/pending
+// skipped, consumed-this-month required) are the CANONICAL revenue rule; the
+// final decorator's #metrics loop was aligned to match it in v150. Editing
+// this function changes the profit banner and income summary but NOT the
+// five #metrics tiles or the academy KPIs — those are owned by the decorators.
 function renderOverview(){
   const month=currentMonth();
   const monthStudents=db.students.filter(s=>(s.status||'active')!=='archived' && !s.frozen);
@@ -8374,7 +8388,7 @@ function restoreOtherRevenue(id){
    oldRenderOverview();
 
    const totalStudents=countUniquePeople(db.students||[]);
-   const activeStudents=countUniquePeople((db.students||[]).filter(s=>(s.status||'active')!=='archived'));
+   const activeStudents=countUniquePeople((db.students||[]).filter(s=>(s.status||'active')!=='archived' && !s.frozen));
    const inactiveStudents=countUniquePeople((db.students||[]).filter(s=>s.status==='archived'));
    const activeTeachers=(db.teacherProfiles||[]).filter(t=>(t.status||'active')!=='archived').length;
    const lessonsLogged=(db.lessons||[]).filter(l=>l.month===currentMonth() && (l.status_record||'active')!=='archived').length;
@@ -8599,13 +8613,34 @@ window.addEventListener('load', function(){
 
    const month=currentMonth();
    const totalStudents=countUniquePeople(db.students||[]);
-   const activeStudents=countUniquePeople((db.students||[]).filter(s=>(s.status||'active')!=='archived'));
+   const activeStudents=countUniquePeople((db.students||[]).filter(s=>(s.status||'active')!=='archived' && !s.frozen));
    const inactiveStudents=countUniquePeople((db.students||[]).filter(s=>(s.status||'active')==='archived'));
    const lessonsLogged=(db.lessons||[]).filter(l=>l.month===month && (l.status_record||'active')!=='archived').length;
 
+   // Outstanding / collected MUST use the same gates as the base
+   // renderOverview above (which feeds #income-summary and #profit-banner),
+   // or this metric and that line report different numbers for identical
+   // data. The gates, mirrored from the base: exclude archived/frozen
+   // students; skip an unpaid student who has finished the month or is
+   // pending renewal; skip an unpaid student with no consumed (attended /
+   // absent_paid) session yet this month; weekly unpaid adds nothing (it's
+   // settled per session). v150 fix — this loop previously iterated every
+   // student with no gates, so it counted archived students and not-yet-
+   // served students as owing, inflating both Outstanding Fees and the
+   // Total liabilities figure in the profit banner.
    let collected=0,outstanding=0;
-   (db.students||[]).forEach(s=>{
+   (db.students||[]).filter(s=>(s.status||'active')!=='archived' && !s.frozen).forEach(s=>{
       const paid=!!db.payments[s.id+'_'+month];
+      if(!paid && (studentFinishedMonth(s, month) || (typeof studentHasPendingRenewal==='function' && studentHasPendingRenewal(s)))) return;
+      if(!paid){
+        const hasConsumedThisMonth=(db.lessons||[]).some(l=>
+          lessonBelongsToStudent(l, s) &&
+          (l.status_record||'active')!=='archived' &&
+          String(l.date||'').slice(0,7)===month &&
+          (l.status==='attended' || l.status==='absent_paid')
+        );
+        if(!hasConsumedThisMonth) return;
+      }
       const amt=getStudentPlanAmount(s);
       if(!isWeeklyPlan(s.plan)){ if(paid) collected+=amt; else outstanding+=amt; }
       else if(paid){ collected+=amt; }
