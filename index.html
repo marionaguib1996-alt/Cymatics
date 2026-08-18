@@ -367,7 +367,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.08.17-150</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-152</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -6935,6 +6935,42 @@ async function _autoLoadFromCloudImpl(){
      }
    }catch(absErr){ /* silent — non-critical */ }
 
+   // Waiting list — its own try/catch like the standalone tables above, so a
+   // not-yet-created table can't fail the whole load. Merge by identity
+   // (entry_key ↔ id), never by name. Cloud is canonical, but any LOCAL
+   // entry the cloud doesn't have yet (just added, upload still in flight) is
+   // preserved and re-queued for upload so a download race can't drop it.
+   try{
+     const {data:wlRows,error:eWl}=await client.from('waiting_list').select('*');
+     if(eWl){ /* table may not exist yet — silent */ }
+     else if(wlRows){
+       const mapRow=r=>({
+         id: r.entry_key || String(r.id),
+         name: r.name||'',
+         phone: r.phone||'',
+         studentId: (r.student_id!=null && r.student_id!=='') ? r.student_id : null,
+         instrument: r.instrument||'',
+         days: Array.isArray(r.days) ? r.days : [],
+         dayGroup: r.day_group||null,
+         notes: r.notes||'',
+         addedAt: r.added_at||'',
+         status: r.status||'waiting'
+       });
+       const merged=wlRows.map(mapRow);
+       const seen=new Set(merged.map(e=>String(e.id)));
+       (db.waitingList||[]).forEach(e=>{
+         if(e && !seen.has(String(e.id))){
+           merged.push(e);
+           if(typeof syncWaitingEntryToSupabase==='function'){ try{ syncWaitingEntryToSupabase(e); }catch(_){} }
+         }
+       });
+       db.waitingList=merged;
+       save();
+       if(typeof updateWaitingBadge==='function') updateWaitingBadge();
+       if(document.getElementById('page-waiting')?.classList.contains('active') && typeof renderWaitingList==='function') renderWaitingList();
+     }
+   }catch(wlErr){ /* silent — non-critical */ }
+
    // Reminder-sent records — small but worth syncing: without them the
    // "✓ Reminded" badge is invisible on other devices, making it easy to
    // message the same student twice. Own try/catch like the tables above.
@@ -7451,6 +7487,16 @@ async function addStudentToSupabase(student){
               delete map[k];
             }
           });
+        });
+        // Waiting-list entries linked to this student carry its id in
+        // studentId; re-point them too, or a change request added against the
+        // temporary id is orphaned the moment the real id arrives. Re-upload
+        // each re-pointed entry so the cloud row converges to the real id.
+        (db.waitingList||[]).forEach(e=>{
+          if(e && String(e.studentId)===String(oldId)){
+            e.studentId=newId;
+            if(typeof syncWaitingEntryToSupabase==='function'){ try{ syncWaitingEntryToSupabase(e); }catch(_){} }
+          }
         });
       }
       if(data[0].public_id) student.public_id=data[0].public_id;
@@ -8389,6 +8435,7 @@ function restoreOtherRevenue(id){
 
    const totalStudents=countUniquePeople(db.students||[]);
    const activeStudents=countUniquePeople((db.students||[]).filter(s=>(s.status||'active')!=='archived' && !s.frozen));
+   const frozenStudents=countUniquePeople((db.students||[]).filter(s=>(s.status||'active')!=='archived' && s.frozen));
    const inactiveStudents=countUniquePeople((db.students||[]).filter(s=>s.status==='archived'));
    const activeTeachers=(db.teacherProfiles||[]).filter(t=>(t.status||'active')!=='archived').length;
    const lessonsLogged=(db.lessons||[]).filter(l=>l.month===currentMonth() && (l.status_record||'active')!=='archived').length;
@@ -8399,6 +8446,7 @@ function restoreOtherRevenue(id){
    el.innerHTML=`
    <div class="metric"><div class="metric-label">Total Students</div><div class="metric-value">${totalStudents}</div></div>
    <div class="metric green"><div class="metric-label">Active Students</div><div class="metric-value green">${activeStudents}</div></div>
+   <div class="metric amber"><div class="metric-label">Frozen</div><div class="metric-value amber">${frozenStudents}</div></div>
    <div class="metric red"><div class="metric-label">Inactive Students</div><div class="metric-value red">${inactiveStudents}</div></div>
    <div class="metric amber"><div class="metric-label">Active Teachers</div><div class="metric-value amber">${activeTeachers}</div></div>
    <div class="metric"><div class="metric-label">Lessons Logged</div><div class="metric-value">${lessonsLogged}</div></div>`;
@@ -8614,6 +8662,7 @@ window.addEventListener('load', function(){
    const month=currentMonth();
    const totalStudents=countUniquePeople(db.students||[]);
    const activeStudents=countUniquePeople((db.students||[]).filter(s=>(s.status||'active')!=='archived' && !s.frozen));
+   const frozenStudents=countUniquePeople((db.students||[]).filter(s=>(s.status||'active')!=='archived' && s.frozen));
    const inactiveStudents=countUniquePeople((db.students||[]).filter(s=>(s.status||'active')==='archived'));
    const lessonsLogged=(db.lessons||[]).filter(l=>l.month===month && (l.status_record||'active')!=='archived').length;
 
@@ -8665,6 +8714,7 @@ window.addEventListener('load', function(){
    if(academy) academy.innerHTML=`
    <div class="metric"><div class="metric-label">Total Students</div><div class="metric-value">${totalStudents}</div></div>
    <div class="metric green"><div class="metric-label">Active Students</div><div class="metric-value green">${activeStudents}</div></div>
+   <div class="metric amber"><div class="metric-label">Frozen</div><div class="metric-value amber">${frozenStudents}</div></div>
    <div class="metric red"><div class="metric-label">Inactive Students</div><div class="metric-value red">${inactiveStudents}</div></div>
    <div class="metric"><div class="metric-label">Lessons This Month</div><div class="metric-value">${lessonsLogged}</div></div>`;
 
@@ -12508,7 +12558,7 @@ function addToWaitingList(){
   if(!days.length){ showToast('Choose at least one day they can attend.'); return; }
 
   db.waitingList=db.waitingList||[];
-  db.waitingList.push({
+  const wlEntry={
     id:(crypto.randomUUID?crypto.randomUUID():String(Date.now())),
     name, phone,
     studentId: existingId || null,   // set = existing student wanting a change
@@ -12518,8 +12568,10 @@ function addToWaitingList(){
     notes,
     addedAt:new Date().toISOString(),
     status:'waiting'
-  });
+  };
+  db.waitingList.push(wlEntry);
   save();
+  if(typeof syncWaitingEntryToSupabase==='function') syncWaitingEntryToSupabase(wlEntry);
   ['wl-name','wl-phone','wl-notes'].forEach(id=>{ const e=document.getElementById(id); if(e) e.value=''; });
   const ex=document.getElementById('wl-existing'); if(ex) ex.value='';
   setWaitingDayPreset('none');
@@ -12534,6 +12586,7 @@ function removeFromWaitingList(id){
   if(!confirm('Remove '+(e.name||'this person')+' from the waiting list?')) return;
   db.waitingList=(db.waitingList||[]).filter(x=>String(x.id)!==String(id));
   save(); renderWaitingList(); updateWaitingBadge();
+  if(typeof syncWaitingEntryDeleteToSupabase==='function') syncWaitingEntryDeleteToSupabase(id);
   showToast('Removed from waiting list');
 }
 
@@ -14412,6 +14465,40 @@ async function syncTeacherAbsenceDeleteToSupabase(absenceId){
       .delete().eq('absence_key', String(absenceId));
     if(error) console.warn('Teacher absence delete sync failed:', error.message);
   }catch(err){ console.warn('Teacher absence delete sync failed:', err.message); }
+}
+
+// Waiting-list cloud sync. Identity is the entry's own UUID (entry_key) —
+// NEVER the name. The optional studentId link is stored as student_id and,
+// once the student's temporary Date.now() id has been reconciled to its
+// Supabase serial id (see addStudentToSupabase), is stable across devices.
+async function syncWaitingEntryToSupabase(entry){
+  try{
+    if(!window.supabaseClientV1 || !entry || entry.id==null) return;
+    const payload={
+      entry_key: String(entry.id),
+      name: entry.name||'',
+      phone: entry.phone||'',
+      student_id: (entry.studentId!=null && entry.studentId!=='') ? String(entry.studentId) : null,
+      instrument: entry.instrument||'',
+      days: Array.isArray(entry.days) ? entry.days : [],
+      day_group: entry.dayGroup||null,
+      notes: entry.notes||'',
+      added_at: entry.addedAt||new Date().toISOString(),
+      status: entry.status||'waiting'
+    };
+    const {error}=await window.supabaseClientV1.from('waiting_list')
+      .upsert(payload, {onConflict:'entry_key'});
+    if(error) console.warn('Waiting-list sync failed:', error.message);
+  }catch(err){ console.warn('Waiting-list sync failed:', err.message); }
+}
+
+async function syncWaitingEntryDeleteToSupabase(entryId){
+  try{
+    if(!window.supabaseClientV1 || entryId==null) return;
+    const {error}=await window.supabaseClientV1.from('waiting_list')
+      .delete().eq('entry_key', String(entryId));
+    if(error) console.warn('Waiting-list delete sync failed:', error.message);
+  }catch(err){ console.warn('Waiting-list delete sync failed:', err.message); }
 }
 
 async function syncWishlistToSupabase(student){
