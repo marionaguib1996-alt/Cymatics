@@ -367,7 +367,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-152</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-153</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -6937,13 +6937,21 @@ async function _autoLoadFromCloudImpl(){
 
    // Waiting list — its own try/catch like the standalone tables above, so a
    // not-yet-created table can't fail the whole load. Merge by identity
-   // (entry_key ↔ id), never by name. Cloud is canonical, but any LOCAL
-   // entry the cloud doesn't have yet (just added, upload still in flight) is
-   // preserved and re-queued for upload so a download race can't drop it.
+   // (entry_key ↔ id), never by name.
+   //
+   // Soft-delete aware: a removed entry is written to the cloud as a TOMBSTONE
+   // (status='deleted') rather than hard-deleted, because a hard delete leaves
+   // the row merely absent — and another device that still holds it locally
+   // would treat it as "new", preserve it, and re-upload it, resurrecting a
+   // deleted entry. So here: active cloud rows populate the list; tombstones
+   // remove any local copy (the delete propagated) and are NOT shown; only a
+   // local entry the cloud has never seen at all (neither active nor
+   // tombstoned) is genuinely new — preserve it and re-queue it for upload.
    try{
      const {data:wlRows,error:eWl}=await client.from('waiting_list').select('*');
-     if(eWl){ /* table may not exist yet — silent */ }
+     if(eWl){ window._waitingListSyncState='error'; /* table may not exist yet */ }
      else if(wlRows){
+       window._waitingListSyncState='ok';
        const mapRow=r=>({
          id: r.entry_key || String(r.id),
          name: r.name||'',
@@ -6956,20 +6964,27 @@ async function _autoLoadFromCloudImpl(){
          addedAt: r.added_at||'',
          status: r.status||'waiting'
        });
-       const merged=wlRows.map(mapRow);
+       const activeRows=wlRows.filter(r=>(r.status||'waiting')!=='deleted');
+       const tombstonedKeys=new Set(wlRows.filter(r=>(r.status||'')==='deleted').map(r=>String(r.entry_key||r.id)));
+       const merged=activeRows.map(mapRow);
        const seen=new Set(merged.map(e=>String(e.id)));
        (db.waitingList||[]).forEach(e=>{
-         if(e && !seen.has(String(e.id))){
-           merged.push(e);
-           if(typeof syncWaitingEntryToSupabase==='function'){ try{ syncWaitingEntryToSupabase(e); }catch(_){} }
-         }
+         if(!e) return;
+         const k=String(e.id);
+         if(seen.has(k)) return;            // already represented by an active cloud row
+         if(tombstonedKeys.has(k)) return;  // deleted elsewhere — drop it, never re-upload
+         merged.push(e);                    // genuinely new local entry — keep + upload
+         if(typeof syncWaitingEntryToSupabase==='function'){ try{ syncWaitingEntryToSupabase(e); }catch(_){} }
        });
        db.waitingList=merged;
        save();
        if(typeof updateWaitingBadge==='function') updateWaitingBadge();
        if(document.getElementById('page-waiting')?.classList.contains('active') && typeof renderWaitingList==='function') renderWaitingList();
      }
-   }catch(wlErr){ /* silent — non-critical */ }
+   }catch(wlErr){ window._waitingListSyncState='error'; /* silent — non-critical */ }
+
+   // Nudge stale cached clients to refresh (safety net; silent if unavailable).
+   if(typeof checkVersionFreshness==='function'){ try{ await checkVersionFreshness(); }catch(_){} }
 
    // Reminder-sent records — small but worth syncing: without them the
    // "✓ Reminded" badge is invisible on other devices, making it easy to
@@ -12584,9 +12599,14 @@ function removeFromWaitingList(id){
   const e=(db.waitingList||[]).find(x=>String(x.id)===String(id));
   if(!e) return;
   if(!confirm('Remove '+(e.name||'this person')+' from the waiting list?')) return;
+  // Soft-delete: write a tombstone (status='deleted') to the cloud rather than
+  // a hard delete. A hard delete leaves the row absent, and another device
+  // still holding it locally would re-upload it on its next download,
+  // resurrecting a removed entry. The tombstone propagates the removal.
+  const tombstone=Object.assign({}, e, {status:'deleted'});
   db.waitingList=(db.waitingList||[]).filter(x=>String(x.id)!==String(id));
   save(); renderWaitingList(); updateWaitingBadge();
-  if(typeof syncWaitingEntryDeleteToSupabase==='function') syncWaitingEntryDeleteToSupabase(id);
+  if(typeof syncWaitingEntryToSupabase==='function') syncWaitingEntryToSupabase(tombstone);
   showToast('Removed from waiting list');
 }
 
@@ -12621,15 +12641,28 @@ function waitingMatchesFor(entry){
   return out;
 }
 
+// A visible notice when the waiting list is NOT syncing to the cloud, so a
+// silent failure (offline, not signed in, or the table never created) can't
+// pass unnoticed — changes made in that state live only on this device.
+function waitingSyncBannerHtml(){
+  const syncing = !!window.supabaseClientV1 && window._waitingListSyncState!=='error';
+  if(syncing) return '';
+  const reason = !window.supabaseClientV1
+    ? "You're offline or not signed in — changes save on this device only and won't reach other devices until syncing resumes."
+    : "The cloud waiting-list table isn't reachable (it may not have been created). Changes save on this device only. Run waiting_list_table.sql in Supabase to enable syncing.";
+  return '<div id="wl-sync-warning" style="margin-bottom:12px;padding:10px 12px;background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.35);border-radius:8px;font-size:13px;color:#fbbf24">'
+       + '⚠ <strong>Waiting list is not syncing.</strong> ' + reason + '</div>';
+}
+
 function renderWaitingList(){
   const host=document.getElementById('waiting-list-body');
   if(!host) return;
   const list=(db.waitingList||[]).slice().sort((a,b)=>String(a.addedAt).localeCompare(String(b.addedAt)));
   if(!list.length){
-    host.innerHTML='<div class="empty"><div class="empty-icon">⏳</div><div class="empty-text">Nobody is waiting right now.</div></div>';
+    host.innerHTML=waitingSyncBannerHtml()+'<div class="empty"><div class="empty-icon">⏳</div><div class="empty-text">Nobody is waiting right now.</div></div>';
     return;
   }
-  host.innerHTML=list.map(e=>{
+  host.innerHTML=waitingSyncBannerHtml()+list.map(e=>{
     const matches=waitingMatchesFor(e);
     const dayLabel=(e.dayGroup==='any' || waitingDaysFor(e).length===WEEKDAY_NAMES.length)
       ? 'Any day' : waitingDaysFor(e).join(', ');
@@ -14499,6 +14532,52 @@ async function syncWaitingEntryDeleteToSupabase(entryId){
       .delete().eq('entry_key', String(entryId));
     if(error) console.warn('Waiting-list delete sync failed:', error.message);
   }catch(err){ console.warn('Waiting-list delete sync failed:', err.message); }
+}
+
+// ── Version-freshness check ──────────────────────────────────────────────
+// Catches the "I'm looking at a stale cached build" trap. The running build
+// is read from the on-screen badge; the latest known build is a single row in
+// the Supabase `app_meta` table (a place the operator controls). Any client
+// newer-or-equal raises the marker to its own build; any client OLDER than the
+// marker is nudged to hard-refresh. Degrades silently if the table is absent.
+function parseBuildNumber(str){
+  const m=String(str||'').match(/-(\d+)\s*$/);
+  return m?parseInt(m[1],10):0;
+}
+async function checkVersionFreshness(){
+  try{
+    if(!window.supabaseClientV1) return;
+    const badge=document.getElementById('build-version');
+    const runningStr=badge?String(badge.textContent||'').trim():'';
+    const runningNum=parseBuildNumber(runningStr);
+    if(!runningNum) return;
+    const {data,error}=await window.supabaseClientV1.from('app_meta').select('*').eq('key','latest_build');
+    if(error) return; // table not created — skip silently, never a false alarm
+    const row=(data&&data[0])||null;
+    const storedNum=row?parseInt(row.value,10):0;
+    if(storedNum && runningNum<storedNum){
+      showVersionMismatchBanner(runningStr, row.value_string||('build '+storedNum));
+    } else if(runningNum>storedNum){
+      // This client is the newest seen — advance the marker so any stale
+      // client still running an older cached copy gets nudged.
+      try{
+        await window.supabaseClientV1.from('app_meta').upsert(
+          {key:'latest_build', value:String(runningNum), value_string:runningStr, updated_at:new Date().toISOString()},
+          {onConflict:'key'});
+      }catch(_){}
+    }
+  }catch(_){ /* silent — a safety net must never break the load */ }
+}
+function showVersionMismatchBanner(running, latest){
+  try{
+    if(document.getElementById('version-mismatch-banner')) return;
+    const bar=document.createElement('div');
+    bar.id='version-mismatch-banner';
+    bar.style.cssText='position:fixed;top:0;left:0;right:0;z-index:99999;background:#b45309;color:#fff;padding:10px 16px;font-size:14px;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,0.3)';
+    bar.innerHTML='⚠ You may be on an old cached copy (running '+escapeHtml(running)+', latest is '+escapeHtml(latest)+'). <strong>Hard refresh</strong> (Ctrl/Cmd+Shift+R) to update.'
+      +' <span style="cursor:pointer;text-decoration:underline;margin-left:8px" onclick="this.parentElement.remove()">dismiss</span>';
+    document.body.appendChild(bar);
+  }catch(_){}
 }
 
 async function syncWishlistToSupabase(student){
