@@ -59,10 +59,16 @@ body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;min
 .month-selector select{background:var(--surface2);border:1px solid var(--border2);color:var(--text);padding:6px 12px;border-radius:var(--radius-sm);font-family:'DM Sans',sans-serif;font-size:13px;cursor:pointer}
 
 /* NAV */
-.nav-bar{background:var(--surface);border-bottom:1px solid var(--border);padding:0 2rem;display:flex;gap:0}
+.nav-bar{background:var(--surface);border-bottom:1px solid var(--border);padding:0 2rem;display:flex;gap:0;align-items:center}
 .nav-btn{padding:12px 20px;font-size:13px;font-weight:500;cursor:pointer;border:none;background:none;color:var(--text-muted);border-bottom:2px solid transparent;letter-spacing:0.03em;transition:all 0.15s;display:flex;align-items:center;gap:7px}
 .nav-btn:hover{color:var(--text)}
 .nav-btn.active{color:var(--gold-light);border-bottom-color:var(--gold)}
+/* Simplification: 14 flat, ungrouped buttons read as one long wall to scan
+   — a thin divider between logical clusters (daily work / people & pay /
+   scheduling / admin & data) gives the eye a resting point without
+   changing a single click target, URL, or page. Pure visual grouping. */
+.nav-divider{width:1px;align-self:stretch;background:var(--border2);margin:10px 4px;flex:0 0 auto}
+@media(max-width:768px){ .nav-divider{margin:8px 2px} }
 
 /* MAIN */
 .main{padding:2rem;max-width:1100px;margin:0 auto}
@@ -184,6 +190,29 @@ input::placeholder{color:var(--text-dim)}
 .teacher-panel{display:none}
 .teacher-panel.active{display:block}
 .teacher-grid{display:grid;grid-template-columns:repeat(4,minmax(140px,1fr));gap:12px;margin-bottom:1.25rem}
+/* Dashboard simplification: one always-visible line instead of three
+   hover-only tooltips repeating the same pay-period text — a title=""
+   tooltip never fires on a touch screen, so on a phone that context was
+   simply invisible before. */
+.teacher-pay-note{font-size:12px;color:var(--text-muted);margin-bottom:10px;display:flex;align-items:center;gap:6px}
+.teacher-pay-note::before{content:'ℹ';color:var(--gold-dim);font-weight:700}
+/* Hero row: the two numbers a teacher actually needs to act on (what
+   they're owed, and what's still owed to them) get real visual weight —
+   larger value text, only 2 columns so they read as the main event rather
+   than one tile among six competing for the same attention. */
+.teacher-grid-hero{grid-template-columns:repeat(2,minmax(140px,1fr));margin-bottom:10px}
+.teacher-grid-hero .metric-value{font-size:2rem}
+.teacher-grid-hero .metric{padding:1.35rem 1.5rem}
+/* Secondary row: supporting context (attendance counts), deliberately
+   calmer — smaller value text, no colour-coding — so it doesn't compete
+   with the hero row for attention. Same data as before, just no longer
+   shouting equally loud. */
+.teacher-grid-secondary .metric-value{font-size:1.25rem;color:var(--text-muted)}
+.teacher-grid-secondary .metric{padding:0.85rem 1rem}
+@media(max-width:480px){
+  .teacher-grid-hero{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+  .teacher-grid-hero .metric-value{font-size:1.6rem}
+}
 .teacher-section-grid{display:grid;grid-template-columns:1.2fr .8fr;gap:1.25rem}
 .teacher-list{display:grid;gap:8px}
 .teacher-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px}
@@ -304,6 +333,15 @@ input::placeholder{color:var(--text-dim)}
   /* Filter/search clusters stack rather than squeezing side by side. */
   .card > div[style*="display:flex"][style*="flex-wrap"]{gap:8px}
   .card input,.card select{max-width:none !important;width:100%}
+  /* Schedule page: week-nav + search + day-filter were three full rows of
+     chrome standing between opening the page and seeing any actual lesson
+     — the exact wrong priority for "what do I have today" on a phone.
+     Tighter buttons and a smaller week label reclaim height so the list
+     itself starts sooner without removing any control. */
+  .teacher-schedule-weeknav{gap:6px;margin-bottom:8px}
+  .teacher-schedule-weeknav .btn{padding:6px 10px;font-size:12px}
+  #teacher-schedule-week-label{font-size:13px}
+  .teacher-schedule-filters{margin-bottom:8px}
   /* Summary rows keep label and value on one line instead of wrapping. */
   .summary-row{font-size:13px}
   /* Tables are the biggest remaining source of phone crowding. Tighter
@@ -367,7 +405,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-153</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-159</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -390,11 +428,14 @@ input::placeholder{color:var(--text-dim)}
   <button class="nav-btn" onclick="switchPage('students',this)">🎓 Students</button>
   <button class="nav-btn" onclick="switchPage('renewals',this)">🔁 Renewals</button>
   <button class="nav-btn" onclick="switchPage('waiting',this)">⏳ Waiting List <span id="waiting-nav-badge" style="display:none;background:var(--gold);color:#1a1916;border-radius:10px;padding:1px 6px;font-size:11px;font-weight:700;margin-left:4px"></span></button>
+  <span class="nav-divider" aria-hidden="true"></span>
   <button class="nav-btn" onclick="switchPage('teachers',this)">💰 Payroll</button>
   <button class="nav-btn" onclick="switchPage('profiles',this)">👨‍🏫 Teacher Management</button>
+  <span class="nav-divider" aria-hidden="true"></span>
   <button class="nav-btn" onclick="switchPage('lessons',this)">📅 Lessons</button>
   <button class="nav-btn" onclick="switchPage('calendar',this)">📅 Calendar</button>
   <button class="nav-btn" onclick="switchPage('practice',this)">🎹 Practice Sessions</button>
+  <span class="nav-divider" aria-hidden="true"></span>
   <button class="nav-btn" onclick="switchPage('expenses',this)">🧾 Finances</button>
   <button class="nav-btn" onclick="switchPage('reports',this)">📈 Reports</button>
   <button class="nav-btn" onclick="switchPage('database',this)">🗄️ Database</button>
@@ -1078,7 +1119,7 @@ input::placeholder{color:var(--text-dim)}
     <div style="border-top:1px solid var(--border);margin:20px 0 16px;"></div>
     <div class="card-title" style="margin-bottom:10px">Data Health Check</div>
     <button class="btn btn-gold" onclick="runDataHealthCheck()">🩺 Run Health Check</button>
-    <small style="display:block;margin-top:8px;color:var(--text-muted)">Scans for data that's fallen out of sync — a lesson whose student no longer exists, a student pointing at a deleted teacher, that kind of thing. Read-only: it only reports issues, it never changes or deletes anything on its own.</small>
+    <small style="display:block;margin-top:8px;color:var(--text-muted)">Scans for data that's fallen out of sync or is inconsistent — orphaned records (a lesson whose student no longer exists, a broken multi-course link), duplicate lessons, teacher double-bookings, rooms over capacity, a frozen student still on the calendar, paid payroll periods worth double-checking for the double-session bug, unsynced records, and (when connected) duplicate or stale-linked rows in Supabase itself. Read-only: it only reports issues, it never changes or deletes anything on its own.</small>
     <div id="health-check-results" style="margin-top:14px"></div>
   </div>
 </div>
@@ -1118,12 +1159,20 @@ input::placeholder{color:var(--text-dim)}
 
     <div id="teacher-panel-dashboard" class="teacher-panel active">
       <div id="teacher-dashboard">
-        <div class="teacher-grid">
-          <div class="metric"><div class="metric-label">Taught This Week</div><div id="teacher-sessions-week" class="metric-value">0</div></div>
-          <div class="metric green" title="Your pay period: the 25th of last month through the 24th of this one — not the calendar month."><div class="metric-label">Taught This Month</div><div id="teacher-sessions-month" class="metric-value green">0</div></div>
-          <div class="metric amber" title="Your pay period: the 25th of last month through the 24th of this one — not the calendar month."><div class="metric-label">Excused Absences</div><div id="teacher-excused-count" class="metric-value amber">0</div></div>
-          <div class="metric red" title="Your pay period: the 25th of last month through the 24th of this one — not the calendar month."><div class="metric-label">Days Absent (Month)</div><div id="teacher-days-absent" class="metric-value red">0</div></div>
-          <div class="metric red" style="cursor:pointer" onclick="toggleTeacherMakeupsDrilldown()" title="Tap to see who's owed a make-up"><div class="metric-label">Makeups Owed (Total)</div><div id="teacher-makeups-count" class="metric-value red">0</div></div>
+        <!-- Was three separate hover-only tooltips repeating the same pay-
+             period explanation — title="" tooltips don't fire on a touch
+             screen at all, so on a phone this context was simply invisible.
+             One always-visible line instead. -->
+        <div class="teacher-pay-note">Pay period: 25th of last month → 24th of this one (not the calendar month)</div>
+        <div class="teacher-grid teacher-grid-hero">
+          <div class="metric green" title="What actually counts toward this pay period's payroll — attended and paid-absence sessions, with a double session counted as two. Matches what Payroll shows for you."><div class="metric-label">Payable Lessons</div><div id="teacher-payable-lessons" class="metric-value green">0</div></div>
+          <div class="metric red" style="cursor:pointer" onclick="toggleTeacherMakeupsDrilldown()" title="Tap to see who's owed a make-up"><div class="metric-label">Makeups Owed</div><div id="teacher-makeups-count" class="metric-value red">0</div></div>
+        </div>
+        <div class="teacher-grid teacher-grid-secondary">
+          <div class="metric"><div class="metric-label">This Week</div><div id="teacher-sessions-week" class="metric-value">0</div></div>
+          <div class="metric"><div class="metric-label">This Month</div><div id="teacher-sessions-month" class="metric-value">0</div></div>
+          <div class="metric"><div class="metric-label">Excused</div><div id="teacher-excused-count" class="metric-value">0</div></div>
+          <div class="metric"><div class="metric-label">Days Absent</div><div id="teacher-days-absent" class="metric-value">0</div></div>
         </div>
         <div class="teacher-section-grid">
           <div class="card">
@@ -1173,13 +1222,13 @@ input::placeholder{color:var(--text-dim)}
     <div id="teacher-panel-schedule" class="teacher-panel">
       <div class="card">
         <div class="card-title">Schedule</div>
-        <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap">
-          <button class="btn btn-sm" onclick="shiftTeacherScheduleWeek(-1)">← Previous Week</button>
+        <div class="teacher-schedule-weeknav" style="display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap">
+          <button class="btn btn-sm" onclick="shiftTeacherScheduleWeek(-1)" aria-label="Previous week">‹ Prev</button>
           <span id="teacher-schedule-week-label" style="font-weight:600;color:var(--gold-light)"></span>
-          <button class="btn btn-sm" onclick="shiftTeacherScheduleWeek(1)">Next Week →</button>
+          <button class="btn btn-sm" onclick="shiftTeacherScheduleWeek(1)" aria-label="Next week">Next ›</button>
           <button class="btn btn-sm" onclick="resetTeacherScheduleWeek()">This Week</button>
         </div>
-        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+        <div class="teacher-schedule-filters" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">
           <input id="teacher-schedule-search" placeholder="Search students..." oninput="renderTeacherWorkspace()" style="max-width:240px">
           <label for="teacher-schedule-day-filter" class="visually-hidden">Filter by day</label>
           <select id="teacher-schedule-day-filter" onchange="renderTeacherWorkspace()" style="max-width:150px">
@@ -4320,6 +4369,33 @@ function addLesson(studentId){
  const date=dmyToIso(document.getElementById('lesson_date_'+studentId).value);
  const status=document.getElementById('lesson_status_'+studentId).value;
 
+ // v155 fix (item 4): if this student already has a SCHEDULED lesson on
+ // this exact date — e.g. auto-scheduled when they were added, or from a
+ // renewal batch — logging "today's lesson" here would silently create a
+ // SECOND, independent lesson record for the same real session, over-
+ // billing by exactly one session (the reported "4 lessons billed, only 3
+ // real"). Ask which it is rather than guessing.
+ const existing=(db.lessons||[]).find(l=>
+   String(l.studentId)===String(s.id) &&
+   l.date===date &&
+   l.status==='scheduled' &&
+   (l.status_record||'active')!=='archived'
+ );
+ if(existing){
+   openModal('Lesson Already Scheduled', `
+     <p style="color:var(--text-muted);margin-bottom:16px">${escapeHtml(s.name)} already has a lesson scheduled on ${escapeHtml(formatDateDMY(date))}. Is this that same session, or a genuinely separate one?</p>
+     <div style="display:flex;flex-direction:column;gap:10px">
+       <button class="btn btn-gold" onclick="resolveLessonLogCollision(${existing.id}, ${s.id}, '${status}', 'existing')">Mark the existing lesson as ${escapeHtml(STATUS_LABELS[status]||status)}</button>
+       <button class="btn" onclick="resolveLessonLogCollision(${existing.id}, ${s.id}, '${status}', 'new')">This is a separate session — add a new one</button>
+     </div>`);
+   return;
+ }
+ createLoggedLesson(s, date, status);
+}
+
+// The actual lesson-creation body, shared by the collision-free path above
+// and the "add a new one anyway" choice in resolveLessonLogCollision.
+function createLoggedLesson(s, date, status){
  db.lessons.push({
    id:Date.now(),
    studentId:s.id,
@@ -4347,6 +4423,40 @@ function addLesson(studentId){
  if(typeof syncLessonToSupabase==='function') syncLessonToSupabase(lesson);
  if(newLog && typeof syncLessonLogToSupabase==='function') syncLessonLogToSupabase(newLog);
  showToast('Lesson logged ✓');
+}
+
+// Resolves the "already scheduled" choice from addLesson's collision
+// prompt. 'existing' updates the already-scheduled lesson's status in
+// place (reusing markLessonAttended's own logic when that's the chosen
+// status, for identical unpaid-detection behaviour); 'new' proceeds with
+// the original, separate-lesson creation the admin explicitly confirmed.
+function resolveLessonLogCollision(existingLessonId, studentId, status, choice){
+  closeModal();
+  const s=db.students.find(x=>x.id===studentId);
+  if(!s) return;
+  if(choice==='new'){
+    const date=(db.lessons||[]).find(l=>l.id===existingLessonId)?.date || '';
+    createLoggedLesson(s, date, status);
+    return;
+  }
+  const l=(db.lessons||[]).find(x=>x.id===existingLessonId);
+  if(!l){ showToast('Lesson not found.'); return; }
+  if(status==='attended'){
+    markLessonAttended(existingLessonId);
+    return;
+  }
+  l.status=status;
+  save();
+  renderLessons();
+  renderTeachers();
+  if(typeof renderOverview==='function') renderOverview();
+  if(typeof renderTrialFollowUp==='function') renderTrialFollowUp();
+  if(typeof renderRenewalsDue==='function') renderRenewalsDue();
+  if(typeof renderWeeklyRenewals==='function') renderWeeklyRenewals();
+  if(typeof syncLessonUpdateToSupabase==='function') syncLessonUpdateToSupabase(l);
+  if(typeof syncLessonLogFromLesson==='function') syncLessonLogFromLesson(l.id);
+  if(typeof renderTeacherWorkspace==='function') renderTeacherWorkspace();
+  showToast('Existing lesson updated ✓');
 }
 
 // --- Attendance Ledger: Friday-to-Thursday week navigation ---
@@ -5410,9 +5520,10 @@ async function callCreateAdminFunction(email, password, resetPasswordIfExists){
 // The checks here match exactly what was manually verified during a full
 // code + sync audit, just packaged as a one-click admin tool instead of
 // something that has to be re-derived by hand each time.
-function runDataHealthCheck(){
+async function runDataHealthCheck(){
   const el=document.getElementById('health-check-results');
   if(!el) return;
+  el.innerHTML='<div style="color:var(--text-muted)">🔄 Running health check…</div>';
 
   const students=(db.students||[]).filter(s=>(s.status||'active')!=='archived');
   const allStudents=db.students||[];
@@ -5482,6 +5593,251 @@ function runDataHealthCheck(){
     title:'Duplicate public IDs shared by more than one student record',
     items:duplicateIds.map(id=>`${id} — shared by ${idCounts[id]} records: ${allStudents.filter(s=>s.public_id===id).map(s=>s.name).join(', ')}`)
   });
+
+  // 8. Teacher/month combinations already marked PAID that contain a
+  // double session. This app used to pay a double session at 1.5x the rate
+  // (the group multiplier) instead of the correct 2x — fixed in the
+  // calculation, but a payslip already generated/paid before that fix
+  // would still reflect the old, lower total. This can't tell whether any
+  // given payment actually used the old or new formula (payrollPaid is
+  // just a yes/no flag with no amount recorded at the time) — it flags
+  // every paid period containing a double session as worth a quick check,
+  // and shows the gap you'd see if the old formula was the one used.
+  const doubleSessionPaidRisk=[];
+  Object.keys(db.payrollPaid||{}).forEach(key=>{
+    const lastUnderscore=key.lastIndexOf('_');
+    if(lastUnderscore<0) return;
+    const teacherName=key.slice(0,lastUnderscore), month=key.slice(lastUnderscore+1);
+    if(!db.payrollPaid[key]) return;
+    const profile=(db.teacherProfiles||[]).find(t=>(t.name||'').toLowerCase()===teacherName.toLowerCase());
+    if(!profile) return;
+    const eligible=(db.lessons||[]).filter(l=>
+      isLessonInPayrollPeriod(l, month) &&
+      (l.teacher||'').toLowerCase()===teacherName.toLowerCase() &&
+      isPayrollEligibleLesson(l)
+    );
+    const doubleSessions=eligible.filter(l=>l.isDoubleSession && (l.status==='attended'||l.status==='absent_paid') && (l.customPayrollAmount==null||l.customPayrollAmount===''));
+    if(!doubleSessions.length) return;
+    const correctTotal=calculatePayrollAmount(eligible, profile.rate);
+    // Reconstruct what the OLD (1.5x-on-double-sessions) formula would have
+    // paid, to show exactly what's at stake if that's the total already used.
+    const oldTotal=eligible.reduce((sum,l)=>{
+      if(l.status!=='attended' && l.status!=='absent_paid') return sum;
+      if(l.customPayrollAmount!=null && l.customPayrollAmount!==''){
+        const n=Number(l.customPayrollAmount);
+        if(!Number.isNaN(n)) return sum+n;
+      }
+      const r=Number(profile.rate)||0;
+      const wasTreatedAsGroup = l.isDoubleSession ? true : isPayrollGroupSession(l);
+      const perSession = r * (wasTreatedAsGroup ? PAYROLL_GROUP_RATE_MULTIPLIER : 1);
+      return sum + perSession; // old formula never doubled anything, group or not
+    }, 0);
+    const gap=correctTotal-oldTotal;
+    if(gap>0){
+      doubleSessionPaidRisk.push(`${teacherName} — ${formatMonthName(month)}: ${doubleSessions.length} double session(s), correct total ${egp(correctTotal)}, old-formula total would be ${egp(oldTotal)} (${egp(gap)} short if the old total is what was actually paid)`);
+    }
+  });
+  if(doubleSessionPaidRisk.length) issues.push({
+    title:'Paid payroll periods with a double session — worth confirming the paid amount matches today\'s calculation',
+    items:doubleSessionPaidRisk
+  });
+
+  // 9. Duplicate lessons — the same (non-archived) student with 2+ lesson
+  // records on the exact same date. Legitimate reasons this can happen are
+  // rare (a genuine double session is ONE record with isDoubleSession, not
+  // two); this is the same failure mode the Lesson Logger's collision
+  // prompt now prevents going forward (item 4), surfaced here for any
+  // duplicate that already exists in the data from before that fix, or
+  // from any other path that could create one.
+  const dupLessonMap={};
+  (db.lessons||[]).forEach(l=>{
+    if((l.status_record||'active')==='archived' || !l.date) return;
+    const key=String(l.studentId)+'|'+l.date;
+    (dupLessonMap[key]=dupLessonMap[key]||[]).push(l);
+  });
+  const dupLessonItems=[];
+  Object.values(dupLessonMap).forEach(list=>{
+    if(list.length<2) return;
+    const student=(db.students||[]).find(s=>String(s.id)===String(list[0].studentId));
+    dupLessonItems.push(`${student?student.name:('student id '+list[0].studentId)} — ${list[0].date}: ${list.length} lesson records (${list.map(l=>STATUS_LABELS[l.status]||l.status).join(', ')})`);
+  });
+  if(dupLessonItems.length) issues.push({
+    title:'Duplicate lessons — the same student billed/logged twice on one date',
+    items:dupLessonItems
+  });
+
+  // 10. Teacher double-booked — two different students with the SAME
+  // teacher whose lesson times overlap on the same date. Mirrors the logic
+  // already used for the 14-day Overview conflict banner
+  // (renderOverviewConflicts), but scans ALL dates rather than just the
+  // next two weeks, and lives here so a genuine double-booking (e.g. from
+  // resuming a frozen student into a slot someone else had taken before
+  // the item-5 fix) is findable regardless of when it happened.
+  const realLessons=(db.lessons||[]).filter(l=>
+    (l.status_record||'active')!=='archived' && l.date && l.time && l.teacher &&
+    l.status!=='absent_excused' && l.status!=='teacher_absent' && l.status!=='absent_paid' &&
+    !(typeof lessonBelongsToFrozenStudent==='function' && lessonBelongsToFrozenStudent(l))
+  );
+  const byTeacherDate={};
+  realLessons.forEach(l=>{ const k=(l.teacher||'').toLowerCase()+'|'+l.date; (byTeacherDate[k]=byTeacherDate[k]||[]).push(l); });
+  const doubleBookedItems=[];
+  const seenPairs=new Set();
+  Object.values(byTeacherDate).forEach(list=>{
+    if(list.length<2) return;
+    for(let i=0;i<list.length;i++){
+      for(let j=i+1;j<list.length;j++){
+        const a=list[i], b=list[j];
+        if(String(a.studentId)===String(b.studentId)) continue; // same student, e.g. a double session — not a conflict
+        const aDur=getLessonDurationMinutes(a), bDur=getLessonDurationMinutes(b);
+        const aStart=timeToMinutes(a.time), aEnd=aStart+aDur;
+        const bStart=timeToMinutes(b.time), bEnd=bStart+bDur;
+        if(aStart<bEnd && bStart<aEnd){
+          const pairKey=[a.id,b.id].sort().join('-');
+          if(seenPairs.has(pairKey)) continue;
+          seenPairs.add(pairKey);
+          doubleBookedItems.push(`${a.teacher} — ${a.date}: "${a.student||'?'}" at ${a.time} overlaps "${b.student||'?'}" at ${b.time}`);
+        }
+      }
+    }
+  });
+  if(doubleBookedItems.length) issues.push({
+    title:'Teacher double-booked — two different students at an overlapping time',
+    items:doubleBookedItems.slice(0,20).concat(doubleBookedItems.length>20 ? [`…and ${doubleBookedItems.length-20} more`] : [])
+  });
+
+  // 11. Room over capacity — more real lessons/practice sessions
+  // simultaneously than the shared 3-room limit allows. Grouped by date
+  // (not scanned lesson-by-lesson) for the same reason renderOverviewConflicts
+  // groups by teacher+date: it's the efficient way to find every genuine
+  // overlap without re-scanning the whole lesson list once per lesson.
+  const byDate={};
+  realLessons.forEach(l=>{ (byDate[l.date]=byDate[l.date]||[]).push(l); });
+  const overCapacityItems=[];
+  Object.entries(byDate).forEach(([date,list])=>{
+    const instants=new Set(list.map(l=>timeToMinutes(l.time)));
+    (db.practiceSessions||[]).forEach(p=>{
+      if(p.date===date && p.time && (p.status_record||'active')!=='archived' && p.status!=='cancelled') instants.add(timeToMinutes(p.time));
+    });
+    let worstAt=null, worstCount=0;
+    instants.forEach(m=>{
+      const t=String(Math.floor(m/60)).padStart(2,'0')+':'+String(m%60).padStart(2,'0');
+      const count=getRoomOccupancyAtInstant(date, t);
+      if(count>worstCount){ worstCount=count; worstAt=t; }
+    });
+    if(worstCount>MAX_SIMULTANEOUS_LESSONS){
+      overCapacityItems.push(`${date} at ${formatTime12h(worstAt)}: ${worstCount} sessions booked at once (room limit is ${MAX_SIMULTANEOUS_LESSONS})`);
+    }
+  });
+  if(overCapacityItems.length) issues.push({
+    title:'Rooms over capacity — more sessions booked at once than the shared room limit allows',
+    items:overCapacityItems.slice(0,20).concat(overCapacityItems.length>20 ? [`…and ${overCapacityItems.length-20} more`] : [])
+  });
+
+  // 12. Frozen student still has a future SCHEDULED lesson — violates the
+  // freeze invariant (freezing is supposed to remove upcoming sessions;
+  // see confirmFreezeStudent). A leftover one here means the student is
+  // both "paused" and still occupying a slot on the calendar.
+  const todayKeyForFreeze=new Date().toISOString().slice(0,10);
+  const frozenWithLessons=[];
+  (db.students||[]).forEach(s=>{
+    if(!s.frozen) return;
+    const stray=(db.lessons||[]).filter(l=>
+      lessonBelongsToStudent(l, s) && l.status==='scheduled' &&
+      (l.status_record||'active')!=='archived' && l.date>=todayKeyForFreeze
+    );
+    if(stray.length) frozenWithLessons.push(`${s.name} (frozen) — still has ${stray.length} upcoming scheduled lesson(s): ${stray.map(l=>l.date).join(', ')}`);
+  });
+  if(frozenWithLessons.length) issues.push({
+    title:'Frozen students who still have upcoming lessons on the calendar',
+    items:frozenWithLessons
+  });
+
+  // 13. Waiting-list entries linked to a student that no longer exists —
+  // e.g. the student was later removed, but the link wasn't cleared.
+  const orphanWaiting=(db.waitingList||[]).filter(e=>
+    e && e.studentId!=null && e.studentId!=='' && !studentIds.has(String(e.studentId))
+  );
+  if(orphanWaiting.length) issues.push({
+    title:'Waiting-list entries linked to a student that no longer exists',
+    items:orphanWaiting.map(e=>`${e.name||'(no name)'} → linked to missing student id ${e.studentId}`)
+  });
+
+  // 14. Students still on an unreconciled temporary id — a Date.now()-scale
+  // number (13 digits, comfortably past any real Supabase serial id) means
+  // their record never successfully synced to the cloud, or the sync is
+  // still pending. Left long enough, this is exactly the condition that
+  // made items 1/2 possible (a lesson logged against an id that later
+  // changes underneath it).
+  const unsyncedStudents=(db.students||[]).filter(s=>Number(s.id)>1e12);
+  if(unsyncedStudents.length) issues.push({
+    title:'Students still on a temporary (not-yet-synced) id',
+    items:unsyncedStudents.map(s=>`${s.name} — id ${s.id} looks unsynced; try "Push to Cloud" on the Cloud tab`)
+  });
+
+  // 15. Payment records keyed to a student id that no longer exists.
+  const orphanPaymentKeys=Object.keys(db.payments||{}).filter(key=>{
+    const idx=key.lastIndexOf('_');
+    if(idx<0) return false;
+    const sid=key.slice(0,idx);
+    return !studentIds.has(sid);
+  });
+  if(orphanPaymentKeys.length) issues.push({
+    title:'Payment records for a student that no longer exists',
+    items:orphanPaymentKeys.slice(0,20).concat(orphanPaymentKeys.length>20 ? [`…and ${orphanPaymentKeys.length-20} more`] : [])
+  });
+
+  // 16. Sync health, surfaced inline — pending writes not yet confirmed on
+  // the server, and any recent failed cloud writes. Same numbers the header
+  // sync badge already shows; repeated here so a health-check pass catches
+  // it too, without having to separately notice the header badge.
+  const pendingOutbox=(typeof window.getOutboxCount==='function') ? window.getOutboxCount() : 0;
+  const recentFailures=(window.syncFailures||[]).length;
+  if(pendingOutbox>0 || recentFailures>0){
+    const syncItems=[];
+    if(pendingOutbox>0) syncItems.push(`${pendingOutbox} change(s) saved locally but not yet confirmed on the server — click the sync badge in the header to retry.`);
+    if(recentFailures>0) syncItems.push(`${recentFailures} recent failed cloud write(s) — see the red badge in the header for details.`);
+    issues.push({ title:'Sync health', items:syncItems });
+  }
+
+  // 17 & 18. Cloud-only checks — need a live Supabase round trip, so each
+  // runs in its own try/catch and is silently skipped if offline or the
+  // client isn't ready, matching every other optional check elsewhere in
+  // this app (e.g. the waiting_list / teacher_absences loads inside
+  // autoLoadFromCloud). These find the CLOUD-side residue of items 1 & 2
+  // (duplicate student rows, stale lesson links) that may already exist
+  // from before those bugs were fixed — the fix stops new ones, it
+  // doesn't clean up old ones.
+  if(window.supabaseClientV1){
+    try{
+      const {data:cloudStudents,error:e1}=await window.supabaseClientV1.from('students').select('student_code,id,first_name,last_name');
+      if(!e1 && cloudStudents){
+        const byCode={};
+        cloudStudents.forEach(r=>{ if(r.student_code){ (byCode[r.student_code]=byCode[r.student_code]||[]).push(r); } });
+        const dupeCodes=Object.entries(byCode).filter(([,rows])=>rows.length>1);
+        if(dupeCodes.length) issues.push({
+          title:'Duplicate Supabase student rows sharing the same code (cloud check)',
+          items:dupeCodes.map(([code,rows])=>`${code} — ${rows.length} rows (ids: ${rows.map(r=>r.id).join(', ')}) for ${((rows[0].first_name||'')+' '+(rows[0].last_name||'')).trim()||'unnamed'}`)
+        });
+      }
+    }catch(e1){ /* offline or not ready — silent, same as the rest of this app's optional cloud checks */ }
+
+    try{
+      const {data:cloudLessons,error:e2}=await window.supabaseClientV1.from('lessons').select('id,student_id,student_name,lesson_date,teacher,status_record').limit(3000);
+      if(!e2 && cloudLessons){
+        const localIdSet=new Set((db.students||[]).map(s=>String(s.id)));
+        const staleCloudLessons=cloudLessons.filter(r=>
+          (r.status_record||'active')!=='archived' &&
+          r.student_id!=null && r.student_id!=='' &&
+          !localIdSet.has(String(r.student_id))
+        );
+        if(staleCloudLessons.length) issues.push({
+          title:'Cloud lessons whose student_id doesn\'t match any current student (cloud check)',
+          items:staleCloudLessons.slice(0,20).map(r=>`${r.lesson_date||'?'} — "${r.student_name||'?'}" with ${r.teacher||'?'} → cloud student_id ${r.student_id} not found locally`)
+            .concat(staleCloudLessons.length>20 ? [`…and ${staleCloudLessons.length-20} more`] : [])
+        });
+      }
+    }catch(e2){ /* offline or not ready — silent */ }
+  }
 
   if(!issues.length){
     el.innerHTML=`<div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px;color:#a8e8a8">✅ No issues found — ${allStudents.length} students, ${(db.teacherProfiles||[]).length} teachers, ${(db.lessons||[]).length} lessons, ${(db.lessonLogs||[]).length} lesson logs all checked out clean.</div>`;
@@ -6508,6 +6864,13 @@ function isPayrollEligibleLesson(l){
 // meant they simply didn't exist yet.
 function runInitialRenders(){
  initializeCloudSafe().then(()=>{
+  // Some browsers restore a <select>'s last-chosen value on a plain page
+  // refresh (as part of form-state restoration during parsing, before any
+  // script runs) — so "All Days" being the declared default in the HTML
+  // isn't enough on its own; a returning admin could see whatever day they
+  // filtered by last time. Reset explicitly before the first render.
+  const dayFilterEl=document.getElementById('student-filter-day');
+  if(dayFilterEl) dayFilterEl.value='';
   renderOverview();
   renderStudents();
   renderTeachers();
@@ -7431,7 +7794,34 @@ async function testCloud(){
 
 
 <script>
+// v154 fix (item 2): addStudentToSupabase used to be a raw, unconditional
+// INSERT — any caller invoking it twice for the same student (which DID
+// happen: the now-removed load-time wrapper duplicated the base addStudent()
+// call, and separately, autoLoadFromCloud's "pendingReupload" path can also
+// call this for a local student the cloud hasn't caught up to yet) produced
+// two separate rows in Supabase's students table for one real person.
+// Two layers of defense, mirroring upsertToCloud's update-then-insert
+// pattern used elsewhere in this file:
+//   1. An in-flight de-dup keyed by student_code — a second call for the
+//      SAME student while the first is still in flight joins that same
+//      promise instead of firing a second insert.
+//   2. Even for calls that aren't concurrent (e.g. minutes apart), check
+//      for an existing cloud row by student_code first and UPDATE it
+//      instead of inserting a new one.
+window._addStudentToSupabaseInFlight = window._addStudentToSupabaseInFlight || {};
 async function addStudentToSupabase(student){
+  const dedupeKey = student && student.student_code ? String(student.student_code) : null;
+  if(dedupeKey && window._addStudentToSupabaseInFlight[dedupeKey]){
+    return window._addStudentToSupabaseInFlight[dedupeKey];
+  }
+  const run = _addStudentToSupabaseImpl(student);
+  if(dedupeKey){
+    window._addStudentToSupabaseInFlight[dedupeKey] = run;
+    run.finally(()=>{ delete window._addStudentToSupabaseInFlight[dedupeKey]; });
+  }
+  return run;
+}
+async function _addStudentToSupabaseImpl(student){
   try{
     const payload = {
       student_code: student.student_code || '',
@@ -7461,10 +7851,21 @@ async function addStudentToSupabase(student){
       frozen_reason: student.frozenReason || ''
     };
 
-    const {data,error} = await supabaseClientV1
-      .from('students')
-      .insert([payload])
-      .select();
+    // Check for an existing row by student_code before inserting — a second
+    // call for a student who already made it to the cloud updates that row
+    // instead of creating a sibling duplicate.
+    let data, error;
+    if(payload.student_code){
+      const existing = await supabaseClientV1.from('students').select('*').eq('student_code', payload.student_code);
+      if(!existing.error && existing.data && existing.data.length){
+        const upd = await supabaseClientV1.from('students').update(payload).eq('student_code', payload.student_code).select();
+        data = upd.data; error = upd.error;
+      }
+    }
+    if(!data){
+      const ins = await supabaseClientV1.from('students').insert([payload]).select();
+      data = ins.data; error = ins.error;
+    }
 
     if(error) throw error;
     if(data && data[0]){
@@ -7513,9 +7914,28 @@ async function addStudentToSupabase(student){
             if(typeof syncWaitingEntryToSupabase==='function'){ try{ syncWaitingEntryToSupabase(e); }catch(_){} }
           }
         });
+        // v154 fix (item 1): re-pointing l.studentId here was LOCAL-ONLY —
+        // nothing pushed the corrected id back up to Supabase's lessons
+        // table. A lesson logged in the moments before this insert
+        // resolves (a realistic race — addStudent() does not await this
+        // call) uploads with the OLD/temporary studentId; that cloud value
+        // then never changes. The next full download wholesale-replaces
+        // db.lessons from the cloud, silently re-introducing the stale,
+        // now-permanently-orphaned id and breaking lessonBelongsToStudent
+        // for that lesson — even though both the student and the lesson
+        // still plainly exist in Supabase. Confirmed via
+        // repro_duplicate_student.test.js. Re-sync each touched lesson so
+        // the cloud value converges to the real id too.
+        (db.lessons||[]).forEach(l=>{
+          if(String(l.studentId)===String(newId) && typeof syncLessonUpdateToSupabase==='function'){
+            try{ syncLessonUpdateToSupabase(l); }catch(_){}
+          }
+        });
       }
       if(data[0].public_id) student.public_id=data[0].public_id;
       save();
+      const cloudEl=document.getElementById('cloud-status');
+      if(cloudEl) cloudEl.textContent='🟢 Student saved locally and to Supabase';
       // Re-render any id-bearing views so their row action buttons pick up
       // the new permanent id — otherwise Edit (and other row actions) on a
       // just-added student silently no-op until a manual refresh, because
@@ -7552,24 +7972,16 @@ async function addStudentToSupabase(student){
   }
 }
 
-window.addEventListener('load',()=>{
-  const originalAdd = window.addStudent;
+// v154 fix (item 2 / duplicate student registration): this used to re-wrap
+// window.addStudent and call addStudentToSupabase() a SECOND time after the
+// base addStudent() (which already calls it once, see its own comment at
+// "Push the new student record itself to the cloud") had already fired the
+// insert. Two unconditional INSERTs for one student-add produced two rows
+// in Supabase's students table every single time — confirmed via
+// repro_duplicate_student.test.js. addStudentToSupabase itself now reports
+// its own cloud-status text on success, so nothing here is lost by removing
+// the redundant wrapper outright.
 
-  window.addStudent = async function(){
-    const before = (db.students||[]).length;
-
-    await originalAdd();
-
-    const after = (db.students||[]).length;
-    if(after <= before) return;
-
-    const student = db.students[db.students.length-1];
-    await addStudentToSupabase(student);
-
-    document.getElementById('cloud-status').textContent =
-      '🟢 Student saved locally and to Supabase';
-  };
-});
 </script>
 
 <!-- duplicate supabaseClientV1 instantiation removed -->
@@ -7913,6 +8325,22 @@ async function syncLessonToSupabase(lesson){
      if(typeof renderLessons==='function') renderLessons();
      if(typeof renderCalendarPage==='function') renderCalendarPage();
    }
+   // v154 fix (item 1, symmetric half): payload.student_id above was
+   // captured synchronously, before this insert's own await — so it can
+   // only ever reflect lesson.studentId as of the MOMENT this function was
+   // called. If the owning student's own cloud insert reconciles its id
+   // WHILE this lesson insert is still in flight (a real, easy-to-hit race
+   // when a lesson is logged right after adding a new student — see
+   // repro_duplicate_student.test.js), that reconciliation updates
+   // lesson.studentId locally, but the row just inserted here still carries
+   // whatever id was sent a moment ago. Now that this lesson has its own
+   // confirmed cloud id, check for that drift and correct it immediately —
+   // whichever of the two independent syncs (student's own, lesson's own)
+   // finishes SECOND is the one able to reconcile the mismatch, since it's
+   // the one holding the freshest state.
+   if(String(lesson.studentId)!==String(payload.student_id) && typeof syncLessonUpdateToSupabase==='function'){
+     try{ await syncLessonUpdateToSupabase(lesson); }catch(_){}
+   }
  }catch(err){
    console.warn('Lesson sync failed:', err.message);
  }
@@ -8045,6 +8473,7 @@ async function syncLessonUpdateToSupabase(lesson){
     const {error} = await window.supabaseClientV1
       .from('lessons')
       .update({
+        student_id: lesson.studentId,
         teacher: lesson.teacher,
         instrument: lesson.instrument,
         lesson_date: lesson.date,
@@ -9530,6 +9959,20 @@ function renderTeacherWorkspace(){
   const sessionsThisMonth=data.allLessons.filter(l=>
     inTeacherMonth(l) && String(l.status||'')==='attended'
   ).length;
+  // "Payable Lessons" mirrors exactly what the admin Payroll tab counts for
+  // this teacher this pay period — attended/absent_paid, double sessions
+  // counted twice, archived-with-student lessons still included — rather
+  // than the simpler "attended only" count above. Queried independently
+  // from db.lessons (not data.allLessons) so it stays in agreement even if
+  // that includes/excludes differently; this is the same query renderTeachers()
+  // uses for the admin-facing figure.
+  const payableTeacherName=String(data.teacherName||session.name||'').trim().toLowerCase();
+  const payableEligibleLessons=(db.lessons||[]).filter(l=>
+    (typeof isLessonInPayrollPeriod==='function') && isLessonInPayrollPeriod(l, currentMonthKey) &&
+    (l.teacher||'').toLowerCase()===payableTeacherName &&
+    (typeof isPayrollEligibleLesson==='function') && isPayrollEligibleLesson(l)
+  );
+  const payableLessonsCount=(typeof payableSessionCount==='function') ? payableSessionCount(payableEligibleLessons) : payableEligibleLessons.length;
   const excusedCount=data.allLessons.filter(l=>
     (l.status_record||'active')!=='archived'
     && String(l.status||'')==='absent_excused'
@@ -9558,10 +10001,12 @@ function renderTeacherWorkspace(){
 
   const weekEl=document.getElementById('teacher-sessions-week');
   const monthEl=document.getElementById('teacher-sessions-month');
+  const payableEl=document.getElementById('teacher-payable-lessons');
   const excusedEl=document.getElementById('teacher-excused-count');
   const makeupsEl=document.getElementById('teacher-makeups-count');
   if(weekEl) weekEl.textContent=sessionsThisWeek;
   if(monthEl) monthEl.textContent=sessionsThisMonth;
+  if(payableEl) payableEl.textContent=payableLessonsCount;
   if(excusedEl) excusedEl.textContent=excusedCount;
   const daysAbsentEl=document.getElementById('teacher-days-absent');
   if(daysAbsentEl) daysAbsentEl.textContent=teacherAbsentDays;
@@ -10249,9 +10694,6 @@ function openTeacherStudentWorkspace(studentId){
       </div>
       <div class="teacher-section-grid">
         <div>
-          <div class="card-title">Student Information</div>
-          <div class="summary-row"><span class="s-label">Phone</span><span class="s-val">${escapeHtml(student.phone1||'--')}</span></div>
-          <div class="summary-row"><span class="s-label">Email</span><span class="s-val">${escapeHtml(student.email||'--')}</span></div>
           <div class="card-title" style="margin-top:18px">Attendance Summary</div>
           <div class="summary-row"><span class="s-label">Attended</span><span class="s-val green">${attended}</span></div>
           <div class="summary-row"><span class="s-label">Absent</span><span class="s-val red">${absentTotal}</span></div>
@@ -10783,6 +11225,16 @@ function scheduleWeeklyLessonsFrom(student, firstDate, count, teacherForAbsenceC
   // not have written the NEW time onto the student record yet at this
   // point; lessonTimeForAbsenceCheck is always the correct, current one.
   const checkTime=lessonTimeForAbsenceCheck || student.lessonTime;
+  // v155 fix (item 5): this only ever checked whether the ROOM was at its
+  // shared 3-lesson cap — never whether THIS teacher specifically already
+  // has a different student booked at the exact date+time. A resumed
+  // (or renewed) student could silently land back in a slot someone else
+  // had since taken over, double-booking the teacher, as long as the room
+  // itself wasn't also full. Resolve the teacher the same way checkTime
+  // already resolves the time: prefer the caller-supplied value (mid-
+  // renewal, the student record may not have the NEW teacher written yet),
+  // falling back to the student's own current teacher.
+  const checkTeacher=teacherForAbsenceCheck || student.teacher;
   const isGroup = isGroupSession!=null ? isGroupSession : isGroupPlan(student.plan);
   const dur = isGroup ? GROUP_SESSION_DURATION_MINUTES : SESSION_DURATION_MINUTES;
   let i=0;
@@ -10809,6 +11261,13 @@ function scheduleWeeklyLessonsFrom(student, firstDate, count, teacherForAbsenceC
     // student's batch has room; each date needs its own answer, same as
     // the teacher-absence check just above.
     if(checkTime && typeof isRoomFullDuringRange==='function' && isRoomFullDuringRange(date, checkTime, dur, null)) continue;
+    // Skip a date+time where this TEACHER already has a different student
+    // booked — the room check above catches the shared 3-lesson cap, but
+    // says nothing about whether this specific teacher is free. Without
+    // this, resuming a frozen student (whose slot was explicitly opened up
+    // "for someone else to book" at freeze time) could double-book the
+    // teacher the moment someone actually took that offer.
+    if(checkTeacher && checkTime && typeof isTeacherBusyDuringRange==='function' && isTeacherBusyDuringRange(checkTeacher, date, checkTime, dur, null)) continue;
     const lesson={
       id:Date.now()+i,
       studentId:student.id,
@@ -12755,7 +13214,21 @@ function renderFreeSlotsOverview(){
         .map(s=>s.time)
         .filter(time=>{
           if(dayAlreadyPassed) return true; // day's already passed this week — genuinely free
-          return !pendingRenewalStudentForSlot(t.name, dayName, time); // hide if reserved for a pending renewal
+          if(pendingRenewalStudentForSlot(t.name, dayName, time)) return false; // reserved for a pending renewal
+          // A slot can be free for THIS teacher (no conflicting lesson of
+          // their own) while every room is still occupied by OTHER
+          // teachers' lessons at that instant — this view previously only
+          // checked the former, so it could recommend a time with nowhere
+          // to actually hold the session. Same room-capacity rule the
+          // booking flow itself uses (isRoomFullDuringRange), checked
+          // against this week's actual date for that weekday, at the
+          // standard session length — the real booking flow re-checks
+          // precisely once a specific plan/duration is chosen, so this is
+          // a directional "don't offer an impossible slot" signal, not a
+          // hard reservation.
+          if(dateThisWeek && typeof isRoomFullDuringRange==='function' &&
+             isRoomFullDuringRange(dateThisWeek, time, SESSION_DURATION_MINUTES)) return false;
+          return true;
         })
         .sort();
       if(times.length) byDay[dayName]=times;
