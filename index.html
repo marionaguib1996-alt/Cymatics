@@ -409,7 +409,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-162</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-163</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -857,7 +857,14 @@ input::placeholder{color:var(--text-dim)}
   <div class="card">
     <div class="card-title">Teacher Dashboard</div>
     <div class="table-wrap"><table>
-      <thead><tr><th>Teacher</th><th>Payable Lessons</th><th>Amount Due</th></tr></thead>
+      <thead><tr>
+        <th>Teacher</th>
+        <th title="Attended lessons this calendar month — a different lens than Payroll's pay-period figure, deliberately, so this table doesn't just repeat what Payroll already shows.">Taught This Month</th>
+        <th title="Distinct days marked teacher_absent this calendar month (a day with several absent lessons counts once).">Days Absent</th>
+        <th title="Currently active, non-frozen course records with this teacher.">Active Students</th>
+        <th title="Owed make-ups with nothing booked against them yet — a backlog signal.">Makeups Owed</th>
+        <th title="Trials this teacher has given, all-time: how many lapsed (auto-archived after 14+ days with nothing booked) versus the total that have run their course (lapsed + converted + still pending).">Lapsed Trials</th>
+      </tr></thead>
       <tbody id="report-teachers"></tbody>
     </table></div>
   </div>
@@ -5194,10 +5201,56 @@ function renderReports(){
  if(rt){
    const list=(db.teacherProfiles||[]).filter(p=>(p.status||'active')!=='archived');
    rt.innerHTML=list.map(p=>{
-      const eligible=db.lessons.filter(l=>isLessonInPayrollPeriod(l, month) && (l.teacher||'').toLowerCase()===(p.name||'').toLowerCase() && isPayrollEligibleLesson(l));
-      const payable=payableSessionCount(eligible);
-      return `<tr><td>${escapeHtml(p.name)}</td><td>${payable}</td><td>${egp(calculatePayrollAmount(eligible, p.rate))}</td></tr>`;
-   }).join('') || '<tr><td colspan="3">No teacher records.</td></tr>';
+      const tname=(p.name||'').toLowerCase();
+      const own=(db.lessons||[]).filter(l=>(l.status_record||'active')!=='archived' && (l.teacher||'').toLowerCase()===tname);
+
+      // Deliberately the CALENDAR month here, not the payroll period — the
+      // teacher's own dashboard uses the payroll period specifically so it
+      // matches their pay; this table exists precisely so Mario has a
+      // different lens than Payroll, not payroll numbers under new headers.
+      const taughtThisMonth=own.filter(l=>l.status==='attended' && String(l.date||'').slice(0,7)===month).length;
+      const daysAbsent=new Set(
+        own.filter(l=>l.status==='teacher_absent' && String(l.date||'').slice(0,7)===month).map(l=>l.date)
+      ).size;
+
+      const activeStudents=(db.students||[]).filter(s=>
+        (s.teacher||'').toLowerCase()===tname && (s.status||'active')!=='archived' && !s.frozen
+      ).length;
+
+      const makeupsOwed=own.filter(l=>
+        typeof isMakeupOwed==='function' && isMakeupOwed(l) &&
+        !(typeof findMakeupLessonFor==='function' && findMakeupLessonFor(l.id))
+      ).length;
+
+      // Lapsed trials, all-time (a stable track-record metric rather than a
+      // month-to-month blip). A trial's fate is one of three things:
+      //  - still pending (plan is still trial-ish, not archived)
+      //  - lapsed (autoArchivedAsStaleTrial — the one authoritative flag
+      //    autoArchiveStaleTrials sets, so this reuses it rather than
+      //    re-deriving the 14-day rule here)
+      //  - converted (plan changed away from trial, and at least one of
+      //    their lessons carries wasTrial — confirmRenewal's own marker)
+      const teacherStudents=(db.students||[]).filter(s=>(s.teacher||'').toLowerCase()===tname);
+      const pendingTrials=teacherStudents.filter(s=>
+        (s.plan==='trial'||s.plan==='group-trial') && (s.status||'active')!=='archived'
+      ).length;
+      const lapsedTrials=teacherStudents.filter(s=>!!s.autoArchivedAsStaleTrial).length;
+      const convertedTrials=teacherStudents.filter(s=>
+        s.plan!=='trial' && s.plan!=='group-trial' &&
+        (db.lessons||[]).some(l=>lessonBelongsToStudent(l,s) && l.wasTrial)
+      ).length;
+      const totalTrials=pendingTrials+lapsedTrials+convertedTrials;
+      const lapsedPct=totalTrials>0 ? Math.round(lapsedTrials/totalTrials*100)+'%' : '—';
+
+      return `<tr>
+        <td>${escapeHtml(p.name)}</td>
+        <td>${taughtThisMonth}</td>
+        <td>${daysAbsent}</td>
+        <td>${activeStudents}</td>
+        <td>${makeupsOwed}</td>
+        <td>${lapsedTrials}/${totalTrials} <span style="color:var(--text-muted)">(${lapsedPct})</span></td>
+      </tr>`;
+   }).join('') || '<tr><td colspan="6">No teacher records.</td></tr>';
  }
 
  const rm=document.getElementById('report-makeups');
