@@ -190,12 +190,6 @@ input::placeholder{color:var(--text-dim)}
 .teacher-panel{display:none}
 .teacher-panel.active{display:block}
 .teacher-grid{display:grid;grid-template-columns:repeat(4,minmax(140px,1fr));gap:12px;margin-bottom:1.25rem}
-/* Dashboard simplification: one always-visible line instead of three
-   hover-only tooltips repeating the same pay-period text — a title=""
-   tooltip never fires on a touch screen, so on a phone that context was
-   simply invisible before. */
-.teacher-pay-note{font-size:12px;color:var(--text-muted);margin-bottom:10px;display:flex;align-items:center;gap:6px}
-.teacher-pay-note::before{content:'ℹ';color:var(--gold-dim);font-weight:700}
 /* Hero row: the two numbers a teacher actually needs to act on (what
    they're owed, and what's still owed to them) get real visual weight —
    larger value text, only 2 columns so they read as the main event rather
@@ -405,7 +399,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-159</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-160</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1159,18 +1153,13 @@ input::placeholder{color:var(--text-dim)}
 
     <div id="teacher-panel-dashboard" class="teacher-panel active">
       <div id="teacher-dashboard">
-        <!-- Was three separate hover-only tooltips repeating the same pay-
-             period explanation — title="" tooltips don't fire on a touch
-             screen at all, so on a phone this context was simply invisible.
-             One always-visible line instead. -->
-        <div class="teacher-pay-note">Pay period: 25th of last month → 24th of this one (not the calendar month)</div>
         <div class="teacher-grid teacher-grid-hero">
           <div class="metric green" title="What actually counts toward this pay period's payroll — attended and paid-absence sessions, with a double session counted as two. Matches what Payroll shows for you."><div class="metric-label">Payable Lessons</div><div id="teacher-payable-lessons" class="metric-value green">0</div></div>
           <div class="metric red" style="cursor:pointer" onclick="toggleTeacherMakeupsDrilldown()" title="Tap to see who's owed a make-up"><div class="metric-label">Makeups Owed</div><div id="teacher-makeups-count" class="metric-value red">0</div></div>
         </div>
         <div class="teacher-grid teacher-grid-secondary">
-          <div class="metric"><div class="metric-label">This Week</div><div id="teacher-sessions-week" class="metric-value">0</div></div>
-          <div class="metric"><div class="metric-label">This Month</div><div id="teacher-sessions-month" class="metric-value">0</div></div>
+          <div class="metric"><div class="metric-label">Taught This Week</div><div id="teacher-sessions-week" class="metric-value">0</div></div>
+          <div class="metric"><div class="metric-label">Taught This Month</div><div id="teacher-sessions-month" class="metric-value">0</div></div>
           <div class="metric"><div class="metric-label">Excused</div><div id="teacher-excused-count" class="metric-value">0</div></div>
           <div class="metric"><div class="metric-label">Days Absent</div><div id="teacher-days-absent" class="metric-value">0</div></div>
         </div>
