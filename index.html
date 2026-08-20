@@ -351,6 +351,16 @@ input::placeholder{color:var(--text-dim)}
   /* A fixed-height inner scroll box inside an already-scrolling phone
      page is awkward — let Reports tables run their natural length. */
   #page-reports .table-wrap{max-height:none}
+  /* Same reasoning, applied to the teacher view's six main list panels
+     (My Students, Schedule, Lesson Plans, Lesson Logs, Resources,
+     Wishlists). Each was a 340–500px box with its own scrollbar sitting
+     inside the page's scroll — fiddly with a thumb, and easy to get
+     stuck scrolling the wrong one. !important is required here because
+     each sets max-height via an inline style attribute, which a plain
+     rule can't override. Desktop keeps the bounded panels, where a
+     mouse makes nested scrolling a non-issue and the fixed height keeps
+     the layout tidy. */
+  .teacher-main .teacher-list{max-height:none !important;overflow-y:visible !important}
   /* Modals: the inner panel is inline-styled to width:min(700px,90vw)
      with 20px padding on both the overlay and the panel, which wastes a
      lot of a phone screen. Reclaim it. */
@@ -399,7 +409,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-160</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-162</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -426,7 +436,7 @@ input::placeholder{color:var(--text-dim)}
   <button class="nav-btn" onclick="switchPage('teachers',this)">💰 Payroll</button>
   <button class="nav-btn" onclick="switchPage('profiles',this)">👨‍🏫 Teacher Management</button>
   <span class="nav-divider" aria-hidden="true"></span>
-  <button class="nav-btn" onclick="switchPage('lessons',this)">📅 Lessons</button>
+  <button class="nav-btn" onclick="switchPage('lessons',this)">✅ Attendance</button>
   <button class="nav-btn" onclick="switchPage('calendar',this)">📅 Calendar</button>
   <button class="nav-btn" onclick="switchPage('practice',this)">🎹 Practice Sessions</button>
   <span class="nav-divider" aria-hidden="true"></span>
@@ -1160,7 +1170,7 @@ input::placeholder{color:var(--text-dim)}
         <div class="teacher-grid teacher-grid-secondary">
           <div class="metric"><div class="metric-label">Taught This Week</div><div id="teacher-sessions-week" class="metric-value">0</div></div>
           <div class="metric"><div class="metric-label">Taught This Month</div><div id="teacher-sessions-month" class="metric-value">0</div></div>
-          <div class="metric"><div class="metric-label">Excused</div><div id="teacher-excused-count" class="metric-value">0</div></div>
+          <div class="metric"><div class="metric-label">Excused Absences</div><div id="teacher-excused-count" class="metric-value">0</div></div>
           <div class="metric"><div class="metric-label">Days Absent</div><div id="teacher-days-absent" class="metric-value">0</div></div>
         </div>
         <div class="teacher-section-grid">
