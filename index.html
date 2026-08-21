@@ -409,7 +409,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-165</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-166</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1132,6 +1132,12 @@ input::placeholder{color:var(--text-dim)}
     <button class="btn btn-gold" onclick="runDataHealthCheck()">🩺 Run Health Check</button>
     <small style="display:block;margin-top:8px;color:var(--text-muted)">Scans for data that's fallen out of sync or is inconsistent — orphaned records (a lesson whose student no longer exists, a broken multi-course link), duplicate lessons, teacher double-bookings, rooms over capacity, a frozen student still on the calendar, paid payroll periods worth double-checking for the double-session bug, unsynced records, and (when connected) duplicate or stale-linked rows in Supabase itself. Read-only: it only reports issues, it never changes or deletes anything on its own.</small>
     <div id="health-check-results" style="margin-top:14px"></div>
+
+    <div style="border-top:1px solid var(--border);margin:20px 0 16px;"></div>
+    <div class="card-title" style="margin-bottom:10px">Reconnect Orphaned Lessons</div>
+    <button class="btn" onclick="previewOrphanLessonRepair()">🔍 Preview Repair (changes nothing)</button>
+    <small style="display:block;margin-top:8px;color:var(--text-muted)">Some lessons lost their link to the student they belong to — they still hold the student's <em>name</em>, but point at an id that no longer exists, so the student looks like they have no lessons and their slot still shows as taken. This finds each orphaned lesson and works out which student it belongs to, matching on <strong>name + teacher + instrument together</strong> — never name alone. Preview lists exactly what it would reconnect and what it can't safely decide; nothing changes until you review it and confirm.</small>
+    <div id="orphan-repair-results" style="margin-top:14px"></div>
   </div>
 </div>
 
@@ -5572,6 +5578,110 @@ async function callCreateAdminFunction(email, password, resetPasswordIfExists){
 // The checks here match exactly what was manually verified during a full
 // code + sync audit, just packaged as a one-click admin tool instead of
 // something that has to be re-derived by hand each time.
+// ── Orphaned-lesson repair ───────────────────────────────────────────────// Historical damage from the bug fixed in v154: a lesson logged while its
+// student's own cloud insert was still in flight uploaded with that
+// student's TEMPORARY Date.now() id, and syncLessonUpdateToSupabase never
+// wrote student_id, so the cloud row's stale link could never be corrected.
+// A later full reload then re-injected that dead id locally. The lesson is
+// NOT lost — it still holds the student's name, teacher, instrument and
+// date. It's just pointing at an id nobody has. That makes the student look
+// like they have no lessons, while the lesson still silently occupies the
+// slot.
+//
+// Matching rule: name + teacher + instrument must ALL agree, and must
+// resolve to exactly ONE student. Name alone is precisely the matching
+// style that destroyed linked-course payment rows before v139, and this
+// academy genuinely has students sharing a name across two courses — so
+// anything ambiguous is reported for a human decision, never guessed.
+function findOrphanLessonMatches(){
+  const norm=v=>String(v||'').trim().toLowerCase();
+  const students=db.students||[];
+  const orphans=(db.lessons||[]).filter(l=>
+    (l.status_record||'active')!=='archived' &&
+    !students.some(s=>lessonBelongsToStudent(l,s))
+  );
+  const resolved=[], ambiguous=[], unmatched=[];
+  orphans.forEach(l=>{
+    const byName=students.filter(s=>norm(s.name)===norm(l.student));
+    if(!byName.length){ unmatched.push({lesson:l, reason:'no student with that name exists any more'}); return; }
+    // Narrow by teacher, then instrument — only where the lesson actually
+    // carries those fields, so a sparse old record isn't excluded for
+    // lacking data it never had.
+    let cands=byName;
+    if(l.teacher) {
+      const t=cands.filter(s=>norm(s.teacher)===norm(l.teacher));
+      if(t.length) cands=t;
+    }
+    if(l.instrument){
+      const i=cands.filter(s=>norm(s.instrument)===norm(l.instrument));
+      if(i.length) cands=i;
+    }
+    if(cands.length===1){ resolved.push({lesson:l, student:cands[0]}); }
+    else { ambiguous.push({lesson:l, candidates:cands}); }
+  });
+  return {orphans, resolved, ambiguous, unmatched};
+}
+
+function previewOrphanLessonRepair(){
+  const el=document.getElementById('orphan-repair-results');
+  if(!el) return;
+  const {orphans, resolved, ambiguous, unmatched}=findOrphanLessonMatches();
+  if(!orphans.length){
+    el.innerHTML='<div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px;color:#a8e8a8">✅ No orphaned lessons — every lesson is correctly linked to a student.</div>';
+    return;
+  }
+  const fmt=x=>`${x.lesson.date||'?'} — "${escapeHtml(x.lesson.student||'?')}" with ${escapeHtml(x.lesson.teacher||'?')}`;
+  let html=`<div style="background:#1b3a5c;border:1px solid #2c5a8a;border-radius:6px;padding:12px;margin-bottom:10px">
+    <div style="font-weight:700;color:#e2c47a;margin-bottom:6px">Found ${orphans.length} orphaned lesson(s)</div>
+    <div style="font-size:13px;color:#c8d8e8;line-height:1.6">
+      <strong style="color:#a8e8a8">${resolved.length}</strong> can be reconnected confidently (name + teacher + instrument all agree on exactly one student).<br>
+      <strong style="color:#e2c47a">${ambiguous.length}</strong> are ambiguous — more than one student fits, so these need your decision.<br>
+      <strong style="color:#f0a0a0">${unmatched.length}</strong> have no matching student at all — that student record is genuinely gone, so there is nothing to reconnect them to.
+    </div>
+  </div>`;
+  if(resolved.length){
+    html+=`<div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px;margin-bottom:10px">
+      <div style="font-weight:700;color:#a8e8a8;margin-bottom:6px">✅ Will reconnect (${resolved.length})</div>
+      <div style="font-size:13px;color:#c8d8e8;line-height:1.6">${resolved.slice(0,25).map(x=>fmt(x)+` → ${escapeHtml(x.student.name)} (${escapeHtml(x.student.instrument||'?')}, id ${x.student.id})`).join('<br>')}${resolved.length>25?`<br>…and ${resolved.length-25} more`:''}</div>
+      <button class="btn btn-gold" style="margin-top:12px" onclick="applyOrphanLessonRepair()">Reconnect these ${resolved.length} lesson(s)</button>
+    </div>`;
+  }
+  if(ambiguous.length){
+    html+=`<div style="background:#3a3520;border:1px solid #6a5a2a;border-radius:6px;padding:12px;margin-bottom:10px">
+      <div style="font-weight:700;color:#e2c47a;margin-bottom:6px">⚠️ Needs your decision (${ambiguous.length}) — left untouched</div>
+      <div style="font-size:13px;color:#c8d8e8;line-height:1.6">${ambiguous.slice(0,25).map(x=>fmt(x)+` → could be: ${x.candidates.map(c=>escapeHtml(c.instrument||'?')+' (id '+c.id+')').join(' or ')}`).join('<br>')}${ambiguous.length>25?`<br>…and ${ambiguous.length-25} more`:''}</div>
+    </div>`;
+  }
+  if(unmatched.length){
+    html+=`<div style="background:#3a2020;border:1px solid #6a2a2a;border-radius:6px;padding:12px">
+      <div style="font-weight:700;color:#f0a0a0;margin-bottom:6px">✖ No matching student (${unmatched.length}) — left untouched</div>
+      <div style="font-size:13px;color:#c8d8e8;line-height:1.6">${unmatched.slice(0,25).map(x=>fmt(x)).join('<br>')}${unmatched.length>25?`<br>…and ${unmatched.length-25} more`:''}</div>
+    </div>`;
+  }
+  el.innerHTML=html;
+}
+
+function applyOrphanLessonRepair(){
+  const {resolved}=findOrphanLessonMatches();
+  if(!resolved.length){ showToast('Nothing to reconnect.'); return; }
+  if(!confirm(`Reconnect ${resolved.length} lesson(s) to their students?\n\nOnly the unambiguous ones are touched. Anything uncertain is left exactly as it is.`)) return;
+  let done=0;
+  resolved.forEach(({lesson, student})=>{
+    lesson.studentId=student.id;
+    done++;
+    // Push the corrected link up so the cloud row stops carrying the dead
+    // id — otherwise the next full download would re-introduce it.
+    if(typeof syncLessonUpdateToSupabase==='function'){ try{ syncLessonUpdateToSupabase(lesson); }catch(_){} }
+  });
+  save();
+  if(typeof renderLessons==='function') renderLessons();
+  if(typeof renderStudents==='function') renderStudents();
+  if(typeof renderOverview==='function') renderOverview();
+  if(typeof renderCalendarPage==='function') renderCalendarPage();
+  showToast(`Reconnected ${done} lesson(s) ✓`);
+  previewOrphanLessonRepair();
+}
+
 async function runDataHealthCheck(){
   const el=document.getElementById('health-check-results');
   if(!el) return;
@@ -5610,6 +5720,7 @@ async function runDataHealthCheck(){
   );
   if(orphanLessons.length) issues.push({
     title:'Lessons whose student no longer exists',
+    total:orphanLessons.length,
     items:orphanLessons.slice(0,20).map(l=>`${l.date||'?'} — "${l.student||'Unknown'}" with ${l.teacher||'?'}`)
       .concat(orphanLessons.length>20 ? [`…and ${orphanLessons.length-20} more`] : [])
   });
@@ -5618,6 +5729,7 @@ async function runDataHealthCheck(){
   const orphanLogs=(db.lessonLogs||[]).filter(log=>!lessonIds.has(String(log.lessonId)));
   if(orphanLogs.length) issues.push({
     title:'Lesson logs (homework/notes) whose lesson no longer exists',
+    total:orphanLogs.length,
     items:orphanLogs.slice(0,20).map(log=>`${log.studentName||'Unknown'} — ${log.lessonDate||'?'}`)
       .concat(orphanLogs.length>20 ? [`…and ${orphanLogs.length-20} more`] : [])
   });
@@ -5626,6 +5738,7 @@ async function runDataHealthCheck(){
   const orphanTeacherLessons=(db.lessons||[]).filter(l=>(l.status_record||'active')!=='archived' && l.teacher && !teacherNames.has(l.teacher.toLowerCase()));
   if(orphanTeacherLessons.length) issues.push({
     title:'Lessons assigned to a teacher that no longer exists',
+    total:orphanTeacherLessons.length,
     items:orphanTeacherLessons.slice(0,20).map(l=>`${l.date||'?'} — "${l.student||'?'}" with "${l.teacher}"`)
       .concat(orphanTeacherLessons.length>20 ? [`…and ${orphanTeacherLessons.length-20} more`] : [])
   });
@@ -5754,6 +5867,7 @@ async function runDataHealthCheck(){
   });
   if(doubleBookedItems.length) issues.push({
     title:'Teacher double-booked — two different students at an overlapping time',
+    total:doubleBookedItems.length,
     items:doubleBookedItems.slice(0,20).concat(doubleBookedItems.length>20 ? [`…and ${doubleBookedItems.length-20} more`] : [])
   });
 
@@ -5782,6 +5896,7 @@ async function runDataHealthCheck(){
   });
   if(overCapacityItems.length) issues.push({
     title:'Rooms over capacity — more sessions booked at once than the shared room limit allows',
+    total:overCapacityItems.length,
     items:overCapacityItems.slice(0,20).concat(overCapacityItems.length>20 ? [`…and ${overCapacityItems.length-20} more`] : [])
   });
 
@@ -5835,6 +5950,7 @@ async function runDataHealthCheck(){
   });
   if(orphanPaymentKeys.length) issues.push({
     title:'Payment records for a student that no longer exists',
+    total:orphanPaymentKeys.length,
     items:orphanPaymentKeys.slice(0,20).concat(orphanPaymentKeys.length>20 ? [`…and ${orphanPaymentKeys.length-20} more`] : [])
   });
 
@@ -5884,6 +6000,7 @@ async function runDataHealthCheck(){
         );
         if(staleCloudLessons.length) issues.push({
           title:'Cloud lessons whose student_id doesn\'t match any current student (cloud check)',
+          total:staleCloudLessons.length,
           items:staleCloudLessons.slice(0,20).map(r=>`${r.lesson_date||'?'} — "${r.student_name||'?'}" with ${r.teacher||'?'} → cloud student_id ${r.student_id} not found locally`)
             .concat(staleCloudLessons.length>20 ? [`…and ${staleCloudLessons.length-20} more`] : [])
         });
@@ -5898,7 +6015,7 @@ async function runDataHealthCheck(){
 
   el.innerHTML=issues.map(issue=>`
     <div style="background:#1b3a5c;border:1px solid #2c5a8a;border-radius:6px;padding:12px;margin-bottom:10px">
-      <div style="font-weight:700;color:#e2c47a;margin-bottom:6px">⚠️ ${escapeHtml(issue.title)} (${issue.items.length})</div>
+      <div style="font-weight:700;color:#e2c47a;margin-bottom:6px">⚠️ ${escapeHtml(issue.title)} (${issue.total!=null ? issue.total : issue.items.length})</div>
       <div style="font-size:13px;color:#c8d8e8;line-height:1.6">${issue.items.map(i=>escapeHtml(i)).join('<br>')}</div>
     </div>
   `).join('');
