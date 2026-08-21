@@ -409,7 +409,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-166</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-167</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1138,6 +1138,12 @@ input::placeholder{color:var(--text-dim)}
     <button class="btn" onclick="previewOrphanLessonRepair()">🔍 Preview Repair (changes nothing)</button>
     <small style="display:block;margin-top:8px;color:var(--text-muted)">Some lessons lost their link to the student they belong to — they still hold the student's <em>name</em>, but point at an id that no longer exists, so the student looks like they have no lessons and their slot still shows as taken. This finds each orphaned lesson and works out which student it belongs to, matching on <strong>name + teacher + instrument together</strong> — never name alone. Preview lists exactly what it would reconnect and what it can't safely decide; nothing changes until you review it and confirm.</small>
     <div id="orphan-repair-results" style="margin-top:14px"></div>
+
+    <div style="border-top:1px solid var(--border);margin:20px 0 16px;"></div>
+    <div class="card-title" style="margin-bottom:10px">Rebuild Deleted Students</div>
+    <button class="btn" onclick="previewMissingStudentRebuild()">🔍 Preview Rebuild (changes nothing)</button>
+    <small style="display:block;margin-top:8px;color:var(--text-muted)">For students whose record was deleted entirely but whose lessons survived. Those lessons are the last remaining record of that person, and they still carry enough to rebuild one: <strong>name, teacher, instrument, and their usual day &amp; time</strong>. What cannot be recovered — because it only ever lived on the deleted record — is <strong>phone, email, age, joined date, plan &amp; pricing, and payment history</strong>. Rebuilt students are created on the default monthly plan and flagged for review, so check each one's plan and price before invoicing. Preview changes nothing.</small>
+    <div id="rebuild-students-results" style="margin-top:14px"></div>
   </div>
 </div>
 
@@ -5578,6 +5584,129 @@ async function callCreateAdminFunction(email, password, resetPasswordIfExists){
 // The checks here match exactly what was manually verified during a full
 // code + sync audit, just packaged as a one-click admin tool instead of
 // something that has to be re-derived by hand each time.
+// ── Rebuild students that were deleted outright ──────────────────────────
+// When a student record is deleted (a raw Supabase-side delete, say) but
+// their lessons survive, those lessons are the only remaining record of
+// that person — and they carry more than enough to rebuild a usable
+// student: name, teacher, instrument, and the day/time pattern implied by
+// their dates. That's what this reconstructs.
+//
+// What it CANNOT recover, because it only ever lived on the deleted
+// student row: phone, email, age, joined date, plan/pricing, custom
+// amounts, and payment history. Those are genuinely gone and must be
+// re-entered by hand — so every rebuilt student is flagged
+// (rebuiltFromOrphanLessons) and the preview says plainly what's inferred
+// versus what's missing. Nothing here guesses at money: plan defaults to
+// the app's own default rather than being inferred from lesson counts,
+// because an inferred plan would silently produce wrong invoices.
+function findMissingStudentRebuilds(){
+  const norm=v=>String(v||'').trim().toLowerCase();
+  const {unmatched}=findOrphanLessonMatches();
+  const groups={};
+  unmatched.forEach(({lesson})=>{
+    const key=norm(lesson.student)+'||'+norm(lesson.teacher);
+    (groups[key]=groups[key]||{name:(lesson.student||'').trim(), teacher:(lesson.teacher||'').trim(), lessons:[]}).lessons.push(lesson);
+  });
+  const WD=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const commonest=arr=>{
+    const c={}; arr.filter(Boolean).forEach(v=>{c[v]=(c[v]||0)+1;});
+    let best=null,n=0; Object.entries(c).forEach(([k,v])=>{ if(v>n){n=v;best=k;} });
+    return best;
+  };
+  return Object.values(groups).map(g=>{
+    const instrument=commonest(g.lessons.map(l=>l.instrument))||'';
+    const lessonTime=commonest(g.lessons.map(l=>l.time))||'';
+    const lesson_day=commonest(g.lessons.map(l=>{
+      if(!l.date) return null;
+      const d=new Date(l.date+'T00:00:00Z');
+      return isNaN(d) ? null : WD[d.getUTCDay()];
+    }))||'';
+    const dates=g.lessons.map(l=>l.date).filter(Boolean).sort();
+    return {...g, instrument, lessonTime, lesson_day, firstDate:dates[0]||'', lastDate:dates[dates.length-1]||'', count:g.lessons.length};
+  }).sort((a,b)=>a.name.localeCompare(b.name));
+}
+
+function previewMissingStudentRebuild(){
+  const el=document.getElementById('rebuild-students-results');
+  if(!el) return;
+  const groups=findMissingStudentRebuilds();
+  if(!groups.length){
+    el.innerHTML='<div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px;color:#a8e8a8">✅ No deleted students to rebuild — every orphaned lesson already matches an existing student.</div>';
+    return;
+  }
+  const totalLessons=groups.reduce((a,g)=>a+g.count,0);
+  el.innerHTML=`<div style="background:#1b3a5c;border:1px solid #2c5a8a;border-radius:6px;padding:12px;margin-bottom:10px">
+      <div style="font-weight:700;color:#e2c47a;margin-bottom:6px">${groups.length} deleted student(s) can be rebuilt from ${totalLessons} surviving lesson(s)</div>
+      <div style="font-size:13px;color:#c8d8e8;line-height:1.6">
+        Recovered from the lessons: <strong>name, teacher, instrument, usual day &amp; time</strong>.<br>
+        <strong style="color:#f0a0a0">Cannot be recovered</strong> (it only existed on the deleted record): phone, email, age, joined date, <strong>plan &amp; pricing</strong>, and payment history. Each rebuilt student is created on the default monthly plan and flagged for review — <strong>check their plan and price before invoicing</strong>.
+      </div>
+    </div>
+    <div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px">
+      <div style="font-weight:700;color:#a8e8a8;margin-bottom:6px">Will rebuild (${groups.length})</div>
+      <div style="font-size:13px;color:#c8d8e8;line-height:1.7">${groups.map(g=>
+        `<strong>${escapeHtml(g.name)}</strong> — ${escapeHtml(g.teacher||'?')} · ${escapeHtml(g.instrument||'instrument unknown')} · ${escapeHtml(g.lesson_day||'day unknown')} ${g.lessonTime?escapeHtml(formatTime12h(g.lessonTime)):''} · ${g.count} lesson(s) ${g.firstDate?'('+escapeHtml(g.firstDate)+' → '+escapeHtml(g.lastDate)+')':''}`
+      ).join('<br>')}</div>
+      <button class="btn btn-gold" style="margin-top:12px" onclick="applyMissingStudentRebuild()">Rebuild these ${groups.length} student(s) and reconnect their lessons</button>
+    </div>`;
+}
+
+function applyMissingStudentRebuild(){
+  const groups=findMissingStudentRebuilds();
+  if(!groups.length){ showToast('Nothing to rebuild.'); return; }
+  if(!confirm(`Rebuild ${groups.length} deleted student(s) from their surviving lessons?\n\nName, teacher, instrument, day and time are recovered.\nPhone, email, age, plan and payment history are NOT — review each one afterwards before invoicing.`)) return;
+
+  // Continue the existing CYM-xxxx sequence rather than restarting it.
+  let nextNum=(db.students||[]).reduce((max,s)=>{
+    const m=String(s.student_code||'').match(/CYM-(\d+)/);
+    return m ? Math.max(max, parseInt(m[1],10)) : max;
+  },0);
+
+  let built=0, relinked=0;
+  groups.forEach(g=>{
+    nextNum++;
+    const parts=g.name.split(/\s+/);
+    const student={
+      id:Date.now()+Math.floor(Math.random()*1000),
+      student_code:'CYM-'+String(nextNum).padStart(4,'0'),
+      first_name:parts[0]||g.name,
+      last_name:parts.slice(1).join(' '),
+      name:g.name,
+      age:null, ageRecordedAt:null,
+      teacher:g.teacher,
+      instrument:g.instrument,
+      phone1:'', phone2:'', email:'',
+      lesson_day:g.lesson_day,
+      lessonTime:g.lessonTime,
+      isOnline:false,
+      plan:'monthly',
+      joined_date:g.firstDate||'',
+      created_at:new Date().toISOString(),
+      status:'active',
+      skillLevel:'', currentGoal:'', milestones:[],
+      linkedPersonId:null,
+      // Marker so these are findable later, and so it's never ambiguous
+      // which records were reconstructed rather than originally entered.
+      rebuiltFromOrphanLessons:new Date().toISOString()
+    };
+    db.students.push(student);
+    built++;
+    g.lessons.forEach(l=>{
+      l.studentId=student.id;
+      relinked++;
+      if(typeof syncLessonUpdateToSupabase==='function'){ try{ syncLessonUpdateToSupabase(l); }catch(_){} }
+    });
+    if(typeof addStudentToSupabase==='function'){ try{ addStudentToSupabase(student); }catch(_){} }
+  });
+  save();
+  ['renderStudents','renderLessons','renderOverview','renderCalendarPage','renderDatabase'].forEach(fn=>{
+    if(typeof window[fn]==='function'){ try{ window[fn](); }catch(_){} }
+  });
+  showToast(`Rebuilt ${built} student(s), reconnected ${relinked} lesson(s) ✓`);
+  previewMissingStudentRebuild();
+  if(typeof previewOrphanLessonRepair==='function') previewOrphanLessonRepair();
+}
+
 // ── Orphaned-lesson repair ───────────────────────────────────────────────// Historical damage from the bug fixed in v154: a lesson logged while its
 // student's own cloud insert was still in flight uploaded with that
 // student's TEMPORARY Date.now() id, and syncLessonUpdateToSupabase never
