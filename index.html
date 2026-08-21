@@ -409,7 +409,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-167</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-168</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -6137,6 +6137,33 @@ async function runDataHealthCheck(){
     }catch(e2){ /* offline or not ready — silent */ }
   }
 
+  // 19. Duplicate student_code among LOCAL records, and outright id
+  // collisions. Both silently misroute: the app resolves a student with
+  // find(s => s.id === x) or by code in several places, and with either
+  // duplicated it returns whichever sits first in the array — so an Edit
+  // click, or a newly-scheduled lesson, can land on a completely
+  // different student. This is the local counterpart to the cloud
+  // duplicate-rows check further down.
+  const codeGroups={};
+  (db.students||[]).forEach(s=>{ if(s.student_code){ (codeGroups[s.student_code]=codeGroups[s.student_code]||[]).push(s); } });
+  const dupLocalCodes=Object.entries(codeGroups).filter(([,rows])=>rows.length>1);
+  if(dupLocalCodes.length) issues.push({
+    title:'Duplicate student codes in your local records — edits and new lessons can land on the wrong student',
+    total:dupLocalCodes.length,
+    items:dupLocalCodes.slice(0,20).map(([code,rows])=>`${code} — ${rows.length} records: ${rows.map(r=>`${r.name} (${r.instrument||'?'}, id ${r.id})`).join(' · ')}`)
+      .concat(dupLocalCodes.length>20 ? [`…and ${dupLocalCodes.length-20} more`] : [])
+  });
+
+  const idGroups={};
+  (db.students||[]).forEach(s=>{ (idGroups[String(s.id)]=idGroups[String(s.id)]||[]).push(s); });
+  const dupLocalIds=Object.entries(idGroups).filter(([,rows])=>rows.length>1);
+  if(dupLocalIds.length) issues.push({
+    title:'Students sharing the same id — this WILL misroute edits, lessons and payments',
+    total:dupLocalIds.length,
+    items:dupLocalIds.slice(0,20).map(([id,rows])=>`id ${id} — ${rows.map(r=>`${r.name} (${r.student_code||'no code'})`).join(' · ')}`)
+      .concat(dupLocalIds.length>20 ? [`…and ${dupLocalIds.length-20} more`] : [])
+  });
+
   if(!issues.length){
     el.innerHTML=`<div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px;color:#a8e8a8">✅ No issues found — ${allStudents.length} students, ${(db.teacherProfiles||[]).length} teachers, ${(db.lessons||[]).length} lessons, ${(db.lessonLogs||[]).length} lesson logs all checked out clean.</div>`;
     return;
@@ -8121,6 +8148,15 @@ async function addStudentToSupabase(student){
 }
 async function _addStudentToSupabaseImpl(student){
   try{
+    // Offline / client not ready yet: bail out quietly rather than
+    // throwing. Without this the very first line below dereferences an
+    // undefined client, and because addStudent() calls this without
+    // awaiting it, the rejection surfaces as an unhandled error on every
+    // single student add while offline.
+    if(!window.supabaseClientV1){
+      console.info('Student saved locally — cloud client not ready, will sync on next push.');
+      return;
+    }
     const payload = {
       student_code: student.student_code || '',
       first_name: student.first_name || '',
@@ -8176,6 +8212,25 @@ async function _addStudentToSupabaseImpl(student){
       if(data[0].id!=null && String(data[0].id)!==String(student.id)){
         const oldId=student.id;
         const newId=data[0].id;
+        // GUARD (v168): never take an id that another local student
+        // already holds. With duplicate student_code rows in the cloud —
+        // which this database genuinely has — the lookup above can return
+        // several rows for one code, and two different local students can
+        // both be handed data[0].id. They then share an id, and every
+        // `find(s => s.id === x)` in the app silently resolves to whichever
+        // happens to sit first in the array. That is the reported "clicked
+        // Edit on one student and a completely different student's record
+        // opened". Keeping the temporary id is strictly safer than
+        // colliding: a temp id is merely un-synced and self-heals on the
+        // next push, whereas a collision corrupts identity for BOTH
+        // students and silently misroutes edits, lessons and payments.
+        const collision=(db.students||[]).find(s=>s!==student && String(s.id)===String(newId));
+        if(collision){
+          console.warn('Refusing to re-key student '+(student.name||'')+' to id '+newId+
+            ' — already held by '+(collision.name||'another student')+
+            '. Duplicate student_code "'+(student.student_code||'')+'" in the cloud is the likely cause; clean the duplicates and re-sync.');
+          return;
+        }
         student.id=newId;
         // Anything already keyed to the TEMPORARY id must be re-pointed,
         // or it's silently orphaned the moment the real id arrives:
@@ -12412,7 +12467,21 @@ function chooseStudentStart(studentId, when){
   // happened". student_code never changes, so it's the reliable handle.
   let student=(db.students||[]).find(s=>String(s.id)===String(studentId));
   if(!student && window._pendingStartStudentCode){
-    student=(db.students||[]).find(s=>s.student_code===window._pendingStartStudentCode);
+    // student_code is the intended stable handle — but this database
+    // genuinely contains duplicate codes (the pre-v154 duplicate-insert
+    // damage), so a code can match SEVERAL students. Picking the first
+    // silently attaches the lesson to the wrong person: the reported
+    // "added a trial for today and the lesson never appeared" — it did
+    // get created, just against somebody else. Only accept the fallback
+    // when it is unambiguous.
+    const byCode=(db.students||[]).filter(s=>s.student_code===window._pendingStartStudentCode);
+    if(byCode.length===1){
+      student=byCode[0];
+    } else if(byCode.length>1){
+      window._pendingStartStudentCode=null;
+      showToast('Could not tell which student to schedule — '+byCode.length+' records share the code '+(byCode[0].student_code||'')+'. Clean the duplicates (Database → Health Check), then use Renew Subscription on the right one.');
+      return;
+    }
   }
   window._pendingStartStudentCode=null;
   if(!student){
