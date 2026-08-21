@@ -409,7 +409,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-163</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-165</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -13756,6 +13756,15 @@ function renderCalendarPage(){
       if(booked.length>0){
         const l=booked[0];
         const matchedStudent=(db.students||[]).find(s=>String(s.id)===String(l.studentId) || s.name===l.student);
+        // A lesson keeps its OWN stored name/status regardless of what
+        // happens to the student record later — so it renders identically
+        // whether the student is a normal active student, was archived, or
+        // no longer exists in db.students at all. That's invisible on the
+        // calendar: the Students tab excludes archived unconditionally
+        // (searching for them finds nothing), yet their old lessons look
+        // exactly like any other booking here. Flag both cases the same
+        // way, since either means "you won't find this person in Students."
+        const studentMissing=!matchedStudent || (matchedStudent.status||'active')==='archived';
         const paid=matchedStudent ? paidSet.has(String(matchedStudent.id)) : paidSet.has(String(l.studentId));
         const isTrial=matchedStudent && (matchedStudent.plan==='trial' || matchedStudent.plan==='group-trial');
         const isGroup=matchedStudent && isGroupPlan(matchedStudent.plan);
@@ -13772,9 +13781,11 @@ function renderCalendarPage(){
         // If this student is attending in what's normally someone else's
         // recurring slot this week, show that beneath their name.
         const originalHolder=originalSlotHolderName(l);
-        const nameBlock=`${escapeHtml(l.student||'Student')}${instTag}${trialTag}${groupTag}${makeupTag}`+
+        const missingTag=studentMissing ? ' ⚠' : '';
+        const nameBlock=`${escapeHtml(l.student||'Student')}${instTag}${trialTag}${groupTag}${makeupTag}${missingTag}`+
           (originalHolder?`<br><span style="font-size:9px;font-weight:400;opacity:0.75">Originally ${escapeHtml(originalHolder)}</span>`:'');
-        const subTitle=(instTag?' — '+escapeHtml(l.instrument||matchedStudent?.instrument||''):'')+(originalHolder?` — in ${escapeHtml(originalHolder)}'s usual slot this week`:'');
+        const subTitle=(instTag?' — '+escapeHtml(l.instrument||matchedStudent?.instrument||''):'')+(originalHolder?` — in ${escapeHtml(originalHolder)}'s usual slot this week`:'')+
+          (studentMissing?' — ⚠ this student is archived or no longer in your records; won\'t show up in Students':'');
         // Draggable so the admin can drop this lesson onto a free/frees-at
         // cell in the same teacher's column to change its time.
         const dragAttrs=`draggable="true" ondragstart="calendarDragStart(event,${l.id})"`;
@@ -13783,6 +13794,11 @@ function renderCalendarPage(){
           : paid
             ? {bg:'var(--surface,#1a1916)',color:'var(--text-light,#e8e4d8)',border:'1px solid #333',statusLabel:'Paid'}
             : {bg:'#7a5c1f',color:'#f0d78c',border:'1px solid #9c7a2e',statusLabel:'Unpaid'};
+        // An archived/missing student overrides the border with a dashed
+        // amber outline regardless of paid/trial status — the point is to
+        // catch the eye as "check this one" no matter what color the cell
+        // would otherwise be.
+        if(studentMissing) cellStyle.border='2px dashed #d9a441';
 
         // An off-grid custom start time (e.g. 2:15 PM saved through the
         // Edit Lesson "Custom time..." field) can land mid-slot inside a
@@ -13861,18 +13877,20 @@ function renderCalendarPage(){
         // one continuous block instead of visually splitting into a
         // different-looking second half.
         const contMatchedStudent=(db.students||[]).find(s=>String(s.id)===String(continuing.studentId) || s.name===continuing.student);
+        const contStudentMissing=!contMatchedStudent || (contMatchedStudent.status||'active')==='archived';
         const contPaid=contMatchedStudent ? paidSet.has(String(contMatchedStudent.id)) : paidSet.has(String(continuing.studentId));
         const contIsTrial=contMatchedStudent && (contMatchedStudent.plan==='trial' || contMatchedStudent.plan==='group-trial');
         const contIsGroup=contMatchedStudent && isGroupPlan(contMatchedStudent.plan);
         const contTrialTag=contIsTrial ? ' 🎓' : '';
         const contGroupTag=continuing.isDoubleSession ? ' ⏱ 90min' : (contIsGroup ? ' 👥 1hr' : '');
         const contMakeupTag=continuing.makeupForLessonId ? ' (Make-Up)' : '';
-        const contNameBlock=`${escapeHtml(continuing.student||'Student')}${contTrialTag}${contGroupTag}${contMakeupTag}`;
+        const contNameBlock=`${escapeHtml(continuing.student||'Student')}${contTrialTag}${contGroupTag}${contMakeupTag}${contStudentMissing?' ⚠':''}`;
         const contCellStyle=contIsTrial
           ? {bg:'#1b5e20',color:'#a5d6a7',border:'1px solid #2e7d32'}
           : contPaid
             ? {bg:'var(--surface,#1a1916)',color:'var(--text-light,#e8e4d8)',border:'1px solid #333'}
             : {bg:'#7a5c1f',color:'#f0d78c',border:'1px solid #9c7a2e'};
+        if(contStudentMissing) contCellStyle.border='2px dashed #d9a441';
         if(trailingStart){
           html+=`<div style="min-height:52px;display:flex;flex-direction:column">
             <div onclick="editLesson(${continuing.id})" title="Click to edit — ${escapeHtml(continuing.student)}'s ${continuing.isDoubleSession?'double session (90 min)':'session'} continues from ${escapeHtml(formatTime12h(continuing.time))} to ${escapeHtml(continuingEndLabel)}" style="background:${contCellStyle.bg};padding:2px;font-size:10px;font-weight:700;text-align:center;color:${contCellStyle.color};border:${contCellStyle.border};border-bottom:none;cursor:pointer;flex:1;display:flex;align-items:center;justify-content:center">
@@ -13924,8 +13942,14 @@ function renderCalendarPage(){
         // when full but a room genuinely frees partway through — that
         // shifted time). Either way, a real drop target: dropping a
         // dragged lesson here books it starting at the time shown.
+        // Green is ALSO used for a trial lesson's own cell (see the
+        // booked-lesson branch above) — a real name always accompanies
+        // that case, but a genuinely open slot previously rendered fully
+        // blank, which could look like a lesson silently missing its
+        // name rather than what it actually is: nothing booked here at
+        // all. An explicit "Free" removes that ambiguity outright.
         const dropTime=full ? freesAt : slot;
-        html+=`<div ondragover="calendarDragOverCell(event)" ondragleave="calendarDragLeaveCell(event)" ondrop="calendarDropOnCell(event,'${escapeAttr(t.name)}','${targetDate}','${dropTime}')" title="${full?'Free from '+escapeHtml(formatTime12h(freesAt)):'Free'} — drop a lesson here to book it" style="background:#1b5e20;border:1px solid #2e7d32;min-height:52px;display:flex;align-items:center;justify-content:center;font-size:11px;color:rgba(165,214,167,0.6);text-align:center;padding:2px">${fullLabel}</div>`;
+        html+=`<div ondragover="calendarDragOverCell(event)" ondragleave="calendarDragLeaveCell(event)" ondrop="calendarDropOnCell(event,'${escapeAttr(t.name)}','${targetDate}','${dropTime}')" title="${full?'Free from '+escapeHtml(formatTime12h(freesAt)):'Free'} — drop a lesson here to book it" style="background:#1b5e20;border:1px solid #2e7d32;min-height:52px;display:flex;align-items:center;justify-content:center;font-size:11px;color:rgba(165,214,167,0.6);text-align:center;padding:2px">${fullLabel||'Free'}</div>`;
       }
     });
 
@@ -13944,7 +13968,7 @@ function renderCalendarPage(){
 
   if(statusEl){
     const totalBooked=(db.lessons||[]).filter(l=>l.date===targetDate && (l.status_record||'active')!=='archived').length;
-    statusEl.innerHTML=`${totalBooked} lesson(s) on ${escapeHtml(formatLedgerDate(targetDate))} &nbsp;·&nbsp; <span style="color:#c62828">■</span> Teacher unavailable &nbsp;·&nbsp; <span style="color:#1b5e20">■</span> Free / Trial session &nbsp;·&nbsp; <span style="color:#7a5c1f">■</span> Unpaid &nbsp;·&nbsp; <span style="color:#555">■</span> Paid (no colour) &nbsp;·&nbsp; <span style="color:#4a2f6b">■</span> Practice booked &nbsp;·&nbsp; 🎓 Trial &nbsp;·&nbsp; 👥 Group session`;
+    statusEl.innerHTML=`${totalBooked} lesson(s) on ${escapeHtml(formatLedgerDate(targetDate))} &nbsp;·&nbsp; <span style="color:#c62828">■</span> Teacher unavailable &nbsp;·&nbsp; <span style="color:#1b5e20">■</span> Free / Trial session &nbsp;·&nbsp; <span style="color:#7a5c1f">■</span> Unpaid &nbsp;·&nbsp; <span style="color:#555">■</span> Paid (no colour) &nbsp;·&nbsp; <span style="color:#4a2f6b">■</span> Practice booked &nbsp;·&nbsp; 🎓 Trial &nbsp;·&nbsp; 👥 Group session &nbsp;·&nbsp; ⚠ Student archived or no longer on record`;
   }
 }
 
@@ -14202,6 +14226,24 @@ function lessonBelongsToFrozenStudent(l){
   return !!(s && s.frozen);
 }
 
+// A lesson's own status_record is one bookkeeping trail — whether the
+// STUDENT it belongs to is still around is a separate one, and nothing
+// checked it. Properly archiving a student (archiveStudent()) already
+// withdraws their future lessons correctly, but that's not the only way
+// a student stops being active: a direct Supabase-side deletion bypasses
+// the app's cleanup entirely, and a stale/mismatched id from a historical
+// sync issue can leave a cloud lesson row unreachable by a later delete
+// call, so it survives to be re-downloaded on the next full reload. Either
+// way, the visible symptom is the same — a lesson that still occupies a
+// room and blocks new bookings at that time, for a student nobody can
+// find anymore. This is the same reasoning as the frozen check above,
+// extended to "gone or archived" rather than "temporarily paused."
+function lessonStudentIsGone(l){
+  if(!l) return false;
+  const s=(db.students||[]).find(st=>String(st.id)===String(l.studentId) || st.name===l.student);
+  return !s || (s.status||'active')==='archived';
+}
+
 function getLessonsAtDateTime(date, time, excludeLessonId){
   const candidateMinutes=timeToMinutes(time);
   return (db.lessons||[]).filter(l=>{
@@ -14214,6 +14256,7 @@ function getLessonsAtDateTime(date, time, excludeLessonId){
     // happening, making a room look "Full" when it genuinely wasn't.
     if(l.status==='absent_excused' || l.status==='teacher_absent' || l.status==='absent_paid') return false;
     if(lessonBelongsToFrozenStudent(l)) return false; // paused student
+    if(lessonStudentIsGone(l)) return false; // archived or missing student
     if(excludeLessonId && l.id===excludeLessonId) return false;
     if(!l.time) return false;
     const duration=getLessonDurationMinutes(l);
@@ -14261,6 +14304,7 @@ function isRoomFullDuringRange(date, startTime, durationMinutes, excludeLessonId
     if(l.date!==date || !l.time || (l.status_record||'active')==='archived') return;
     if(l.status==='absent_excused' || l.status==='teacher_absent' || l.status==='absent_paid') return;
     if(lessonBelongsToFrozenStudent(l)) return; // paused student
+    if(lessonStudentIsGone(l)) return; // archived or missing student
     if(excludeLessonId && l.id===excludeLessonId) return;
     const m=timeToMinutes(l.time);
     if(m>rangeStart && m<rangeEnd) candidates.add(m);
@@ -14289,6 +14333,7 @@ function isTeacherBusyDuringRange(teacherName, date, startTime, durationMinutes,
     if(l.date!==date || !l.time || (l.status_record||'active')==='archived') return false;
     if(l.status==='absent_excused' || l.status==='teacher_absent' || l.status==='absent_paid') return false;
     if(lessonBelongsToFrozenStudent(l)) return false; // paused student
+    if(lessonStudentIsGone(l)) return false; // archived or missing student
     if(excludeLessonId && l.id===excludeLessonId) return false;
     if((l.teacher||'').toLowerCase()!==teacherName.toLowerCase()) return false;
     const duration=getLessonDurationMinutes(l);
@@ -14311,6 +14356,7 @@ function nextRoomBookableTime(date, time, durationMinutes){
     if(l.date!==date || !l.time || (l.status_record||'active')==='archived') return;
     if(l.status==='absent_excused' || l.status==='teacher_absent' || l.status==='absent_paid') return;
     if(lessonBelongsToFrozenStudent(l)) return; // paused student
+    if(lessonStudentIsGone(l)) return; // archived or missing student
     const duration=getLessonDurationMinutes(l);
     const end=timeToMinutes(l.time)+duration;
     if(end>startMin) candidates.add(end);
@@ -15431,6 +15477,7 @@ function isInstrumentBusyAtDateTime(date, time, instrument, excludeLessonId, exc
     if(l.date!==date || l.instrument!==instrument || (l.status_record||'active')==='archived') return false;
     if(l.status==='absent_excused' || l.status==='teacher_absent' || l.status==='absent_paid') return false;
     if(lessonBelongsToFrozenStudent(l)) return false; // paused student
+    if(lessonStudentIsGone(l)) return false; // archived or missing student
     if(excludeLessonId && l.id===excludeLessonId) return false;
     if(!l.time) return false;
     const duration=getLessonDurationMinutes(l);
