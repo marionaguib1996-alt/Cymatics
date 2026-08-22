@@ -409,7 +409,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-168</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-170</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -3174,11 +3174,22 @@ function renderStudents(){
     }
     const onlineBadge=s.isOnline ? ' <span class="badge badge-teal" title="This student attends online">💻 Online</span>' : '';
     const frozenBadge=s.frozen ? ` <span class="badge badge-blue" style="cursor:help" title="${escapeAttr('Frozen since '+(s.frozenSince?formatDateDMY(s.frozenSince):'—')+(s.frozenReason?': '+s.frozenReason:''))}">❄️ Frozen</span>` : '';
+    // Students reconstructed from their surviving lessons after a
+    // deletion: name/teacher/instrument/day/time were recoverable, but
+    // plan, price, phone, email and age were NOT — they only existed on
+    // the deleted record. Badge them so the ones still needing those
+    // details filled in are findable at a glance rather than hunted for
+    // among the whole roster. The badge clears itself once a phone has
+    // been entered, which is the natural signal the record's been
+    // reviewed and completed.
+    const rebuiltBadge=(s.rebuiltFromOrphanLessons && !s.phone1)
+      ? ` <span class="badge" style="background:#6a4a1a;color:#f0d78c;cursor:help" title="${escapeAttr('Rebuilt from this student\'s surviving lessons after their record was deleted. Check the plan and price, and add a phone number — those could not be recovered. This badge disappears once a phone is added.')}">⚙ Needs details</span>`
+      : '';
     const health=getStudentHealthFlags(s);
     const healthDot=health.level==='ok' ? '' :
       `<span title="${escapeAttr(health.reasons.join(' · '))}" style="display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:7px;vertical-align:middle;background:${health.level==='risk'?'#e05c5c':'#d4a017'}"></span>`;
     return `<tr>
-      <td>${healthDot}<strong>${escapeHtml(s.name)}</strong>${onlineBadge}${linkedBadge}${frozenBadge}</td>
+      <td>${healthDot}<strong>${escapeHtml(s.name)}</strong>${onlineBadge}${linkedBadge}${frozenBadge}${rebuiltBadge}</td>
       <td>${escapeHtml(s.instrument)||'—'}</td>
       <td>${escapeHtml(s.teacher)||'—'}</td>
       <td style="white-space:nowrap">${s.lesson_day?escapeHtml(s.lesson_day):'<span style="color:var(--danger,#e06c6c)">no day set</span>'}${s.lessonTime?'<br><span style="color:var(--text-muted);font-size:12px">'+escapeHtml(formatTime12h(s.lessonTime))+'</span>':''}</td>
@@ -7332,7 +7343,35 @@ async function _autoLoadFromCloudImpl(){
      // Stable key: student_code (CYM-XXXX), assigned locally at creation and
      // preserved through the temp-id → serial-id transition. Falls back to
      // public_id, then name, for older records that predate student_code.
-     const keyOf=s=>String(s.student_code||s.public_id||('name:'+(s.name||'')));
+     //
+     // v169: the code is NOT reliably unique in this database — the
+     // pre-v154 duplicate-insert damage left many codes on several rows,
+     // and in some cases on rows belonging to genuinely DIFFERENT people.
+     // Keying purely on it meant every row after the first for a given
+     // code was silently discarded on download, so a real student who
+     // happened to share a code simply never reached the app — present in
+     // Supabase, absent locally, and looking for all the world like they
+     // had been deleted. That is the reported "students got deleted on
+     // their own". The key now includes the cloud row's own id whenever a
+     // code is shared by rows with differing identities, so no row can
+     // ever evict another.
+     const codeCounts={};
+     cloudStudents.forEach(s=>{ const c=String(s.student_code||''); if(c) codeCounts[c]=(codeCounts[c]||0)+1; });
+     const identityOf=s=>String(s.name||'')+'|'+String(s.instrument||'')+'|'+String(s.teacher||'');
+     const sharedAmbiguousCodes=new Set();
+     Object.keys(codeCounts).forEach(c=>{
+       if(codeCounts[c]<2) return;
+       const rows=cloudStudents.filter(s=>String(s.student_code||'')===c);
+       // Rows that are byte-for-byte the same person are safe to collapse
+       // (they're literal re-inserts of one student). Rows that differ are
+       // different people colliding on a code — those must all survive.
+       if(new Set(rows.map(identityOf)).size>1) sharedAmbiguousCodes.add(c);
+     });
+     const keyOf=s=>{
+       const code=String(s.student_code||'');
+       if(code && sharedAmbiguousCodes.has(code)) return code+'#'+String(s.id!=null?s.id:identityOf(s));
+       return String(s.student_code||s.public_id||('name:'+(s.name||'')));
+     };
      const cloudByKey=new Map(cloudStudents.map(s=>[keyOf(s), s]));
      const localStudents=db.students||[];
 
