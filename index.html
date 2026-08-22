@@ -409,7 +409,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-170</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-171</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1144,6 +1144,12 @@ input::placeholder{color:var(--text-dim)}
     <button class="btn" onclick="previewMissingStudentRebuild()">🔍 Preview Rebuild (changes nothing)</button>
     <small style="display:block;margin-top:8px;color:var(--text-muted)">For students whose record was deleted entirely but whose lessons survived. Those lessons are the last remaining record of that person, and they still carry enough to rebuild one: <strong>name, teacher, instrument, and their usual day &amp; time</strong>. What cannot be recovered — because it only ever lived on the deleted record — is <strong>phone, email, age, joined date, plan &amp; pricing, and payment history</strong>. Rebuilt students are created on the default monthly plan and flagged for review, so check each one's plan and price before invoicing. Preview changes nothing.</small>
     <div id="rebuild-students-results" style="margin-top:14px"></div>
+
+    <div style="border-top:1px solid var(--border);margin:20px 0 16px;"></div>
+    <div class="card-title" style="margin-bottom:10px">Fix Duplicate Student Codes</div>
+    <button class="btn" onclick="previewDuplicateCodeRepair()">🔍 Preview Fix (changes nothing)</button>
+    <small style="display:block;margin-top:8px;color:var(--text-muted)">Two different problems share this symptom. Where the <strong>same person</strong> appears more than once, the copies are merged into the earliest record — lessons, payments and homework move across first, then the extra copies are removed. Where <strong>different people</strong> ended up sharing one code, nobody is deleted: the earliest keeps the code and the others are issued fresh unused ones. Duplicate codes are what make an Edit click, or a newly-scheduled lesson, land on the wrong student, so fixing this resolves that class of problem at its source. Preview changes nothing.</small>
+    <div id="dupcode-repair-results" style="margin-top:14px"></div>
   </div>
 </div>
 
@@ -3182,8 +3188,15 @@ function renderStudents(){
     // among the whole roster. The badge clears itself once a phone has
     // been entered, which is the natural signal the record's been
     // reviewed and completed.
-    const rebuiltBadge=(s.rebuiltFromOrphanLessons && !s.phone1)
-      ? ` <span class="badge" style="background:#6a4a1a;color:#f0d78c;cursor:help" title="${escapeAttr('Rebuilt from this student\'s surviving lessons after their record was deleted. Check the plan and price, and add a phone number — those could not be recovered. This badge disappears once a phone is added.')}">⚙ Needs details</span>`
+    // Flags a student with NO contact details at all. Deliberately keyed on
+    // the data itself rather than on a "was rebuilt" marker: that marker is
+    // local-only and isn't a Supabase column, so the very next cloud
+    // download replaces the record and silently erases it — which is
+    // exactly why the badge never appeared. Missing contact details survive
+    // any sync, and are the thing actually worth chasing.
+    const needsDetails=!String(s.phone1||'').trim() && !String(s.phone2||'').trim() && !String(s.email||'').trim();
+    const rebuiltBadge=needsDetails
+      ? ` <span class="badge" style="background:#6a4a1a;color:#f0d78c;cursor:help" title="${escapeAttr('No phone or email on record. If this student was rebuilt after a deletion, also check their plan and price — those could not be recovered either.')}">⚙ Needs details</span>`
       : '';
     const health=getStudentHealthFlags(s);
     const healthDot=health.level==='ok' ? '' :
@@ -5595,6 +5608,127 @@ async function callCreateAdminFunction(email, password, resetPasswordIfExists){
 // The checks here match exactly what was manually verified during a full
 // code + sync audit, just packaged as a one-click admin tool instead of
 // something that has to be re-derived by hand each time.
+// ── Duplicate student-code repair ────────────────────────────────────────
+// Two distinct problems live under one symptom here:
+//   (a) EXACT duplicates — the same person present more than once (same
+//       name + teacher + instrument). One record is real; the others are
+//       accidental re-inserts. These get merged: lessons, payments and
+//       lesson logs move onto the keeper, the copies are removed.
+//   (b) CODE COLLISIONS — genuinely different people sharing one
+//       student_code. Nobody may be deleted here; the earliest record
+//       keeps the code and the others are issued fresh, unused ones.
+// Keeper is always the LOWEST id, which is the original row — the higher
+// ids are the later accidental inserts.
+function findDuplicateCodeRepairs(){
+  const norm=v=>String(v||'').trim().toLowerCase();
+  const identityOf=s=>norm(s.name)+'|'+norm(s.teacher)+'|'+norm(s.instrument);
+  const byCode={};
+  (db.students||[]).forEach(s=>{ const c=String(s.student_code||''); if(c) (byCode[c]=byCode[c]||[]).push(s); });
+  const merges=[], recodes=[];
+  Object.entries(byCode).forEach(([code,rows])=>{
+    if(rows.length<2) return;
+    const byIdentity={};
+    rows.forEach(s=>{ (byIdentity[identityOf(s)]=byIdentity[identityOf(s)]||[]).push(s); });
+    Object.values(byIdentity).forEach(group=>{
+      if(group.length<2) return;
+      const sorted=group.slice().sort((a,b)=>Number(a.id)-Number(b.id));
+      merges.push({keeper:sorted[0], remove:sorted.slice(1), code});
+    });
+    const identities=Object.values(byIdentity);
+    if(identities.length>1){
+      // Different people on one code. Earliest keeps it; the rest re-coded.
+      const reps=identities.map(g=>g.slice().sort((a,b)=>Number(a.id)-Number(b.id))[0])
+                           .sort((a,b)=>Number(a.id)-Number(b.id));
+      reps.slice(1).forEach(s=>recodes.push({student:s, code}));
+    }
+  });
+  return {merges, recodes};
+}
+
+function previewDuplicateCodeRepair(){
+  const el=document.getElementById('dupcode-repair-results');
+  if(!el) return;
+  const {merges, recodes}=findDuplicateCodeRepairs();
+  if(!merges.length && !recodes.length){
+    el.innerHTML='<div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px;color:#a8e8a8">✅ No duplicate student codes in your local records.</div>';
+    return;
+  }
+  let html='';
+  if(merges.length){
+    const totalRemoved=merges.reduce((a,m)=>a+m.remove.length,0);
+    html+=`<div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px;margin-bottom:10px">
+      <div style="font-weight:700;color:#a8e8a8;margin-bottom:6px">Merge exact duplicates — ${totalRemoved} extra copy(ies) of ${merges.length} student(s)</div>
+      <div style="font-size:13px;color:#c8d8e8;line-height:1.6">${merges.map(m=>
+        `<strong>${escapeHtml(m.keeper.name)}</strong> (${escapeHtml(m.code)}) — keep id ${m.keeper.id}, remove id(s) ${m.remove.map(r=>r.id).join(', ')}; their lessons and payments move to id ${m.keeper.id}`
+      ).join('<br>')}</div>
+    </div>`;
+  }
+  if(recodes.length){
+    html+=`<div style="background:#3a3520;border:1px solid #6a5a2a;border-radius:6px;padding:12px;margin-bottom:10px">
+      <div style="font-weight:700;color:#e2c47a;margin-bottom:6px">Re-code different people sharing one code (${recodes.length}) — nobody is deleted</div>
+      <div style="font-size:13px;color:#c8d8e8;line-height:1.6">${recodes.map(r=>
+        `<strong>${escapeHtml(r.student.name)}</strong> (${escapeHtml(r.student.instrument||'?')}, id ${r.student.id}) currently shares ${escapeHtml(r.code)} — will be issued a new unused code`
+      ).join('<br>')}</div>
+    </div>`;
+  }
+  html+=`<button class="btn btn-gold" onclick="applyDuplicateCodeRepair()">Apply — merge ${merges.length} duplicate set(s) and re-code ${recodes.length} student(s)</button>`;
+  el.innerHTML=html;
+}
+
+function applyDuplicateCodeRepair(){
+  const {merges, recodes}=findDuplicateCodeRepairs();
+  if(!merges.length && !recodes.length){ showToast('Nothing to repair.'); return; }
+  if(!confirm(`Merge ${merges.length} duplicate set(s) and re-code ${recodes.length} student(s)?\n\nDuplicate copies are removed only after their lessons and payments are moved onto the record being kept. Different people sharing a code are never deleted — they just get a new code.`)) return;
+
+  let mergedCount=0, movedLessons=0, recodedCount=0;
+  merges.forEach(({keeper, remove})=>{
+    remove.forEach(dup=>{
+      (db.lessons||[]).forEach(l=>{
+        if(String(l.studentId)===String(dup.id)){
+          l.studentId=keeper.id; movedLessons++;
+          if(typeof syncLessonUpdateToSupabase==='function'){ try{ syncLessonUpdateToSupabase(l); }catch(_){} }
+        }
+      });
+      (db.lessonLogs||[]).forEach(lg=>{ if(String(lg.studentId)===String(dup.id)) lg.studentId=keeper.id; });
+      // Payments/methods/wishlists are keyed "<id>_<month>" or a bare id.
+      ['payments','paymentMethods','wishlists'].forEach(coll=>{
+        const map=db[coll]; if(!map || typeof map!=='object') return;
+        Object.keys(map).forEach(k=>{
+          if(k===String(dup.id)){ if(map[keeper.id]===undefined) map[keeper.id]=map[k]; delete map[k]; return; }
+          const idx=k.indexOf('_');
+          if(idx>0 && k.slice(0,idx)===String(dup.id)){
+            const nk=keeper.id+k.slice(idx);
+            if(map[nk]===undefined || map[nk]===false) map[nk]=map[k];
+            delete map[k];
+          }
+        });
+      });
+      db.students=(db.students||[]).filter(s=>s!==dup);
+      mergedCount++;
+    });
+  });
+
+  const usedCodes=new Set((db.students||[]).map(s=>String(s.student_code||'')).filter(Boolean));
+  let nextNum=0;
+  usedCodes.forEach(c=>{ const m=c.match(/CYM-(\d+)/); if(m) nextNum=Math.max(nextNum, parseInt(m[1],10)); });
+  recodes.forEach(({student})=>{
+    if(!db.students.includes(student)) return; // may have been merged away above
+    let code;
+    do { nextNum++; code='CYM-'+String(nextNum).padStart(4,'0'); } while(usedCodes.has(code));
+    usedCodes.add(code);
+    student.student_code=code;
+    recodedCount++;
+    if(typeof addStudentToSupabase==='function'){ try{ addStudentToSupabase(student); }catch(_){} }
+  });
+
+  save();
+  ['renderStudents','renderLessons','renderOverview','renderCalendarPage','renderDatabase'].forEach(fn=>{
+    if(typeof window[fn]==='function'){ try{ window[fn](); }catch(_){} }
+  });
+  showToast(`Merged ${mergedCount} duplicate(s), moved ${movedLessons} lesson(s), re-coded ${recodedCount} student(s) ✓`);
+  previewDuplicateCodeRepair();
+}
+
 // ── Rebuild students that were deleted outright ──────────────────────────
 // When a student record is deleted (a raw Supabase-side delete, say) but
 // their lessons survive, those lessons are the only remaining record of
@@ -5668,18 +5802,48 @@ function applyMissingStudentRebuild(){
   if(!confirm(`Rebuild ${groups.length} deleted student(s) from their surviving lessons?\n\nName, teacher, instrument, day and time are recovered.\nPhone, email, age, plan and payment history are NOT — review each one afterwards before invoicing.`)) return;
 
   // Continue the existing CYM-xxxx sequence rather than restarting it.
-  let nextNum=(db.students||[]).reduce((max,s)=>{
-    const m=String(s.student_code||'').match(/CYM-(\d+)/);
-    return m ? Math.max(max, parseInt(m[1],10)) : max;
-  },0);
+  // The next free code must be genuinely free. Deriving it from the local
+  // roster alone is not safe: if any student is missing locally at that
+  // moment (mid-sync, or dropped by a merge), the computed maximum is too
+  // low and the new codes land on top of existing ones — which is exactly
+  // what happened, putting Diala Raja on Sandy Wael's CYM-0051. Take the
+  // maximum across every code seen anywhere, then verify each candidate is
+  // actually unused before handing it out.
+  const usedCodes=new Set((db.students||[]).map(s=>String(s.student_code||'')).filter(Boolean));
+  let nextNum=0;
+  usedCodes.forEach(c=>{
+    const m=c.match(/CYM-(\d+)/);
+    if(m) nextNum=Math.max(nextNum, parseInt(m[1],10));
+  });
+  const freshCode=()=>{
+    let code;
+    do { nextNum++; code='CYM-'+String(nextNum).padStart(4,'0'); } while(usedCodes.has(code));
+    usedCodes.add(code);
+    return code;
+  };
 
   let built=0, relinked=0;
+  const normName=v=>String(v||'').trim().toLowerCase();
   groups.forEach(g=>{
-    nextNum++;
+    // Guard against rebuilding somebody who is already present — running
+    // the tool twice, or running it after the missing records have since
+    // arrived from the cloud, would otherwise create a second copy.
+    const already=(db.students||[]).find(s=>
+      normName(s.name)===normName(g.name) &&
+      normName(s.teacher)===normName(g.teacher) &&
+      normName(s.instrument)===normName(g.instrument));
+    if(already){
+      g.lessons.forEach(l=>{
+        l.studentId=already.id;
+        relinked++;
+        if(typeof syncLessonUpdateToSupabase==='function'){ try{ syncLessonUpdateToSupabase(l); }catch(_){} }
+      });
+      return;
+    }
     const parts=g.name.split(/\s+/);
     const student={
       id:Date.now()+Math.floor(Math.random()*1000),
-      student_code:'CYM-'+String(nextNum).padStart(4,'0'),
+      student_code:freshCode(),
       first_name:parts[0]||g.name,
       last_name:parts.slice(1).join(' '),
       name:g.name,
