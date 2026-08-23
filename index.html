@@ -409,7 +409,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-176</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-177</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1162,6 +1162,12 @@ input::placeholder{color:var(--text-dim)}
     <button class="btn" onclick="previewOrphanLogRepair()">🔍 Preview Re-link (changes nothing)</button>
     <small style="display:block;margin-top:8px;color:var(--text-muted)">Homework and lesson notes that lost their link to the lesson they belong to — the notes are intact, they just stopped appearing on the student's profile. Each log still records the student name and lesson date, and is re-linked only when that pair matches <strong>exactly one</strong> lesson; anything ambiguous is left for you. Preview changes nothing.</small>
     <div id="orphanlog-results" style="margin-top:14px"></div>
+
+    <div style="border-top:1px solid var(--border);margin:20px 0 16px;"></div>
+    <div class="card-title" style="margin-bottom:10px">Fix Duplicate Lessons</div>
+    <button class="btn" onclick="previewDuplicateLessonRepair()">🔍 Preview (changes nothing)</button>
+    <small style="display:block;margin-top:8px;color:var(--text-muted)">The same student billed or logged twice on one date. Identical duplicates and a leftover "Scheduled" placeholder superseded by a real recorded outcome are merged automatically. Two DIFFERENT real outcomes on the same day (e.g. Excused vs. Attended) are a genuine conflict only you can resolve — you'll get a picker for each. This also clears up several of the "ambiguous" cases in the tool above, since some of that ambiguity was caused by these duplicates in the first place.</small>
+    <div id="duplesson-results" style="margin-top:14px"></div>
   </div>
 </div>
 
@@ -2372,13 +2378,22 @@ migrateBackfillLessonStudentIds();
 //
 // Archiving keeps attended lessons on the record, so teacher payroll and
 // past reports are unaffected, and it can be undone from the Database tab.
-const TRIAL_AUTO_ARCHIVE_DAYS = 14;
+const TRIAL_AUTO_ARCHIVE_DAYS = 7;
+const MONTHLY_AUTO_ARCHIVE_DAYS = 14;
 function autoArchiveStaleTrials(){
   const todayKey=new Date().toISOString().slice(0,10);
   const archived=[];
   (db.students||[]).forEach(s=>{
     if((s.status||'active')==='archived' || s.frozen) return;
-    if(s.plan!=='trial' && s.plan!=='group-trial') return;
+    const isTrial=(s.plan==='trial' || s.plan==='group-trial');
+    // v177: was trial-only. Mario's intended policy was always two rates —
+    // 7 days for a trial that goes quiet, 14 for a monthly student — the
+    // monthly half simply hadn't been built. isMonthlyPlan() is the same
+    // "everything that isn't weekly or trial" definition used everywhere
+    // else in this app, for consistency.
+    const isMonthly=!isTrial && (typeof isMonthlyPlan==='function') && isMonthlyPlan(s.plan);
+    if(!isTrial && !isMonthly) return;
+    const days=isTrial ? TRIAL_AUTO_ARCHIVE_DAYS : MONTHLY_AUTO_ARCHIVE_DAYS;
     const own=(db.lessons||[]).filter(l=>
       lessonBelongsToStudent(l, s) && (l.status_record||'active')!=='archived'
     );
@@ -2397,11 +2412,12 @@ function autoArchiveStaleTrials(){
     );
     if(nameOrphans.length) return;
     const last=attended[attended.length-1];
-    const days=Math.floor((new Date(todayKey)-new Date(last))/86400000);
-    if(days<=TRIAL_AUTO_ARCHIVE_DAYS) return;
+    const daysSince=Math.floor((new Date(todayKey)-new Date(last))/86400000);
+    if(daysSince<=days) return;
     s.status='archived';
     s._localModifiedAt=Date.now();
-    s.autoArchivedAsStaleTrial=true;
+    if(isTrial) s.autoArchivedAsStaleTrial=true;
+    else s.autoArchivedAsStaleMonthly=true;
     // Only FUTURE sessions are withdrawn; lessons already taught stay put
     // (consistent with manual archiving).
     own.forEach(l=>{
@@ -2416,7 +2432,7 @@ function autoArchiveStaleTrials(){
   });
   if(archived.length){
     save();
-    console.log('Auto-archived '+archived.length+' stale trial student(s): '+archived.join(', '));
+    console.log('Auto-archived '+archived.length+' stale student(s): '+archived.join(', '));
     // Surfaced rather than silent — an automatic change to the roster
     // should never be something you only discover later.
     setTimeout(()=>{
@@ -5745,6 +5761,125 @@ function applyOrphanLogRepair(){
   previewOrphanLogRepair();
 }
 
+// ── Duplicate lesson repair ──────────────────────────────────────────────
+// Two records for the same student on the same date. Three shapes, three
+// different levels of confidence:
+//   * IDENTICAL status (Attended + Attended) — the same real session
+//     logged twice. Safe to merge: keep the earliest, move any lesson log
+//     pointing at the other onto it, remove the other.
+//   * one 'scheduled' + one with a real outcome (Attended, Excused, etc.)
+//     — 'scheduled' means nothing happened yet; if something else on the
+//     same date for the same student already has a recorded outcome, the
+//     placeholder is superseded. Safe to remove the placeholder.
+//   * two DIFFERENT real outcomes (Excused Absence + Absent & Paid) — this
+//     is a genuine conflict about what actually happened, and nothing here
+//     can know which is correct. Left for a human decision, same as
+//     every other ambiguous case in this file.
+function findDuplicateLessonGroups(){
+  const groups={};
+  (db.lessons||[]).forEach(l=>{
+    if((l.status_record||'active')==='archived' || !l.date) return;
+    const key=String(l.studentId)+'|'+l.date;
+    (groups[key]=groups[key]||[]).push(l);
+  });
+  const autoMerge=[], conflicts=[];
+  Object.values(groups).forEach(list=>{
+    if(list.length<2) return;
+    const sorted=list.slice().sort((a,b)=>Number(a.id)-Number(b.id));
+    const statuses=new Set(sorted.map(l=>l.status));
+    const student=(db.students||[]).find(s=>String(s.id)===String(sorted[0].studentId));
+    if(statuses.size===1){
+      autoMerge.push({keeper:sorted[0], remove:sorted.slice(1), student, reason:'identical status'});
+      return;
+    }
+    const scheduled=sorted.filter(l=>l.status==='scheduled');
+    const real=sorted.filter(l=>l.status!=='scheduled');
+    if(scheduled.length && real.length && real.length===1){
+      autoMerge.push({keeper:real[0], remove:scheduled, student, reason:'placeholder superseded'});
+      return;
+    }
+    conflicts.push({lessons:sorted, student});
+  });
+  return {autoMerge, conflicts};
+}
+
+function previewDuplicateLessonRepair(){
+  const el=document.getElementById('duplesson-results');
+  if(!el) return;
+  const {autoMerge, conflicts}=findDuplicateLessonGroups();
+  if(!autoMerge.length && !conflicts.length){
+    el.innerHTML='<div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px;color:#a8e8a8">✅ No duplicate lessons.</div>';
+    return;
+  }
+  let html='';
+  if(autoMerge.length){
+    html+='<div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px;margin-bottom:10px">'
+      +'<div style="font-weight:700;color:#a8e8a8;margin-bottom:6px">Will merge safely ('+autoMerge.length+')</div>'
+      +'<div style="font-size:13px;color:#c8d8e8;line-height:1.7">'
+      + autoMerge.map(function(g){
+          return (g.student?escapeHtml(g.student.name):'student id '+g.keeper.studentId)+' — '+escapeHtml(g.keeper.date)+': keep '+escapeHtml(STATUS_LABELS[g.keeper.status]||g.keeper.status)+', remove '+g.remove.length+' ('+escapeHtml(g.reason)+')';
+        }).join('<br>')
+      +'</div><button class="btn btn-gold" style="margin-top:12px" onclick="applyDuplicateLessonRepair()">Merge these '+autoMerge.length+' pair(s)</button></div>';
+  }
+  if(conflicts.length){
+    html+='<div style="background:#3a3520;border:1px solid #6a5a2a;border-radius:6px;padding:12px">'
+      +'<div style="font-weight:700;color:#e2c47a;margin-bottom:6px">Conflicting outcomes ('+conflicts.length+') — pick which is correct</div>'
+      +'<div style="font-size:12px;color:#c8d8e8;margin-bottom:10px">Both records claim a different real outcome for the same day — only you know which actually happened. Keep one, the other is removed.</div>'
+      +'<div style="font-size:13px;color:#c8d8e8;line-height:1.9">'
+      + conflicts.map(function(g,gi){
+          const name=g.student?g.student.name:'student id '+g.lessons[0].studentId;
+          const opts=g.lessons.map(function(l){ return '<option value="'+l.id+'">'+escapeHtml(STATUS_LABELS[l.status]||l.status)+' (id '+l.id+')</option>'; }).join('');
+          return '<div style="margin-bottom:6px">'+escapeHtml(name)+' — '+escapeHtml(g.lessons[0].date)+' → keep: <select id="lessconf-'+gi+'">'+opts+'</select> <button class="btn btn-sm btn-gold" onclick="resolveDuplicateLessonConflict('+gi+')">Keep this one</button></div>';
+        }).join('')
+      +'</div></div>';
+  }
+  el.innerHTML=html;
+  window._duplicateLessonConflicts=conflicts;
+}
+
+function resolveDuplicateLessonConflict(index){
+  const conflicts=window._duplicateLessonConflicts||[];
+  const g=conflicts[index];
+  const sel=document.getElementById('lessconf-'+index);
+  if(!g || !sel) return;
+  const keepId=sel.value;
+  const keeper=g.lessons.find(l=>String(l.id)===String(keepId));
+  const remove=g.lessons.filter(l=>String(l.id)!==String(keepId));
+  if(!keeper) return;
+  mergeLessonDuplicates(keeper, remove);
+  showToast('Kept '+(STATUS_LABELS[keeper.status]||keeper.status)+' ✓');
+  previewDuplicateLessonRepair();
+}
+
+function mergeLessonDuplicates(keeper, remove){
+  remove.forEach(dup=>{
+    (db.lessonLogs||[]).forEach(lg=>{ if(lg.lessonId===dup.id) lg.lessonId=keeper.id; });
+    db.lessons=(db.lessons||[]).filter(l=>l!==dup);
+    if(typeof deleteLessonCloudRowById==='function'){ try{ deleteLessonCloudRowById(dup.id); }catch(_){} }
+  });
+  save();
+  ['renderLessons','renderStudents','renderOverview','renderCalendarPage','renderTeacherWorkspace'].forEach(function(fn){
+    if(typeof window[fn]==='function'){ try{ window[fn](); }catch(_){} }
+  });
+}
+
+async function deleteLessonCloudRowById(cloudId){
+  try{
+    if(!window.supabaseClientV1 || cloudId==null) return;
+    await window.supabaseClientV1.from('lessons').delete().eq('id', cloudId);
+    await window.supabaseClientV1.from('lesson_updates').delete().eq('lesson_id', cloudId);
+  }catch(err){ console.warn('Duplicate lesson row delete failed (id '+cloudId+'):', err.message); }
+}
+
+function applyDuplicateLessonRepair(){
+  const {autoMerge}=findDuplicateLessonGroups();
+  if(!autoMerge.length){ showToast('Nothing to merge.'); return; }
+  if(!confirm('Merge '+autoMerge.length+' duplicate lesson pair(s)?\n\nOnly identical-status duplicates and superseded scheduled placeholders are touched — conflicting outcomes are never auto-picked.')) return;
+  autoMerge.forEach(function(g){ mergeLessonDuplicates(g.keeper, g.remove); });
+  showToast('Merged '+autoMerge.length+' duplicate pair(s) ✓');
+  previewDuplicateLessonRepair();
+}
+
 // ── Cloud duplicate ROW cleanup ──────────────────────────────────────────
 // Operates directly on the Supabase students table, which is where the
 // duplication actually lives. Two sources feed it: the original pre-v154
@@ -6600,7 +6735,7 @@ async function runDataHealthCheck(){
   if(hiddenArchived.length) issues.push({
     title:'Archived students — these exist but are hidden from the Students tab (find them in Database below, where Restore lives)',
     total:hiddenArchived.length,
-    items:hiddenArchived.slice(0,20).map(s=>`${s.name} (${s.instrument||'?'}, ${s.teacher||'?'}) — ${s.student_code||'no code'}${s.autoArchivedAsStaleTrial?' · auto-archived as a stale trial':''}`)
+    items:hiddenArchived.slice(0,20).map(s=>`${s.name} (${s.instrument||'?'}, ${s.teacher||'?'}) — ${s.student_code||'no code'}${s.autoArchivedAsStaleTrial?' · auto-archived as a stale trial (7d)':''}${s.autoArchivedAsStaleMonthly?' · auto-archived as a stale monthly plan (14d)':''}`)
       .concat(hiddenArchived.length>20 ? [`…and ${hiddenArchived.length-20} more`] : [])
   });
 
@@ -7749,13 +7884,39 @@ async function _autoLoadFromCloudImpl(){
    const el = document.getElementById('cloud-status');
    if(el) el.textContent = '⏳ Loading from cloud...';
 
+   // A plain .select('*') with no .limit() is silently capped by
+   // Supabase's server-side row limit (1000 by default) — a table that
+   // grows past that just returns its first page, forever, with no error
+   // to signal it. db.lessons is then WHOLESALE REPLACED from that partial
+   // result (see below), so anything past the cap simply disappears from
+   // every device on every load. Ordered oldest-first, the rows cut off
+   // are the NEWEST ones — which is exactly "add a student today, their
+   // lesson vanishes after a reload," one of the very first symptoms
+   // reported this session. Page through in fixed-size chunks so the
+   // number of rows on the server can never silently cap what comes back.
+   async function fetchAllRows(table, columns, orderCol, ascending){
+     const pageSize=1000;
+     let allRows=[], from=0;
+     while(true){
+       let q=client.from(table).select(columns).range(from, from+pageSize-1);
+       if(orderCol) q=q.order(orderCol, {ascending: ascending!==false});
+       const {data, error}=await q;
+       if(error) return {data:allRows.length?allRows:null, error};
+       if(!data || !data.length) break;
+       allRows=allRows.concat(data);
+       if(data.length<pageSize) break;
+       from+=pageSize;
+     }
+     return {data:allRows, error:null};
+   }
+
    const [{data:students,error:e1},{data:teachers,error:e2},{data:lessons,error:e3},{data:payments,error:e4},{data:teacherPaidRows,error:e5},{data:lessonUpdates,error:e6}] = await Promise.all([
-     client.from('students').select('*'),
+     fetchAllRows('students','*'),
      client.from('teachers').select('*'),
-     client.from('lessons').select('*').order('lesson_date',{ascending:true}),
-     client.from('payments').select('*'),
+     fetchAllRows('lessons','*','lesson_date',true),
+     fetchAllRows('payments','*'),
      client.from('teacher_paid').select('*'),
-     client.from('lesson_updates').select('*')
+     fetchAllRows('lesson_updates','*')
    ]);
 
    if(e1) throw e1;
