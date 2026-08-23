@@ -409,7 +409,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-171</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-172</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -5608,7 +5608,34 @@ async function callCreateAdminFunction(email, password, resetPasswordIfExists){
 // The checks here match exactly what was manually verified during a full
 // code + sync audit, just packaged as a one-click admin tool instead of
 // something that has to be re-derived by hand each time.
-// ── Duplicate student-code repair ────────────────────────────────────────
+// Deletes exactly ONE Supabase students row, matched by its own id — never
+// by student_code. deleteStudentFromSupabase (above) matches by code, which
+// is unsafe here: the whole point of this repair is that several rows
+// share one code, and a code-matched delete would remove the row being
+// KEPT along with the one being removed. This targets a single row only.
+async function deleteStudentCloudRowById(cloudId){
+  try{
+    if(!window.supabaseClientV1 || cloudId==null) return;
+    const {error}=await window.supabaseClientV1.from('students').delete().eq('id', cloudId);
+    if(error) console.warn('Duplicate row delete failed (id '+cloudId+'):', error.message);
+  }catch(err){ console.warn('Duplicate row delete failed (id '+cloudId+'):', err.message); }
+}
+
+// Updates an EXISTING Supabase row's student_code in place. Used instead of
+// addStudentToSupabase for a re-code, because that function inserts a NEW
+// row when no row matches the new code — leaving the student's original
+// cloud row, still carrying the old duplicated code, sitting there
+// untouched. That both fails to fix the cloud-side duplication and adds a
+// second, now-orphaned row for the same person.
+async function updateStudentCloudCode(cloudId, newCode){
+  try{
+    if(!window.supabaseClientV1 || cloudId==null) return;
+    const {error}=await window.supabaseClientV1.from('students').update({student_code:newCode}).eq('id', cloudId);
+    if(error) console.warn('Cloud re-code failed (id '+cloudId+'):', error.message);
+  }catch(err){ console.warn('Cloud re-code failed (id '+cloudId+'):', err.message); }
+}
+
+
 // Two distinct problems live under one symptom here:
 //   (a) EXACT duplicates — the same person present more than once (same
 //       name + teacher + instrument). One record is real; the others are
@@ -5657,7 +5684,7 @@ function previewDuplicateCodeRepair(){
   if(merges.length){
     const totalRemoved=merges.reduce((a,m)=>a+m.remove.length,0);
     html+=`<div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px;margin-bottom:10px">
-      <div style="font-weight:700;color:#a8e8a8;margin-bottom:6px">Merge exact duplicates — ${totalRemoved} extra copy(ies) of ${merges.length} student(s)</div>
+      <div style="font-weight:700;color:#a8e8a8;margin-bottom:6px">Merge exact duplicates — ${totalRemoved} extra copy(ies) of ${merges.length} student(s), removed locally AND from Supabase</div>
       <div style="font-size:13px;color:#c8d8e8;line-height:1.6">${merges.map(m=>
         `<strong>${escapeHtml(m.keeper.name)}</strong> (${escapeHtml(m.code)}) — keep id ${m.keeper.id}, remove id(s) ${m.remove.map(r=>r.id).join(', ')}; their lessons and payments move to id ${m.keeper.id}`
       ).join('<br>')}</div>
@@ -5678,7 +5705,7 @@ function previewDuplicateCodeRepair(){
 function applyDuplicateCodeRepair(){
   const {merges, recodes}=findDuplicateCodeRepairs();
   if(!merges.length && !recodes.length){ showToast('Nothing to repair.'); return; }
-  if(!confirm(`Merge ${merges.length} duplicate set(s) and re-code ${recodes.length} student(s)?\n\nDuplicate copies are removed only after their lessons and payments are moved onto the record being kept. Different people sharing a code are never deleted — they just get a new code.`)) return;
+  if(!confirm(`Merge ${merges.length} duplicate set(s) and re-code ${recodes.length} student(s)?\n\nDuplicate copies are removed locally AND from Supabase, only after their lessons and payments are moved onto the record being kept. Different people sharing a code are never deleted — they just get a new code, updated in Supabase too.`)) return;
 
   let mergedCount=0, movedLessons=0, recodedCount=0;
   merges.forEach(({keeper, remove})=>{
@@ -5705,6 +5732,9 @@ function applyDuplicateCodeRepair(){
       });
       db.students=(db.students||[]).filter(s=>s!==dup);
       mergedCount++;
+      // Remove the duplicate's own row from Supabase — by id, never by
+      // code, so the row being kept (which shares that code) is untouched.
+      if(typeof deleteStudentCloudRowById==='function'){ try{ deleteStudentCloudRowById(dup.id); }catch(_){} }
     });
   });
 
@@ -5718,7 +5748,11 @@ function applyDuplicateCodeRepair(){
     usedCodes.add(code);
     student.student_code=code;
     recodedCount++;
-    if(typeof addStudentToSupabase==='function'){ try{ addStudentToSupabase(student); }catch(_){} }
+    // Update the student's EXISTING cloud row rather than inserting a new
+    // one — otherwise their old row, still carrying the duplicated code,
+    // is left behind untouched and the cloud stays exactly as dirty as
+    // before, just with an extra orphaned row on top.
+    if(typeof updateStudentCloudCode==='function'){ try{ updateStudentCloudCode(student.id, code); }catch(_){} }
   });
 
   save();
@@ -14467,7 +14501,7 @@ function renderCalendarPage(){
         // name rather than what it actually is: nothing booked here at
         // all. An explicit "Free" removes that ambiguity outright.
         const dropTime=full ? freesAt : slot;
-        html+=`<div ondragover="calendarDragOverCell(event)" ondragleave="calendarDragLeaveCell(event)" ondrop="calendarDropOnCell(event,'${escapeAttr(t.name)}','${targetDate}','${dropTime}')" title="${full?'Free from '+escapeHtml(formatTime12h(freesAt)):'Free'} — drop a lesson here to book it" style="background:#1b5e20;border:1px solid #2e7d32;min-height:52px;display:flex;align-items:center;justify-content:center;font-size:11px;color:rgba(165,214,167,0.6);text-align:center;padding:2px">${fullLabel||'Free'}</div>`;
+        html+=`<div ondragover="calendarDragOverCell(event)" ondragleave="calendarDragLeaveCell(event)" ondrop="calendarDropOnCell(event,'${escapeAttr(t.name)}','${targetDate}','${dropTime}')" title="${full?'Free from '+escapeHtml(formatTime12h(freesAt)):'Free'} — drop a lesson here to book it" style="background:#1b5e20;border:1px solid #2e7d32;min-height:52px;display:flex;align-items:center;justify-content:center;font-size:11px;color:rgba(165,214,167,0.6);text-align:center;padding:2px">${fullLabel}</div>`;
       }
     });
 
