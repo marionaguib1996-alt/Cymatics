@@ -409,7 +409,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-173</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-174</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1156,6 +1156,12 @@ input::placeholder{color:var(--text-dim)}
     <button class="btn" onclick="previewCloudDuplicateCleanup()">🔍 Preview Cloud Cleanup (changes nothing)</button>
     <small style="display:block;margin-top:8px;color:var(--text-muted)">The tool above fixes your <em>local</em> records; this one cleans the <strong>Supabase table itself</strong>, where the duplicate rows actually live. Rows count as the same person only when <strong>name, teacher and instrument all match</strong> — so a student with two genuine courses is never collapsed — and at least one row always survives for everyone. The row kept is the one this app already points at, or failing that the earliest. Back up before applying.</small>
     <div id="cloudclean-results" style="margin-top:14px"></div>
+
+    <div style="border-top:1px solid var(--border);margin:20px 0 16px;"></div>
+    <div class="card-title" style="margin-bottom:10px">Reconnect Orphaned Lesson Logs</div>
+    <button class="btn" onclick="previewOrphanLogRepair()">🔍 Preview Re-link (changes nothing)</button>
+    <small style="display:block;margin-top:8px;color:var(--text-muted)">Homework and lesson notes that lost their link to the lesson they belong to — the notes are intact, they just stopped appearing on the student's profile. Each log still records the student name and lesson date, and is re-linked only when that pair matches <strong>exactly one</strong> lesson; anything ambiguous is left for you. Preview changes nothing.</small>
+    <div id="orphanlog-results" style="margin-top:14px"></div>
   </div>
 </div>
 
@@ -5642,6 +5648,92 @@ async function updateStudentCloudCode(cloudId, newCode){
 }
 
 
+// ── Orphaned lesson-log repair ───────────────────────────────────────────
+// A lesson log points at its lesson by lessonId. That link breaks when the
+// lesson's id changes (temp Date.now() id → real Supabase id) and the
+// cloud copy of the log keeps the stale value — the log itself is intact,
+// it just points at nothing, so the homework and notes stop appearing on
+// the student's profile.
+//
+// Recovery uses what the log still carries: studentName + lessonDate. A
+// log is only re-linked when that pair identifies EXACTLY ONE lesson.
+// Anything ambiguous is reported rather than guessed — the same rule used
+// everywhere else here, for the same reason.
+function findOrphanLogMatches(){
+  const norm=v=>String(v||'').trim().toLowerCase();
+  const lessons=(db.lessons||[]).filter(l=>(l.status_record||'active')!=='archived');
+  const lessonIds=new Set(lessons.map(l=>String(l.id)));
+  const orphans=(db.lessonLogs||[]).filter(lg=>lg && (lg.lessonId==null || !lessonIds.has(String(lg.lessonId))));
+  const resolved=[], ambiguous=[], unmatched=[];
+  orphans.forEach(lg=>{
+    const date=String(lg.lessonDate||'').slice(0,10);
+    if(!date){ unmatched.push({log:lg, reason:'no lesson date recorded'}); return; }
+    const cands=lessons.filter(l=>
+      String(l.date||'').slice(0,10)===date &&
+      norm(l.student)===norm(lg.studentName)
+    );
+    if(cands.length===1) resolved.push({log:lg, lesson:cands[0]});
+    else if(cands.length>1) ambiguous.push({log:lg, candidates:cands});
+    else unmatched.push({log:lg, reason:'no lesson for that student on that date'});
+  });
+  return {orphans, resolved, ambiguous, unmatched};
+}
+
+function previewOrphanLogRepair(){
+  const el=document.getElementById('orphanlog-results');
+  if(!el) return;
+  const {orphans, resolved, ambiguous, unmatched}=findOrphanLogMatches();
+  if(!orphans.length){
+    el.innerHTML='<div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px;color:#a8e8a8">✅ Every lesson log is correctly linked to its lesson.</div>';
+    return;
+  }
+  const fmt=x=>escapeHtml(x.log.studentName||'?')+' — '+escapeHtml(String(x.log.lessonDate||'?').slice(0,10));
+  let html='<div style="background:#1b3a5c;border:1px solid #2c5a8a;border-radius:6px;padding:12px;margin-bottom:10px">'
+    +'<div style="font-weight:700;color:#e2c47a;margin-bottom:6px">'+orphans.length+' lesson log(s) not linked to a lesson</div>'
+    +'<div style="font-size:13px;color:#c8d8e8;line-height:1.6">'
+    +'<strong style="color:#a8e8a8">'+resolved.length+'</strong> can be re-linked confidently (exactly one lesson matches that student and date).<br>'
+    +'<strong style="color:#e2c47a">'+ambiguous.length+'</strong> match more than one lesson — left for you to decide.<br>'
+    +'<strong style="color:#f0a0a0">'+unmatched.length+'</strong> have no matching lesson at all.'
+    +'</div></div>';
+  if(resolved.length){
+    html+='<div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px;margin-bottom:10px">'
+      +'<div style="font-weight:700;color:#a8e8a8;margin-bottom:6px">Will re-link ('+resolved.length+')</div>'
+      +'<div style="font-size:13px;color:#c8d8e8;line-height:1.6">'
+      + resolved.slice(0,25).map(fmt).join('<br>')
+      + (resolved.length>25 ? '<br>…and '+(resolved.length-25)+' more' : '')
+      +'</div><button class="btn btn-gold" style="margin-top:12px" onclick="applyOrphanLogRepair()">Re-link these '+resolved.length+' log(s)</button></div>';
+  }
+  if(ambiguous.length){
+    html+='<div style="background:#3a3520;border:1px solid #6a5a2a;border-radius:6px;padding:12px;margin-bottom:10px">'
+      +'<div style="font-weight:700;color:#e2c47a;margin-bottom:6px">Ambiguous ('+ambiguous.length+') — left untouched</div>'
+      +'<div style="font-size:13px;color:#c8d8e8;line-height:1.6">'+ambiguous.slice(0,25).map(fmt).join('<br>')+'</div></div>';
+  }
+  if(unmatched.length){
+    html+='<div style="background:#3a2020;border:1px solid #6a2a2a;border-radius:6px;padding:12px">'
+      +'<div style="font-weight:700;color:#f0a0a0;margin-bottom:6px">No matching lesson ('+unmatched.length+') — left untouched</div>'
+      +'<div style="font-size:13px;color:#c8d8e8;line-height:1.6">'+unmatched.slice(0,25).map(fmt).join('<br>')+'</div></div>';
+  }
+  el.innerHTML=html;
+}
+
+function applyOrphanLogRepair(){
+  const {resolved}=findOrphanLogMatches();
+  if(!resolved.length){ showToast('Nothing to re-link.'); return; }
+  if(!confirm('Re-link '+resolved.length+' lesson log(s) to their lessons?\n\nOnly logs where exactly one lesson matches the student and date are touched. Anything uncertain is left alone.')) return;
+  let done=0;
+  resolved.forEach(({log, lesson})=>{
+    log.lessonId=lesson.id;
+    done++;
+    if(typeof syncLessonLogToSupabase==='function'){ try{ syncLessonLogToSupabase(log); }catch(_){} }
+  });
+  save();
+  ['renderStudents','renderTeacherWorkspace','renderProfiles'].forEach(fn=>{
+    if(typeof window[fn]==='function'){ try{ window[fn](); }catch(_){} }
+  });
+  showToast('Re-linked '+done+' lesson log(s) ✓');
+  previewOrphanLogRepair();
+}
+
 // ── Cloud duplicate ROW cleanup ──────────────────────────────────────────
 // Operates directly on the Supabase students table, which is where the
 // duplication actually lives. Two sources feed it: the original pre-v154
@@ -7780,6 +7872,22 @@ async function _autoLoadFromCloudImpl(){
      const cloudById=new Map(cloudLogs.map(l=>[String(l.id), l]));
      const localLogs=db.lessonLogs||[];
      const localById=new Map(localLogs.map(l=>[String(l.id), l]));
+     // A cloud log's lesson_id is frozen at the moment it was uploaded,
+     // which is often BEFORE its lesson had swapped its temporary
+     // Date.now() id for the real one. The local copy gets corrected when
+     // that swap happens; the cloud row never does. So a cloud copy can
+     // carry a lesson_id that points at nothing, and blindly trusting it
+     // re-orphans a log that was previously fine — which is why the
+     // orphaned-log count climbed on every single sync. Keep whichever
+     // lessonId actually resolves to a real lesson.
+     const lessonIdSet=new Set((db.lessons||[]).map(l=>String(l.id)));
+     const reconcileLessonId=(chosen, other)=>{
+       if(!chosen || !other) return chosen;
+       const chosenOk=chosen.lessonId!=null && lessonIdSet.has(String(chosen.lessonId));
+       const otherOk=other.lessonId!=null && lessonIdSet.has(String(other.lessonId));
+       if(!chosenOk && otherOk) return {...chosen, lessonId:other.lessonId};
+       return chosen;
+     };
 
      // A log "has content" if a teacher actually entered something into it —
      // used to decide whether a local copy is worth preserving over an
@@ -7803,9 +7911,10 @@ async function _autoLoadFromCloudImpl(){
        }
        // Present in both: prefer the local copy when it carries content the
        // cloud copy is missing (local edit that hadn't fully propagated),
-       // otherwise trust the cloud copy as canonical.
-       if(hasContent(local) && !hasContent(cloud)){ merged.push(local); pendingReupload.push(local); }
-       else merged.push(cloud);
+       // otherwise trust the cloud copy as canonical — but never let a
+       // dangling lesson_id win over one that actually resolves.
+       if(hasContent(local) && !hasContent(cloud)){ merged.push(reconcileLessonId(local, cloud)); pendingReupload.push(local); }
+       else merged.push(reconcileLessonId(cloud, local));
      });
      db.lessonLogs=merged;
      // Re-queue any preserved local logs for upload (fire-and-forget).
