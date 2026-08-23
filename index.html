@@ -409,7 +409,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-178</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-179</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -8067,7 +8067,8 @@ async function _autoLoadFromCloudImpl(){
        customAmount: (s.custom_amount!=null) ? s.custom_amount : null,
        frozen: !!s.frozen,
        frozenSince: s.frozen_since||'',
-       frozenReason: s.frozen_reason||''
+       frozenReason: s.frozen_reason||'',
+       isOnline: !!s.is_online
      });
      const cloudStudents=students.map(mapCloudStudent);
      // Stable key: student_code (CYM-XXXX), assigned locally at creation and
@@ -8968,7 +8969,8 @@ async function _addStudentToSupabaseImpl(student){
       custom_amount: (student.customAmount!=null && student.customAmount!=='') ? Number(student.customAmount) : null,
       frozen: !!student.frozen,
       frozen_since: student.frozenSince || null,
-      frozen_reason: student.frozenReason || ''
+      frozen_reason: student.frozenReason || '',
+      is_online: !!student.isOnline
     };
 
     // Check for an existing row by student_code before inserting — a second
@@ -9154,7 +9156,8 @@ async function syncStudentUpdateToSupabase(student){
       custom_amount: (student.customAmount!=null && student.customAmount!=='') ? Number(student.customAmount) : null,
       frozen: !!student.frozen,
       frozen_since: student.frozenSince || null,
-      frozen_reason: student.frozenReason || ''
+      frozen_reason: student.frozenReason || '',
+      is_online: !!student.isOnline
     };
 
     const q = student.student_code
@@ -13954,41 +13957,48 @@ function getEffectiveTeacherDaySlots(teacherName, dayName, excludeStudentId, tar
 // options beyond just a student's own existing lesson times, since
 // those may not have a free follow-up slot at all (or academy-wide room
 // capacity may block it even when the teacher personally isn't busy).
-// Scoped to NEXT WEEK'S occurrence of today's own weekday specifically
-// (e.g. scheduling this on a Friday offers next Friday's windows) —
-// not the whole week, and not today itself even if today happens to be
-// that weekday, since a makeup needs to land on a day that's actually
-// still ahead.
+// v179: was scoped to a single day — the next occurrence of whichever
+// weekday happened to be TODAY when this was opened, which meant the
+// dropdown could show one narrow, arbitrary day even when the teacher had
+// several other genuinely open 90-minute windows later in the week. Now
+// scans every day the teacher actually works, across the next two weeks,
+// so the makeup dropdown genuinely reflects everything available rather
+// than whatever today's weekday happened to line up with.
 function findTeacherDoubleSessionWindows(teacherName, excludeLessonId){
   const prof=(db.teacherProfiles||[]).find(p=>p.name===teacherName);
   if(!prof) return [];
   const windows=[];
   const now=new Date();
   const todayKey=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');
-  const dayName=WEEKDAY_NAMES[now.getDay()];
-  if(!((prof.timeSlots||{})[dayName]||[]).length) return windows; // teacher doesn't work today's weekday at all
-  const targetDate=nextWeekdayStrictlyAfter(todayKey, dayName);
-  const effSlots=getEffectiveTeacherDaySlots(teacherName, dayName, null, targetDate);
-  effSlots.forEach((slot,i)=>{
-    if(slot.occupiedBy) return; // this slot itself must be free
-    const next=effSlots[i+1];
-    if(!next || next.occupiedBy) return; // and the slot right after it too
-    // Range checks over the FULL 90 minutes — the grid checks above
-    // catch grid-aligned bookings, but staggered/off-grid ones (a
-    // lesson at 5:45 inside a 5:30–7:00 window) only show up with a
-    // proper interval-overlap check. Room capacity likewise can fill
-    // partway through the window, not just at its slot boundaries.
-    if(isTeacherBusyDuringRange(teacherName, targetDate, slot.time, 90, excludeLessonId)) return;
-    if(isRoomFullDuringRange(targetDate, slot.time, 90, excludeLessonId)){
-      // A room may free partway through this slot (e.g. a practice
-      // session ending mid-slot) — a shifted 90-minute window starting
-      // then is still a genuinely valid double-session option.
-      const shifted=resolveShiftedBookableTime(targetDate, slot.time, 90, teacherName, excludeLessonId);
-      if(shifted) windows.push({date:targetDate, time:shifted, dayName});
-      return;
-    }
-    windows.push({date:targetDate, time:slot.time, dayName});
-  });
+  const HORIZON_DAYS=14;
+  for(let offset=0; offset<HORIZON_DAYS; offset++){
+    const d=new Date(now); d.setDate(d.getDate()+offset);
+    const targetDate=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+    const dayName=WEEKDAY_NAMES[d.getDay()];
+    if(!((prof.timeSlots||{})[dayName]||[]).length) continue; // teacher doesn't work this weekday at all
+    if(targetDate<todayKey) continue;
+    const effSlots=getEffectiveTeacherDaySlots(teacherName, dayName, null, targetDate);
+    effSlots.forEach((slot,i)=>{
+      if(slot.occupiedBy) return; // this slot itself must be free
+      const next=effSlots[i+1];
+      if(!next || next.occupiedBy) return; // and the slot right after it too
+      // Range checks over the FULL 90 minutes — the grid checks above
+      // catch grid-aligned bookings, but staggered/off-grid ones (a
+      // lesson at 5:45 inside a 5:30–7:00 window) only show up with a
+      // proper interval-overlap check. Room capacity likewise can fill
+      // partway through the window, not just at its slot boundaries.
+      if(isTeacherBusyDuringRange(teacherName, targetDate, slot.time, 90, excludeLessonId)) return;
+      if(isRoomFullDuringRange(targetDate, slot.time, 90, excludeLessonId)){
+        // A room may free partway through this slot (e.g. a practice
+        // session ending mid-slot) — a shifted 90-minute window starting
+        // then is still a genuinely valid double-session option.
+        const shifted=resolveShiftedBookableTime(targetDate, slot.time, 90, teacherName, excludeLessonId);
+        if(shifted) windows.push({date:targetDate, time:shifted, dayName});
+        return;
+      }
+      windows.push({date:targetDate, time:slot.time, dayName});
+    });
+  }
   return windows.sort((a,b)=> a.date===b.date ? a.time.localeCompare(b.time) : a.date.localeCompare(b.date));
 }
 
@@ -14891,9 +14901,10 @@ function renderCalendarPage(){
         // recurring slot this week, show that beneath their name.
         const originalHolder=originalSlotHolderName(l);
         const missingTag=studentMissing ? ' ⚠' : '';
-        const nameBlock=`${escapeHtml(l.student||'Student')}${instTag}${trialTag}${groupTag}${makeupTag}${missingTag}`+
+        const onlineTag=matchedStudent && matchedStudent.isOnline ? ' 💻' : '';
+        const nameBlock=`${escapeHtml(l.student||'Student')}${instTag}${trialTag}${groupTag}${makeupTag}${onlineTag}${missingTag}`+
           (originalHolder?`<br><span style="font-size:9px;font-weight:400;opacity:0.75">Originally ${escapeHtml(originalHolder)}</span>`:'');
-        const subTitle=(instTag?' — '+escapeHtml(l.instrument||matchedStudent?.instrument||''):'')+(originalHolder?` — in ${escapeHtml(originalHolder)}'s usual slot this week`:'')+
+        const subTitle=(instTag?' — '+escapeHtml(l.instrument||matchedStudent?.instrument||''):'')+(onlineTag?' — 💻 Online':'')+(originalHolder?` — in ${escapeHtml(originalHolder)}'s usual slot this week`:'')+
           (studentMissing?' — ⚠ this student is archived or no longer in your records; won\'t show up in Students':'');
         // Draggable so the admin can drop this lesson onto a free/frees-at
         // cell in the same teacher's column to change its time.
@@ -14993,7 +15004,7 @@ function renderCalendarPage(){
         const contTrialTag=contIsTrial ? ' 🎓' : '';
         const contGroupTag=continuing.isDoubleSession ? ' ⏱ 90min' : (contIsGroup ? ' 👥 1hr' : '');
         const contMakeupTag=continuing.makeupForLessonId ? ' (Make-Up)' : '';
-        const contNameBlock=`${escapeHtml(continuing.student||'Student')}${contTrialTag}${contGroupTag}${contMakeupTag}${contStudentMissing?' ⚠':''}`;
+        const contNameBlock=`${escapeHtml(continuing.student||'Student')}${contTrialTag}${contGroupTag}${contMakeupTag}${contMatchedStudent && contMatchedStudent.isOnline ? ' 💻' : ''}${contStudentMissing?' ⚠':''}`;
         const contCellStyle=contIsTrial
           ? {bg:'#1b5e20',color:'#a5d6a7',border:'1px solid #2e7d32'}
           : contPaid
@@ -15077,7 +15088,7 @@ function renderCalendarPage(){
 
   if(statusEl){
     const totalBooked=(db.lessons||[]).filter(l=>l.date===targetDate && (l.status_record||'active')!=='archived').length;
-    statusEl.innerHTML=`${totalBooked} lesson(s) on ${escapeHtml(formatLedgerDate(targetDate))} &nbsp;·&nbsp; <span style="color:#c62828">■</span> Teacher unavailable &nbsp;·&nbsp; <span style="color:#1b5e20">■</span> Free / Trial session &nbsp;·&nbsp; <span style="color:#7a5c1f">■</span> Unpaid &nbsp;·&nbsp; <span style="color:#555">■</span> Paid (no colour) &nbsp;·&nbsp; <span style="color:#4a2f6b">■</span> Practice booked &nbsp;·&nbsp; 🎓 Trial &nbsp;·&nbsp; 👥 Group session &nbsp;·&nbsp; ⚠ Student archived or no longer on record`;
+    statusEl.innerHTML=`${totalBooked} lesson(s) on ${escapeHtml(formatLedgerDate(targetDate))} &nbsp;·&nbsp; <span style="color:#c62828">■</span> Teacher unavailable &nbsp;·&nbsp; <span style="color:#1b5e20">■</span> Free / Trial session &nbsp;·&nbsp; <span style="color:#7a5c1f">■</span> Unpaid &nbsp;·&nbsp; <span style="color:#555">■</span> Paid (no colour) &nbsp;·&nbsp; <span style="color:#4a2f6b">■</span> Practice booked &nbsp;·&nbsp; 🎓 Trial &nbsp;·&nbsp; 👥 Group session &nbsp;·&nbsp; 💻 Online &nbsp;·&nbsp; ⚠ Student archived or no longer on record`;
   }
 }
 
