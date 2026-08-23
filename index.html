@@ -409,7 +409,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-177</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-178</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1162,6 +1162,9 @@ input::placeholder{color:var(--text-dim)}
     <button class="btn" onclick="previewOrphanLogRepair()">🔍 Preview Re-link (changes nothing)</button>
     <small style="display:block;margin-top:8px;color:var(--text-muted)">Homework and lesson notes that lost their link to the lesson they belong to — the notes are intact, they just stopped appearing on the student's profile. Each log still records the student name and lesson date, and is re-linked only when that pair matches <strong>exactly one</strong> lesson; anything ambiguous is left for you. Preview changes nothing.</small>
     <div id="orphanlog-results" style="margin-top:14px"></div>
+    <button class="btn" style="margin-top:8px" onclick="previewMissingLessonRebuild()">🔍 Preview: Recreate Missing Lessons for the Rest (changes nothing)</button>
+    <small style="display:block;margin-top:8px;color:var(--text-muted)">For logs with no matching lesson at all — the note itself is still there, it just has nothing to attach to. Creates a new lesson marked Attended, on the log's own date, only for a student its name + teacher + instrument identify uniquely. No payment or amount is ever created — this only gives the note somewhere to live again.</small>
+    <div id="rebuildlesson-results" style="margin-top:14px"></div>
 
     <div style="border-top:1px solid var(--border);margin:20px 0 16px;"></div>
     <div class="card-title" style="margin-bottom:10px">Fix Duplicate Lessons</div>
@@ -3717,6 +3720,19 @@ function renderOverview(){
       if(paid)collected+=getStudentPlanAmount(s); else unpaid.push(s);
     }
   });
+  // v178: archiving or freezing a student who had ALREADY PAID for this
+  // month made their payment silently drop out of Collected/profit —
+  // because they'd just been filtered out of monthStudents above before
+  // the paid check ever ran. The money genuinely arrived; what a student's
+  // status becomes AFTERWARD shouldn't rewrite what already happened this
+  // month. Outstanding correctly still excludes them — nobody is chased
+  // for money once they've archived or frozen — only Collected is
+  // corrected here, and only for a payment already on record.
+  db.students.filter(s=>(s.status||'active')==='archived' || s.frozen).forEach(s=>{
+    const key=s.id+'_'+month;
+    if(!db.payments[key]) return;
+    collected += getStudentPlanAmount(s);
+  });
   const teacherMonth=(db.teacherProfiles||[]).filter(p=>(p.status||'active')!=='archived');
   const totalTeacher=teacherMonth.reduce((a,t)=>{
       const eligible=db.lessons.filter(l=>isLessonInPayrollPeriod(l, month) && (l.teacher||'').toLowerCase()===(t.name||'').toLowerCase() && isPayrollEligibleLesson(l));
@@ -5695,15 +5711,112 @@ function findOrphanLogMatches(){
   orphans.forEach(lg=>{
     const date=String(lg.lessonDate||'').slice(0,10);
     if(!date){ unmatched.push({log:lg, reason:'no lesson date recorded'}); return; }
-    const cands=lessons.filter(l=>
+    let cands=lessons.filter(l=>
       String(l.date||'').slice(0,10)===date &&
       norm(l.student)===norm(lg.studentName)
     );
+    // A name+date match alone is ambiguous whenever the same name occupies
+    // more than one course (two students, or the same person's two
+    // courses) on that day — e.g. "Malak Haytham" attending both a Drums
+    // lesson and an E-Guitar lesson the same afternoon. createLessonLog
+    // stores the teacher and instrument on the log itself, so narrow by
+    // those before giving up, the same way orphan LESSON matching narrows
+    // by teacher+instrument against the student record.
+    if(cands.length>1 && lg.teacherName){
+      const t=cands.filter(l=>norm(l.teacher)===norm(lg.teacherName));
+      if(t.length) cands=t;
+    }
+    if(cands.length>1 && lg.instrument){
+      const i=cands.filter(l=>norm(l.instrument)===norm(lg.instrument));
+      if(i.length) cands=i;
+    }
     if(cands.length===1) resolved.push({log:lg, lesson:cands[0]});
     else if(cands.length>1) ambiguous.push({log:lg, candidates:cands});
     else unmatched.push({log:lg, reason:'no lesson for that student on that date'});
   });
   return {orphans, resolved, ambiguous, unmatched};
+}
+
+// ── Recreate missing lessons for genuinely unmatched logs ────────────────
+// A log with no matching lesson at all didn't necessarily lose its data —
+// the log itself still carries studentName, teacherName, instrument and
+// lessonDate (createLessonLog stores all four). If those together identify
+// exactly one current student, a new 'attended' lesson can be created to
+// give the note somewhere to live again — a homework log only ever gets
+// written for a lesson that happened, so 'attended' is the one reasonable
+// default, not a guess about something uncertain.
+// Money is deliberately NOT touched: no payment record is created or
+// implied by this — it exists purely so the note reappears on the
+// student's profile, matching the same restraint the student-rebuild tool
+// already uses for the fields it can't safely infer.
+function findMissingLessonRebuilds(){
+  const norm=v=>String(v||'').trim().toLowerCase();
+  const {unmatched}=findOrphanLogMatches();
+  const groups=[];
+  unmatched.forEach(function(x){
+    const lg=x.log;
+    const date=String(lg.lessonDate||'').slice(0,10);
+    if(!date) return;
+    let cands=(db.students||[]).filter(function(s){ return norm(s.name)===norm(lg.studentName); });
+    if(cands.length>1 && lg.teacherName){
+      const t=cands.filter(function(s){ return norm(s.teacher)===norm(lg.teacherName); });
+      if(t.length) cands=t;
+    }
+    if(cands.length>1 && lg.instrument){
+      const i=cands.filter(function(s){ return norm(s.instrument)===norm(lg.instrument); });
+      if(i.length) cands=i;
+    }
+    if(cands.length===1) groups.push({log:lg, date:date, student:cands[0]});
+  });
+  return groups;
+}
+
+function previewMissingLessonRebuild(){
+  const el=document.getElementById('rebuildlesson-results');
+  if(!el) return;
+  const groups=findMissingLessonRebuilds();
+  if(!groups.length){
+    el.innerHTML='<div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px;color:#a8e8a8">✅ Nothing left that can be safely recreated — any remaining unmatched logs don\'t identify a single current student.</div>';
+    return;
+  }
+  el.innerHTML='<div style="background:#1b3a5c;border:1px solid #2c5a8a;border-radius:6px;padding:12px;margin-bottom:10px">'
+    +'<div style="font-weight:700;color:#e2c47a;margin-bottom:6px">'+groups.length+' log(s) can get their lesson back</div>'
+    +'<div style="font-size:13px;color:#c8d8e8;line-height:1.6">Creates a new lesson marked <strong>Attended</strong> on the log\'s own date, for the one student its name+teacher+instrument identify. No payment or amount is touched — this only gives the homework note somewhere to attach again.</div></div>'
+    +'<div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px">'
+    +'<div style="font-weight:700;color:#a8e8a8;margin-bottom:6px">Will recreate ('+groups.length+')</div>'
+    +'<div style="font-size:13px;color:#c8d8e8;line-height:1.7">'
+    + groups.slice(0,30).map(function(g){ return escapeHtml(g.student.name)+' ('+escapeHtml(g.student.instrument||'?')+', '+escapeHtml(g.student.teacher||'?')+') — '+escapeHtml(g.date); }).join('<br>')
+    + (groups.length>30 ? '<br>…and '+(groups.length-30)+' more' : '')
+    +'</div><button class="btn btn-gold" style="margin-top:12px" onclick="applyMissingLessonRebuild()">Recreate '+groups.length+' lesson(s)</button></div>';
+}
+
+function applyMissingLessonRebuild(){
+  const groups=findMissingLessonRebuilds();
+  if(!groups.length){ showToast('Nothing to recreate.'); return; }
+  if(!confirm('Recreate '+groups.length+' lesson(s), marked Attended, so their logged homework has somewhere to attach again?\n\nNo payment or amount is created — this only restores the lesson-to-log connection.')) return;
+  let created=0;
+  groups.forEach(function(g){
+    const lesson={
+      id:Date.now()+Math.floor(Math.random()*1000)+created,
+      studentId:g.student.id, student:g.student.name,
+      teacher:g.log.teacherName||g.student.teacher||'',
+      instrument:g.log.instrument||g.student.instrument||'',
+      date:g.date, time:g.student.lessonTime||'', status:'attended',
+      month:g.date.slice(0,7),
+      recreatedFromOrphanLog:new Date().toISOString()
+    };
+    db.lessons.push(lesson);
+    g.log.lessonId=lesson.id;
+    created++;
+    if(typeof syncLessonToSupabase==='function'){ try{ syncLessonToSupabase(lesson); }catch(_){} }
+  });
+  save();
+  ['renderLessons','renderStudents','renderOverview','renderCalendarPage'].forEach(function(fn){
+    if(typeof window[fn]==='function'){ try{ window[fn](); }catch(_){} }
+  });
+  showToast('Recreated '+created+' lesson(s) ✓');
+  previewMissingLessonRebuild();
+  if(typeof previewOrphanLogRepair==='function') previewOrphanLogRepair();
 }
 
 function previewOrphanLogRepair(){
@@ -10163,6 +10276,14 @@ window.addEventListener('load', function(){
       const amt=getStudentPlanAmount(s);
       if(!isWeeklyPlan(s.plan)){ if(paid) collected+=amt; else outstanding+=amt; }
       else if(paid){ collected+=amt; }
+   });
+   // v178: same fix as the base renderOverview above (kept aligned per the
+   // comment at the top of this loop) — an already-collected payment from
+   // a student who is NOW archived or frozen must still count this month.
+   (db.students||[]).filter(s=>(s.status||'active')==='archived' || s.frozen).forEach(s=>{
+      const key=s.id+'_'+month;
+      if(!db.payments[key]) return;
+      collected += getStudentPlanAmount(s);
    });
 
    const totalExpenses=(db.expenses||[])
