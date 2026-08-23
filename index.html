@@ -409,7 +409,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-174</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-175</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -6167,9 +6167,21 @@ function previewOrphanLessonRepair(){
     </div>`;
   }
   if(ambiguous.length){
+    // A picker per lesson rather than a dead list: these are genuinely
+    // ambiguous (this academy really does have students with two courses
+    // on the same instrument), so the app can't decide — but leaving them
+    // permanently stuck isn't a resolution either. Mario picks; the app
+    // does the re-pointing.
     html+=`<div style="background:#3a3520;border:1px solid #6a5a2a;border-radius:6px;padding:12px;margin-bottom:10px">
-      <div style="font-weight:700;color:#e2c47a;margin-bottom:6px">⚠️ Needs your decision (${ambiguous.length}) — left untouched</div>
-      <div style="font-size:13px;color:#c8d8e8;line-height:1.6">${ambiguous.slice(0,25).map(x=>fmt(x)+` → could be: ${x.candidates.map(c=>escapeHtml(c.instrument||'?')+' (id '+c.id+')').join(' or ')}`).join('<br>')}${ambiguous.length>25?`<br>…and ${ambiguous.length-25} more`:''}</div>
+      <div style="font-weight:700;color:#e2c47a;margin-bottom:6px">⚠️ Needs your decision (${ambiguous.length})</div>
+      <div style="font-size:12px;color:#c8d8e8;margin-bottom:10px">More than one course matches, so nothing was changed. Pick the right one for each — check the day and time against the student's usual slot if you're unsure.</div>
+      <div style="font-size:13px;color:#c8d8e8;line-height:1.9">${ambiguous.slice(0,25).map(x=>{
+        const opts=x.candidates.map(c=>`<option value="${escapeAttr(String(c.id))}">${escapeHtml(c.instrument||'?')} · ${escapeHtml(c.teacher||'?')} · ${escapeHtml(c.lesson_day||'day ?')} ${c.lessonTime?escapeHtml(formatTime12h(c.lessonTime)):''} (id ${c.id})</option>`).join('');
+        return `<div style="margin-bottom:6px">${fmt(x)} →
+          <select id="ambig-${escapeAttr(String(x.lesson.id))}" style="max-width:320px">${opts}</select>
+          <button class="btn btn-sm btn-gold" onclick="assignAmbiguousOrphan('${escapeAttr(String(x.lesson.id))}')">Assign</button>
+        </div>`;
+      }).join('')}${ambiguous.length>25?`<br>…and ${ambiguous.length-25} more`:''}</div>
     </div>`;
   }
   if(unmatched.length){
@@ -6179,6 +6191,26 @@ function previewOrphanLessonRepair(){
     </div>`;
   }
   el.innerHTML=html;
+}
+
+// Assigns one ambiguous orphaned lesson to the student chosen in its
+// dropdown. Separate from applyOrphanLessonRepair on purpose: that one only
+// ever touches unambiguous matches, and must stay that way.
+function assignAmbiguousOrphan(lessonId){
+  const sel=document.getElementById('ambig-'+lessonId);
+  if(!sel){ showToast('Could not read the selection.'); return; }
+  const studentId=sel.value;
+  const lesson=(db.lessons||[]).find(l=>String(l.id)===String(lessonId));
+  const student=(db.students||[]).find(s=>String(s.id)===String(studentId));
+  if(!lesson || !student){ showToast('Lesson or student not found — refresh and try again.'); return; }
+  lesson.studentId=student.id;
+  save();
+  if(typeof syncLessonUpdateToSupabase==='function'){ try{ syncLessonUpdateToSupabase(lesson); }catch(_){} }
+  ['renderLessons','renderStudents','renderOverview','renderCalendarPage'].forEach(fn=>{
+    if(typeof window[fn]==='function'){ try{ window[fn](); }catch(_){} }
+  });
+  showToast('Assigned to '+(student.name||'student')+' ✓');
+  previewOrphanLessonRepair();
 }
 
 function applyOrphanLessonRepair(){
@@ -6527,6 +6559,20 @@ async function runDataHealthCheck(){
       }
     }catch(e2){ /* offline or not ready — silent */ }
   }
+
+  // 18b. Students hidden from the Students tab. That tab excludes archived
+  // students unconditionally — the status filter is about paid/unpaid, not
+  // active/archived — so an archived student is invisible there while still
+  // existing everywhere else. That's a recurring source of "where did this
+  // student go?", so list them explicitly rather than leaving it to be
+  // rediscovered each time.
+  const hiddenArchived=(db.students||[]).filter(s=>(s.status||'active')==='archived');
+  if(hiddenArchived.length) issues.push({
+    title:'Archived students — these exist but are hidden from the Students tab (find them in Database below, where Restore lives)',
+    total:hiddenArchived.length,
+    items:hiddenArchived.slice(0,20).map(s=>`${s.name} (${s.instrument||'?'}, ${s.teacher||'?'}) — ${s.student_code||'no code'}${s.autoArchivedAsStaleTrial?' · auto-archived as a stale trial':''}`)
+      .concat(hiddenArchived.length>20 ? [`…and ${hiddenArchived.length-20} more`] : [])
+  });
 
   // 19. Duplicate student_code among LOCAL records, and outright id
   // collisions. Both silently misroute: the app resolves a student with
