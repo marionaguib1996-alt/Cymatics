@@ -409,7 +409,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-175</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-176</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -2385,6 +2385,17 @@ function autoArchiveStaleTrials(){
     if(own.some(l=>l.status==='scheduled')) return; // something is still booked
     const attended=own.filter(l=>l.status==='attended' && l.date).map(l=>l.date).sort();
     if(!attended.length) return;
+    // If lessons carrying this student's NAME exist but aren't linked to
+    // them (an orphaned link), the picture above is incomplete — their most
+    // recent session may simply be invisible here. Archiving on that basis
+    // would retire a student who is actually still active, which is exactly
+    // the failure that has been reported. Skip until the links are repaired.
+    const nameOrphans=(db.lessons||[]).filter(l=>
+      (l.status_record||'active')!=='archived' &&
+      String(l.student||'').trim().toLowerCase()===String(s.name||'').trim().toLowerCase() &&
+      !lessonBelongsToStudent(l, s)
+    );
+    if(nameOrphans.length) return;
     const last=attended[attended.length-1];
     const days=Math.floor((new Date(todayKey)-new Date(last))/86400000);
     if(days<=TRIAL_AUTO_ARCHIVE_DAYS) return;
@@ -6135,6 +6146,25 @@ function findOrphanLessonMatches(){
     if(l.instrument){
       const i=cands.filter(s=>norm(s.instrument)===norm(l.instrument));
       if(i.length) cands=i;
+    }
+    // Same person, two courses on the SAME instrument with the same teacher
+    // is a real arrangement here — name/teacher/instrument can't separate
+    // those. What does separate them is the slot: each course sits on its
+    // own weekday, and the lesson's own date says which weekday it fell on.
+    // Match that before giving up, then narrow further by time if the two
+    // courses somehow share a weekday too.
+    if(cands.length>1 && l.date){
+      const WD=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+      const d=new Date(String(l.date)+'T00:00:00Z');
+      if(!isNaN(d)){
+        const dayName=WD[d.getUTCDay()];
+        const sameDay=cands.filter(s=>norm(s.lesson_day)===norm(dayName));
+        if(sameDay.length) cands=sameDay;
+      }
+    }
+    if(cands.length>1 && l.time){
+      const sameTime=cands.filter(s=>String(s.lessonTime||'')===String(l.time));
+      if(sameTime.length) cands=sameTime;
     }
     if(cands.length===1){ resolved.push({lesson:l, student:cands[0]}); }
     else { ambiguous.push({lesson:l, candidates:cands}); }
