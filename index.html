@@ -409,7 +409,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-172</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-173</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1150,6 +1150,12 @@ input::placeholder{color:var(--text-dim)}
     <button class="btn" onclick="previewDuplicateCodeRepair()">🔍 Preview Fix (changes nothing)</button>
     <small style="display:block;margin-top:8px;color:var(--text-muted)">Two different problems share this symptom. Where the <strong>same person</strong> appears more than once, the copies are merged into the earliest record — lessons, payments and homework move across first, then the extra copies are removed. Where <strong>different people</strong> ended up sharing one code, nobody is deleted: the earliest keeps the code and the others are issued fresh unused ones. Duplicate codes are what make an Edit click, or a newly-scheduled lesson, land on the wrong student, so fixing this resolves that class of problem at its source. Preview changes nothing.</small>
     <div id="dupcode-repair-results" style="margin-top:14px"></div>
+
+    <div style="border-top:1px solid var(--border);margin:20px 0 16px;"></div>
+    <div class="card-title" style="margin-bottom:10px">Clean Duplicate Rows in Supabase</div>
+    <button class="btn" onclick="previewCloudDuplicateCleanup()">🔍 Preview Cloud Cleanup (changes nothing)</button>
+    <small style="display:block;margin-top:8px;color:var(--text-muted)">The tool above fixes your <em>local</em> records; this one cleans the <strong>Supabase table itself</strong>, where the duplicate rows actually live. Rows count as the same person only when <strong>name, teacher and instrument all match</strong> — so a student with two genuine courses is never collapsed — and at least one row always survives for everyone. The row kept is the one this app already points at, or failing that the earliest. Back up before applying.</small>
+    <div id="cloudclean-results" style="margin-top:14px"></div>
   </div>
 </div>
 
@@ -5635,6 +5641,90 @@ async function updateStudentCloudCode(cloudId, newCode){
   }catch(err){ console.warn('Cloud re-code failed (id '+cloudId+'):', err.message); }
 }
 
+
+// ── Cloud duplicate ROW cleanup ──────────────────────────────────────────
+// Operates directly on the Supabase students table, which is where the
+// duplication actually lives. Two sources feed it: the original pre-v154
+// duplicate-insert damage (several rows sharing one student_code), and
+// extra rows created by the v171 re-code step, which INSERTED a new row
+// instead of updating the existing one — so a re-coded student ended up
+// with their originals plus a new row.
+//
+// Safety rules, deliberately conservative:
+//   * Rows are grouped as "the same person" only when name, teacher AND
+//     instrument all match. A student with two genuine courses differs by
+//     instrument or teacher, so those are never collapsed.
+//   * The keeper is the row whose id the app is already pointing at
+//     locally; failing that, the LOWEST id, which is the original.
+//   * At least one row always survives for every person.
+async function findCloudDuplicateRows(){
+  if(!window.supabaseClientV1) return {error:'offline', groups:[]};
+  const {data, error}=await window.supabaseClientV1.from('students')
+    .select('id,student_code,first_name,last_name,teacher,instrument');
+  if(error) return {error:error.message, groups:[]};
+  const rows=data||[];
+  const norm=v=>String(v||'').trim().toLowerCase();
+  const nameOf=r=>norm(((r.first_name||'')+' '+(r.last_name||'')).trim());
+  const identityOf=r=>nameOf(r)+'|'+norm(r.teacher)+'|'+norm(r.instrument);
+  const localIds=new Set((db.students||[]).map(s=>String(s.id)));
+  const byIdentity={};
+  rows.forEach(r=>{ (byIdentity[identityOf(r)]=byIdentity[identityOf(r)]||[]).push(r); });
+  const groups=[];
+  Object.values(byIdentity).forEach(rs=>{
+    if(rs.length<2) return;
+    const sorted=rs.slice().sort((a,b)=>Number(a.id)-Number(b.id));
+    const keeper=sorted.find(r=>localIds.has(String(r.id))) || sorted[0];
+    const remove=sorted.filter(r=>r!==keeper);
+    if(!remove.length) return;
+    groups.push({
+      name:((keeper.first_name||'')+' '+(keeper.last_name||'')).trim(),
+      teacher:keeper.teacher||'', instrument:keeper.instrument||'',
+      keeper, remove
+    });
+  });
+  return {error:null, groups};
+}
+
+async function previewCloudDuplicateCleanup(){
+  const el=document.getElementById('cloudclean-results');
+  if(!el) return;
+  el.innerHTML='<div style="color:var(--text-muted)">🔄 Reading the Supabase students table…</div>';
+  const {error, groups}=await findCloudDuplicateRows();
+  if(error==='offline'){ el.innerHTML='<div style="background:#3a2020;border:1px solid #6a2a2a;border-radius:6px;padding:12px;color:#f0a0a0">Not connected to Supabase — reconnect and try again.</div>'; return; }
+  if(error){ el.innerHTML='<div style="background:#3a2020;border:1px solid #6a2a2a;border-radius:6px;padding:12px;color:#f0a0a0">Couldn\'t read the students table: '+escapeHtml(error)+'</div>'; return; }
+  if(!groups.length){ el.innerHTML='<div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px;color:#a8e8a8">✅ No duplicate rows in Supabase — every student has exactly one row per course.</div>'; return; }
+  const totalRemove=groups.reduce((a,g)=>a+g.remove.length,0);
+  el.innerHTML='<div style="background:#1b3a5c;border:1px solid #2c5a8a;border-radius:6px;padding:12px;margin-bottom:10px">'
+    +'<div style="font-weight:700;color:#e2c47a;margin-bottom:6px">'+totalRemove+' duplicate row(s) across '+groups.length+' student(s)</div>'
+    +'<div style="font-size:13px;color:#c8d8e8;line-height:1.6">Rows are grouped only when <strong>name, teacher and instrument all match</strong>, so a student with two genuine courses is never collapsed. The row kept is the one this app already points at; failing that, the earliest. At least one row always survives.</div></div>'
+    +'<div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px">'
+    +'<div style="font-weight:700;color:#a8e8a8;margin-bottom:6px">Will clean up ('+groups.length+')</div>'
+    +'<div style="font-size:13px;color:#c8d8e8;line-height:1.7">'
+    + groups.slice(0,40).map(function(g){
+        return '<strong>'+escapeHtml(g.name)+'</strong> ('+escapeHtml(g.instrument||'?')+', '+escapeHtml(g.teacher||'?')+') — keep row id '+g.keeper.id+' ['+escapeHtml(g.keeper.student_code||'no code')+'], delete row id(s) '+g.remove.map(function(r){return r.id+' ['+(r.student_code||'no code')+']';}).join(', ');
+      }).join('<br>')
+    + (groups.length>40 ? '<br>…and '+(groups.length-40)+' more' : '')
+    +'</div><button class="btn btn-gold" style="margin-top:12px" onclick="applyCloudDuplicateCleanup()">Delete '+totalRemove+' duplicate row(s) from Supabase</button></div>';
+}
+
+async function applyCloudDuplicateCleanup(){
+  const {error, groups}=await findCloudDuplicateRows();
+  if(error || !groups.length){ showToast('Nothing to clean up.'); return; }
+  const totalRemove=groups.reduce((a,g)=>a+g.remove.length,0);
+  if(!confirm('Delete '+totalRemove+' duplicate row(s) from Supabase?\n\nOne row is always kept for every student. Rows count as duplicates only when name, teacher and instrument all match, so a student with two genuine courses is unaffected.\n\nBack up first if you have not.')) return;
+  let deleted=0, failed=0;
+  for(const g of groups){
+    for(const r of g.remove){
+      try{
+        const res=await window.supabaseClientV1.from('students').delete().eq('id', r.id);
+        if(res && res.error){ failed++; console.warn('Row delete failed (id '+r.id+'):', res.error.message); }
+        else deleted++;
+      }catch(err){ failed++; console.warn('Row delete failed (id '+r.id+'):', err.message); }
+    }
+  }
+  showToast('Deleted '+deleted+' duplicate row(s)'+(failed?', '+failed+' failed — see console':'')+' ✓');
+  previewCloudDuplicateCleanup();
+}
 
 // Two distinct problems live under one symptom here:
 //   (a) EXACT duplicates — the same person present more than once (same
