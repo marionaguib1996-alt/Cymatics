@@ -409,7 +409,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-179</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-180</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -8976,12 +8976,22 @@ async function _addStudentToSupabaseImpl(student){
     // Check for an existing row by student_code before inserting — a second
     // call for a student who already made it to the cloud updates that row
     // instead of creating a sibling duplicate.
+    // v180: same fix as syncStudentUpdateToSupabase — if the code already
+    // matches more than one row (an unresolved duplicate), updating "by
+    // code" would silently overwrite every one of them with this payload,
+    // corrupting whichever other student happens to share it. Only update
+    // when the code identifies exactly one row, and target that row by its
+    // own id, never by the code itself. If it's already ambiguous, skip
+    // entirely rather than making it worse with a third inserted row.
     let data, error;
     if(payload.student_code){
-      const existing = await supabaseClientV1.from('students').select('*').eq('student_code', payload.student_code);
-      if(!existing.error && existing.data && existing.data.length){
-        const upd = await supabaseClientV1.from('students').update(payload).eq('student_code', payload.student_code).select();
+      const existing = await supabaseClientV1.from('students').select('id').eq('student_code', payload.student_code);
+      if(!existing.error && existing.data && existing.data.length===1){
+        const upd = await supabaseClientV1.from('students').update(payload).eq('id', existing.data[0].id).select();
         data = upd.data; error = upd.error;
+      } else if(!existing.error && existing.data && existing.data.length>1){
+        console.warn('student_code "'+payload.student_code+'" already matches '+existing.data.length+' rows in Supabase — skipping rather than updating all of them. Clean up duplicates first (Database → Fix Duplicate Student Codes).');
+        return;
       }
     }
     if(!data){
@@ -9160,9 +9170,32 @@ async function syncStudentUpdateToSupabase(student){
       is_online: !!student.isOnline
     };
 
-    const q = student.student_code
-      ? window.supabaseClientV1.from('students').update(payload).eq('student_code', student.student_code)
-      : window.supabaseClientV1.from('students').update(payload).eq('id', student.id);
+    // v180: student_code is NOT guaranteed unique in this database — the
+    // ongoing duplicate-row problem this whole session has been chasing.
+    // Updating by code meant editing ONE student could silently overwrite
+    // EVERY row sharing that code, including a completely different
+    // person's data — confirmed live: editing Diala Raja alone rewrote
+    // Sandy Wael's row too, purely because they still shared a code. id is
+    // a real Postgres primary key and is always unique, so it's used
+    // whenever the student has one (which is every student actually being
+    // edited through the normal flow). Falling back to code only happens
+    // for the rare case of an id that hasn't synced yet — and even then,
+    // it refuses to update unless a SELECT first confirms the code
+    // currently matches exactly one row, rather than trusting it blindly.
+    let q;
+    if(student.id!=null){
+      q = window.supabaseClientV1.from('students').update(payload).eq('id', student.id);
+    } else if(student.student_code){
+      const {data:matches, error:selErr} = await window.supabaseClientV1.from('students').select('id').eq('student_code', student.student_code);
+      if(selErr){ console.warn('Student update lookup failed:', selErr.message); return; }
+      if(!matches || matches.length!==1){
+        console.warn('Refusing to update by student_code "'+student.student_code+'" — it currently matches '+((matches||[]).length)+' row(s), not exactly one. Clean up duplicates first (Database → Fix Duplicate Student Codes).');
+        return;
+      }
+      q = window.supabaseClientV1.from('students').update(payload).eq('id', matches[0].id);
+    } else {
+      return;
+    }
 
     const {error} = await q;
     if(error) console.warn('Student update failed:', error.message);
