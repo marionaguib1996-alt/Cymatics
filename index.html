@@ -409,7 +409,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-182</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-183</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -7913,6 +7913,41 @@ function isPayrollEligibleLesson(l){
 // meant they simply didn't exist yet.
 function runInitialRenders(){
  initializeCloudSafe().then(()=>{
+  // v183: self-heal the unambiguous orphans on every load, before anything
+  // renders. Lessons and logs keep drifting loose from their student
+  // whenever a temporary Date.now() id is reconciled while a sync is still
+  // in flight — the individual races are guarded, but new ones keep
+  // appearing (two more turned up the same day this was written), and
+  // relying on someone noticing the number climbing and running a repair
+  // tool by hand is not a fix. Only the cases the repair tools already
+  // classify as UNAMBIGUOUS are touched — anything needing a judgement
+  // call is deliberately left for the Database tab, unchanged. Silent by
+  // design: this is routine self-maintenance, not something to interrupt
+  // the admin about.
+  try{
+    if(typeof findOrphanLessonMatches==='function'){
+      const {resolved}=findOrphanLessonMatches();
+      if(resolved.length){
+        resolved.forEach(({lesson, student})=>{
+          lesson.studentId=student.id;
+          if(typeof syncLessonUpdateToSupabase==='function'){ try{ syncLessonUpdateToSupabase(lesson); }catch(_){} }
+        });
+        console.log('Self-heal: reconnected '+resolved.length+' orphaned lesson(s) to their student.');
+      }
+    }
+    if(typeof findOrphanLogMatches==='function'){
+      const {resolved}=findOrphanLogMatches();
+      if(resolved.length){
+        resolved.forEach(({log, lesson})=>{
+          log.lessonId=lesson.id;
+          if(typeof syncLessonLogToSupabase==='function'){ try{ syncLessonLogToSupabase(log); }catch(_){} }
+        });
+        console.log('Self-heal: reconnected '+resolved.length+' lesson log(s) to their lesson.');
+      }
+    }
+    if(typeof save==='function') save();
+  }catch(err){ console.warn('Self-heal pass failed (non-fatal):', err && err.message); }
+
   // Some browsers restore a <select>'s last-chosen value on a plain page
   // refresh (as part of form-state restoration during parsing, before any
   // script runs) — so "All Days" being the declared default in the HTML
