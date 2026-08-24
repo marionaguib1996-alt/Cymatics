@@ -409,7 +409,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-181</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-182</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -9236,9 +9236,27 @@ window.editStudent = async function(id){
 async function deleteStudentFromSupabase(student){
   try{
     if(!window.supabaseClientV1) return;
-    const q = student.student_code
-      ? window.supabaseClientV1.from('students').delete().eq('student_code', student.student_code)
-      : window.supabaseClientV1.from('students').delete().eq('id', student.id);
+    // v182: this used to DELETE ... WHERE student_code = X. student_code is
+    // not reliably unique in this database, so removing ONE student wiped
+    // out EVERY row sharing their code — including entirely different
+    // people. That is almost certainly how students went missing from
+    // Supabase: a single deliberate removal silently took innocent
+    // bystanders with it. id is the real primary key and is always unique,
+    // so delete by that. The code fallback only runs when there is no id
+    // at all, and then only after confirming it matches exactly one row.
+    let targetId = student.id;
+    if(targetId==null && student.student_code){
+      const {data:matches, error:selErr} = await window.supabaseClientV1
+        .from('students').select('id').eq('student_code', student.student_code);
+      if(selErr){ console.warn('Delete lookup failed:', selErr.message); return; }
+      if(!matches || matches.length!==1){
+        console.warn('Refusing to delete by student_code "'+student.student_code+'" — it matches '+((matches||[]).length)+' row(s), not exactly one. Clean up duplicates first (Database → Fix Duplicate Student Codes).');
+        return;
+      }
+      targetId = matches[0].id;
+    }
+    if(targetId==null) return;
+    const q = window.supabaseClientV1.from('students').delete().eq('id', targetId);
     const {error} = await q;
     if(error){
       console.warn('Supabase student delete failed:', error.message);
@@ -9254,12 +9272,16 @@ async function deleteStudentFromSupabase(student){
 async function deleteStudentLessonsFromSupabase(localStudentId, studentName){
   try{
     if(!window.supabaseClientV1) return;
-    // Match by id first — if that catches nothing (stale/mismatched id after a cloud round-trip),
-    // also delete by student name so lessons don't get orphaned in the cloud.
+    // v182: this used to ALSO delete by student_name unconditionally, on
+    // the theory that a stale id might leave lessons orphaned. But names
+    // are shared here — two different people can share one, and a single
+    // person routinely has two courses under the same name. So removing
+    // one student destroyed the OTHER person's lessons, or the same
+    // person's other course, every time. Deleting by the student's own id
+    // is precise and sufficient; a genuinely orphaned lesson is a far
+    // smaller problem than silently destroying a different student's
+    // history, and the Health Check already finds and repairs orphans.
     await window.supabaseClientV1.from('lessons').delete().eq('student_id', localStudentId);
-    if(studentName){
-      await window.supabaseClientV1.from('lessons').delete().eq('student_name', studentName);
-    }
   }catch(err){
     console.warn('Supabase lesson delete failed:', err.message);
   }
