@@ -409,7 +409,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-180</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-181</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -2388,6 +2388,15 @@ function autoArchiveStaleTrials(){
   const archived=[];
   (db.students||[]).forEach(s=>{
     if((s.status||'active')==='archived' || s.frozen) return;
+    // v181: a student restored (or edited) moments ago must not be
+    // instantly re-archived by this same pass. Restoring sets
+    // _localModifiedAt, and until that change converges with the cloud the
+    // plan/attendance this function judges on may still be the stale
+    // pre-restore values — so archiving on that basis reverses the admin's
+    // deliberate action the moment they take it. That is the reported
+    // "restore him and he's archived again on the next update" loop.
+    // Same 60s guard window the download-merge uses.
+    if(s._localModifiedAt && (Date.now()-s._localModifiedAt)<60000) return;
     const isTrial=(s.plan==='trial' || s.plan==='group-trial');
     // v177: was trial-only. Mario's intended policy was always two rates —
     // 7 days for a trial that goes quiet, 14 for a monthly student — the
@@ -8141,7 +8150,14 @@ async function _autoLoadFromCloudImpl(){
      merged.forEach(s=>{
        if(s._localModifiedAt){
          if((now-s._localModifiedAt)<RECENT_LOCAL_MS){
-           if(s.public_id && typeof syncStudentUpdateToSupabase==='function'){ try{ syncStudentUpdateToSupabase(s); }catch(e){} }
+           // v181: was gated on s.public_id, but syncStudentUpdateToSupabase
+           // matches by the row's own id (v180) and doesn't use public_id at
+           // all. A student without a public_id therefore had their local
+           // change silently never pushed — so the cloud kept its old copy,
+           // and once the 60s guard expired the next download overwrote the
+           // local fix and undid it. That is the reported loop: restore a
+           // student, they come back as archived again on the next update.
+           if((s.id!=null || s.student_code) && typeof syncStudentUpdateToSupabase==='function'){ try{ syncStudentUpdateToSupabase(s); }catch(e){} }
          } else {
            delete s._localModifiedAt; // guard window passed; stop treating as dirty
          }
@@ -8150,7 +8166,7 @@ async function _autoLoadFromCloudImpl(){
      if(pendingReupload.length){
        pendingReupload.forEach(s=>{
          try{
-           if(s.public_id && typeof syncStudentUpdateToSupabase==='function') syncStudentUpdateToSupabase(s);
+           if((s.id!=null || s.student_code) && typeof syncStudentUpdateToSupabase==='function') syncStudentUpdateToSupabase(s);
            else if(typeof addStudentToSupabase==='function') addStudentToSupabase(s);
          }catch(e){}
        });
