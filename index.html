@@ -63,6 +63,11 @@ body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;min
 .nav-btn{padding:12px 20px;font-size:13px;font-weight:500;cursor:pointer;border:none;background:none;color:var(--text-muted);border-bottom:2px solid transparent;letter-spacing:0.03em;transition:all 0.15s;display:flex;align-items:center;gap:7px}
 .nav-btn:hover{color:var(--text)}
 .nav-btn.active{color:var(--gold-light);border-bottom-color:var(--gold)}
+/* Schedule Makeup dialog's three-way path selector — a clear pressed/
+   unpressed state so it reads as "pick one of these," not three buttons
+   of equal weight sitting in a row. */
+.ms-path-btn{background:var(--surface2,#1e1c17);border:1px solid var(--border);color:var(--text-muted)}
+.ms-path-btn.active{background:var(--gold);border-color:var(--gold);color:#1a1916;font-weight:700}
 /* Simplification: 14 flat, ungrouped buttons read as one long wall to scan
    — a thin divider between logical clusters (daily work / people & pay /
    scheduling / admin & data) gives the eye a resting point without
@@ -409,7 +414,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-183</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-191</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -520,6 +525,8 @@ input::placeholder{color:var(--text-dim)}
           <option value="group-monthly">Group Monthly — 1hr, auto (750 EGP / session)</option>
           <option value="group-trial">Group Trial — 1hr (750 EGP)</option>
           <option value="weekly-group">Weekly Group Session — 1hr (850 EGP)</option>
+          <option value="artist">Artist — 8 lessons, 3mo max (5,000 EGP)</option>
+          <option value="premium">Premium — 12 lessons, 4mo max (7,000 EGP)</option>
         </select>
       </div>
       <div class="form-field">
@@ -1070,7 +1077,7 @@ input::placeholder{color:var(--text-dim)}
 <input id="db-search" placeholder="Search students..." oninput="renderDatabase()" style="max-width:280px;margin-bottom:12px">
 <div class="table-wrap">
 <table>
-<thead><tr><th>ID</th><th>First Name</th><th>Last Name</th><th>Email</th><th>Attended</th><th>Absent Paid</th><th>Teacher Absent</th><th>Makeups Owed</th><th>Age</th><th>Starting Date</th><th>Phone</th><th>Parent Phone</th><th>Teacher</th><th>Instrument</th><th>Day</th><th>Time</th><th>Actions</th></tr></thead>
+<thead><tr><th onclick="sortDatabase('public_id')" style="cursor:pointer;user-select:none" title="Click to sort">ID<span class="db-sort-arrow" data-key="public_id"></span></th><th onclick="sortDatabase('first_name')" style="cursor:pointer;user-select:none" title="Click to sort">First Name<span class="db-sort-arrow" data-key="first_name"></span></th><th onclick="sortDatabase('last_name')" style="cursor:pointer;user-select:none" title="Click to sort">Last Name<span class="db-sort-arrow" data-key="last_name"></span></th><th onclick="sortDatabase('email')" style="cursor:pointer;user-select:none" title="Click to sort">Email<span class="db-sort-arrow" data-key="email"></span></th><th onclick="sortDatabase('attended')" style="cursor:pointer;user-select:none" title="Click to sort">Attended<span class="db-sort-arrow" data-key="attended"></span></th><th onclick="sortDatabase('absent_paid')" style="cursor:pointer;user-select:none" title="Click to sort">Absent Paid<span class="db-sort-arrow" data-key="absent_paid"></span></th><th onclick="sortDatabase('teacher_absent')" style="cursor:pointer;user-select:none" title="Click to sort">Teacher Absent<span class="db-sort-arrow" data-key="teacher_absent"></span></th><th onclick="sortDatabase('makeups')" style="cursor:pointer;user-select:none" title="Click to sort">Makeups Owed<span class="db-sort-arrow" data-key="makeups"></span></th><th onclick="sortDatabase('age')" style="cursor:pointer;user-select:none" title="Click to sort">Age<span class="db-sort-arrow" data-key="age"></span></th><th onclick="sortDatabase('joined_date')" style="cursor:pointer;user-select:none" title="Click to sort">Starting Date<span class="db-sort-arrow" data-key="joined_date"></span></th><th onclick="sortDatabase('phone1')" style="cursor:pointer;user-select:none" title="Click to sort">Phone<span class="db-sort-arrow" data-key="phone1"></span></th><th onclick="sortDatabase('phone2')" style="cursor:pointer;user-select:none" title="Click to sort">Parent Phone<span class="db-sort-arrow" data-key="phone2"></span></th><th onclick="sortDatabase('teacher')" style="cursor:pointer;user-select:none" title="Click to sort">Teacher<span class="db-sort-arrow" data-key="teacher"></span></th><th onclick="sortDatabase('instrument')" style="cursor:pointer;user-select:none" title="Click to sort">Instrument<span class="db-sort-arrow" data-key="instrument"></span></th><th onclick="sortDatabase('lesson_day')" style="cursor:pointer;user-select:none" title="Click to sort">Day<span class="db-sort-arrow" data-key="lesson_day"></span></th><th onclick="sortDatabase('lessonTime')" style="cursor:pointer;user-select:none" title="Click to sort">Time<span class="db-sort-arrow" data-key="lessonTime"></span></th><th>Actions</th></tr></thead>
 <tbody id="database-body"></tbody>
 </table>
 </div>
@@ -1150,6 +1157,12 @@ input::placeholder{color:var(--text-dim)}
     <button class="btn" onclick="previewDuplicateCodeRepair()">🔍 Preview Fix (changes nothing)</button>
     <small style="display:block;margin-top:8px;color:var(--text-muted)">Two different problems share this symptom. Where the <strong>same person</strong> appears more than once, the copies are merged into the earliest record — lessons, payments and homework move across first, then the extra copies are removed. Where <strong>different people</strong> ended up sharing one code, nobody is deleted: the earliest keeps the code and the others are issued fresh unused ones. Duplicate codes are what make an Edit click, or a newly-scheduled lesson, land on the wrong student, so fixing this resolves that class of problem at its source. Preview changes nothing.</small>
     <div id="dupcode-repair-results" style="margin-top:14px"></div>
+
+    <div style="border-top:1px solid var(--border);margin:20px 0 16px;"></div>
+    <div class="card-title" style="margin-bottom:10px">Link One Person's Separate Courses</div>
+    <button class="btn" onclick="previewLinkCourses()">🔍 Preview Linking (changes nothing)</button>
+    <small style="display:block;margin-top:8px;color:var(--text-muted)">For a student taking two courses whose records were created before the "+ Add Another Course" feature existed — they currently show as two unrelated students. Linking makes them read "Course 1 of 2" and count as one person in your student total, while keeping each course's lessons, payments and payroll fully separate. <strong>Nothing is merged or deleted.</strong> Only records with the same name and a genuinely different course (instrument, teacher or day) are offered — identical records are true duplicates and belong in the tool above instead.</small>
+    <div id="linkcourses-results" style="margin-top:14px"></div>
 
     <div style="border-top:1px solid var(--border);margin:20px 0 16px;"></div>
     <div class="card-title" style="margin-bottom:10px">Clean Duplicate Rows in Supabase</div>
@@ -1446,14 +1459,27 @@ function instrumentEmoji(name){
   return INSTRUMENT_EMOJI[String(name).trim().toLowerCase()] || '🎵';
 }
 
-const PLAN_LABELS = {'trial':'Trial Session','monthly':'Monthly','group-monthly':'Group Monthly','weekly':'Weekly','weekly-group':'Weekly Group Session','group':'Group (1hr)','group-trial':'Group Trial','lesson-1':'1 Lesson Left','lesson-2':'2 Lessons Left','lesson-3':'3 Lessons Left','monthly-4':'Monthly (4 wks)','monthly-5':'Monthly (5 wks)','group-1':'Group · 1 Lesson Left','group-2':'Group · 2 Lessons Left','group-3':'Group · 3 Lessons Left'};
-const PLAN_AMOUNTS = {'trial':500,'monthly':2000,'group-monthly':3000,'weekly':600,'weekly-group':850,'lesson-1':500,'lesson-2':1000,'lesson-3':1500,'monthly-4':2000,'monthly-5':2500,'group':3000,'group-trial':750,'group-1':750,'group-2':1500,'group-3':2250};
+const PLAN_LABELS = {'trial':'Trial Session','monthly':'Monthly','group-monthly':'Group Monthly','weekly':'Weekly','weekly-group':'Weekly Group Session','group':'Group (1hr)','group-trial':'Group Trial','lesson-1':'1 Lesson Left','lesson-2':'2 Lessons Left','lesson-3':'3 Lessons Left','monthly-4':'Monthly (4 wks)','monthly-5':'Monthly (5 wks)','group-1':'Group · 1 Lesson Left','group-2':'Group · 2 Lessons Left','group-3':'Group · 3 Lessons Left','artist':'Artist (8 lessons)','premium':'Premium (12 lessons)'};
+const PLAN_AMOUNTS = {'trial':500,'monthly':2000,'group-monthly':3000,'weekly':600,'weekly-group':850,'lesson-1':500,'lesson-2':1000,'lesson-3':1500,'monthly-4':2000,'monthly-5':2500,'group':3000,'group-trial':750,'group-1':750,'group-2':1500,'group-3':2250,'artist':5000,'premium':7000};
+// Artist/Premium: a fixed-count LESSON BUNDLE sold as one flat, one-time
+// price — not a recurring monthly plan. Each has a hard deadline (a
+// number of months from when the bundle started) by which all sessions
+// must be used; excused absences, freezes, or any other delay eat into
+// that window rather than extending it (Mario's own framing: "must be
+// completed within N months at max"). BUNDLE_PLANS is the single source
+// for both numbers so the session count, the pricing table above, and
+// the deadline-enforcement logic below can never quietly drift apart.
+const BUNDLE_PLANS = {
+  artist:  {sessions:8,  deadlineMonths:3, price:5000, label:'Artist'},
+  premium: {sessions:12, deadlineMonths:4, price:7000, label:'Premium'}
+};
+function isBundlePlan(plan){ return plan==='artist' || plan==='premium'; }
 
 // Plans a NEW student or renewal can be put on. The per-lesson-count
 // plans (lesson-1/2/3, group-1/2/3, monthly-4/5) are intentionally absent
 // here — existing students keep them until their next renewal, but going
 // forward the auto-calculating 'monthly' / 'group-monthly' replace them.
-const SELECTABLE_PLANS=['trial','monthly','weekly','group-monthly','group-trial','weekly-group'];
+const SELECTABLE_PLANS=['trial','monthly','weekly','group-monthly','group-trial','weekly-group','artist','premium'];
 // Build option HTML for a plan dropdown, always including the student's
 // CURRENT plan even if it's a legacy one (so it shows correctly selected
 // and isn't silently changed just by opening the editor).
@@ -1539,6 +1565,13 @@ function isMonthlyPlan(plan){
   if(!plan) return false;
   if(isWeeklyPlan(plan)) return false;
   if(plan==='trial' || plan==='group-trial') return false;
+  // Artist/Premium are a one-time flat-price bundle with their own hard
+  // deadline, not a recurring monthly charge — isMonthlyPlan gates BOTH
+  // the auto-calculating weekday-occurrence billing AND the regular
+  // monthly Renewals Due cycle, neither of which is the right shape for
+  // a multi-month bundle. Excluded explicitly rather than relying on
+  // isBundlePlan being checked everywhere first.
+  if(isBundlePlan(plan)) return false;
   return true;
 }
 
@@ -2457,6 +2490,73 @@ function autoArchiveStaleTrials(){
   }
 }
 
+// Records when a fresh Artist/Premium bundle actually starts, and the
+// hard deadline by which all its sessions must be used — called at the
+// moment a bundle plan is freshly assigned (new enrollment, trial
+// conversion, or renewal), right where the first lesson's real date is
+// already known. Deliberately called at EVERY renewal too, not just
+// first assignment: a renewal is a fresh bundle, so its deadline must
+// reset to a fresh 3/4 months from ITS OWN start — reusing the original
+// deadline would make the new bundle expire before it could ever be
+// completed. Clears both fields for a student who has since moved to a
+// non-bundle plan, so a stale deadline from an old plan can't linger and
+// wrongly fire later.
+function applyBundlePlanDeadline(student, firstLessonDate){
+  if(!student) return;
+  if(!isBundlePlan(student.plan) || !firstLessonDate){
+    delete student.bundleStartDate;
+    delete student.bundleDeadline;
+    return;
+  }
+  const months=BUNDLE_PLANS[student.plan].deadlineMonths;
+  student.bundleStartDate=firstLessonDate;
+  student.bundleDeadline=addMonthsToDateString(firstLessonDate, months);
+}
+
+// Enforces the hard deadline: once it passes, any of the bundle's
+// sessions that are still merely SCHEDULED (not yet attended or
+// absent_paid) are forfeited — deleted outright, both locally and from
+// Supabase — and the student is left with no upcoming lesson. That is
+// deliberate: it's exactly the signal studentHasPendingRenewal already
+// looks for, so the student surfaces on Renewals Due through the same
+// mechanism a normally-finished plan does, with nothing extra to wire up.
+// Sessions already delivered (attended/absent_paid) are never touched —
+// completed history stays exactly as it is; only the unused remainder is
+// forfeited, matching "must be completed within N months, as of excused
+// absences/delays" — delays shrink the window, they don't extend it.
+function enforceBundlePlanDeadlines(){
+  const todayKey=new Date().toISOString().slice(0,10);
+  const affected=[];
+  (db.students||[]).forEach(s=>{
+    if((s.status||'active')==='archived' || s.frozen) return;
+    if(!isBundlePlan(s.plan) || !s.bundleDeadline) return;
+    if(s.bundleDeadline>todayKey) return; // deadline not yet reached
+    const forfeited=(db.lessons||[]).filter(l=>
+      lessonBelongsToStudent(l, s) &&
+      (l.status_record||'active')!=='archived' &&
+      l.status==='scheduled'
+    );
+    if(!forfeited.length) return; // bundle already fully used — nothing to forfeit
+    forfeited.forEach(l=>{
+      db.lessons=(db.lessons||[]).filter(x=>x!==l);
+      if(typeof deleteLessonCloudRowById==='function'){ try{ deleteLessonCloudRowById(l.id); }catch(_){} }
+    });
+    affected.push({name:s.name||'student', count:forfeited.length});
+  });
+  if(affected.length){
+    save();
+    console.log('Bundle plan deadline reached for '+affected.length+' student(s): '+affected.map(a=>a.name+' ('+a.count+' unused session(s) removed)').join(', '));
+    setTimeout(()=>{
+      if(typeof showToast==='function'){
+        showToast(affected.length+' bundle plan'+(affected.length===1?'':'s')+' reached their deadline — moved to Renewals Due: '+affected.slice(0,3).map(a=>a.name).join(', ')+(affected.length>3?'…':''));
+      }
+      if(typeof renderStudents==='function') renderStudents();
+      if(typeof renderRenewalsDue==='function') renderRenewalsDue();
+      if(typeof renderLessons==='function') renderLessons();
+    }, 1200);
+  }
+}
+
 function migrateFlagUnmarkedTrialLessons(){
   let fixed=0;
   (db.students||[]).forEach(s=>{
@@ -2485,6 +2585,7 @@ function migrateFlagUnmarkedTrialLessons(){
 }
 migrateFlagUnmarkedTrialLessons();
 autoArchiveStaleTrials();
+enforceBundlePlanDeadlines();
 
 function migrateLessonMonthsAndStatus(){
   const VALID_STATUSES=['attended','absent_paid','absent_excused','teacher_absent','scheduled'];
@@ -3925,8 +4026,14 @@ function dismissFromRenewalsDue(idsCsv){
   ids.forEach(id=>{
     const s=(db.students||[]).find(x=>String(x.id)===String(id));
     if(!s) return;
-    const month=(typeof studentNextBillingMonth==='function') ? studentNextBillingMonth(s) : '';
-    db.renewalsDismissed[id+'_'+month]=new Date().toISOString();
+    // Bundle plans have no "next billing month" — studentNextBillingMonth
+    // computes monthly-cycle math that doesn't apply, and using its
+    // result here would write a dismissal key the bundle gate check
+    // above never looks at, so the row would just silently reappear.
+    const key=(typeof isBundlePlan==='function' && isBundlePlan(s.plan))
+      ? id+'_bundle'
+      : id+'_'+((typeof studentNextBillingMonth==='function') ? studentNextBillingMonth(s) : '');
+    db.renewalsDismissed[key]=new Date().toISOString();
   });
   save();
   renderRenewalsDue();
@@ -3941,8 +4048,31 @@ function renderRenewalsDue(){
   const rows=[];
   (db.students||[]).forEach(s=>{
     if((s.status||'active')==='archived' || s.frozen) return;
-    if(!isMonthlyPlan(s.plan)) return; // monthly-billed plans only (incl. legacy)
-    if(!studentHasPendingRenewal(s)) return; // must have finished this month AND not already renewed
+    if(!isMonthlyPlan(s.plan) && !isBundlePlan(s.plan)) return; // monthly-billed or bundle plans only
+    if(!studentHasPendingRenewal(s)) return; // must have finished AND not already renewed
+    // Bundle plans (Artist/Premium) are a flat one-time price for a fixed
+    // session count, not a recurring monthly charge — none of the
+    // weekday-occurrence/next-month math below applies to them, so they
+    // get their own much simpler row here and skip straight to the next
+    // student. sessionsCompleted vs the bundle total is what tells the
+    // difference between "used every session, finished naturally" and
+    // "the deadline forced an early stop" — no separate flag needed.
+    if(isBundlePlan(s.plan)){
+      if((db.renewalsDismissed||{})[s.id+'_bundle']) return;
+      const def=BUNDLE_PLANS[s.plan];
+      const sessionsCompleted=(db.lessons||[]).filter(l=>
+        lessonBelongsToStudent(l, s) &&
+        (l.status_record||'active')!=='archived' &&
+        (l.status==='attended' || l.status==='absent_paid')
+      ).length;
+      const remindedAt=(db.remindersSent||{})[s.id+'_bundle_renewal']||null;
+      rows.push({
+        s, lessonCount:def.sessions, amount:getStudentPlanAmount(s), remindedAt,
+        isCustomPay:false, deductionCount:0, nextMonthName:def.label,
+        isBundleRow:true, sessionsCompleted, sessionsTotal:def.sessions
+      });
+      return;
+    }
     // A student with no lesson day can't have their next-month dates
     // computed — but silently dropping them made them INVISIBLE here,
     // with nothing anywhere indicating a student still needed renewing.
@@ -4024,8 +4154,14 @@ function renderRenewalsDue(){
   const consumed=new Set();
   rows.forEach(row=>{
     if(consumed.has(row.s.id)) return;
+    // Bundle rows are never consolidated, even if they share a
+    // linkedPersonId with another pending course — a bundle renewal and a
+    // monthly renewal are different modals with different pricing models;
+    // merging them would open the wrong one and sum two incompatible
+    // amounts into a single, confusing total.
+    if(row.isBundleRow){ consumed.add(row.s.id); grouped.push({...row, courses:[row.s]}); return; }
     const rootId=row.s.linkedPersonId||row.s.public_id;
-    const group=rootId ? rows.filter(r=>(r.s.linkedPersonId||r.s.public_id)===rootId) : [row];
+    const group=rootId ? rows.filter(r=>(r.s.linkedPersonId||r.s.public_id)===rootId && !r.isBundleRow) : [row];
     group.forEach(r=>consumed.add(r.s.id));
     if(group.length===1){
       grouped.push({...row, courses:[row.s]});
@@ -4045,10 +4181,10 @@ function renderRenewalsDue(){
   grouped.sort((a,b)=>(a.s.name||'').localeCompare(b.s.name||''));
 
   if(!grouped.length){
-    host.innerHTML='<div class="empty"><div class="empty-icon">✅</div><div class="empty-text">No renewals due — no monthly students have finished this month\'s sessions yet.</div></div>';
+    host.innerHTML='<div class="empty"><div class="empty-icon">✅</div><div class="empty-text">No renewals due right now.</div></div>';
     return;
   }
-  host.innerHTML=grouped.map(({s,courses,lessonCount,amount,remindedAt,isCustomPay,deductionCount,nextMonthName,needsLessonDay})=>{
+  host.innerHTML=grouped.map(({s,courses,lessonCount,amount,remindedAt,isCustomPay,deductionCount,nextMonthName,needsLessonDay,isBundleRow,sessionsCompleted,sessionsTotal})=>{
     const remindedBadge = remindedAt
       ? `<span class="badge badge-blue" style="font-size:10px" title="Reminded ${escapeAttr(new Date(remindedAt).toLocaleString())}">✓ Reminded ${escapeHtml(timeAgoLabel(remindedAt))}</span>`
       : '';
@@ -4059,6 +4195,18 @@ function renderRenewalsDue(){
     const deductionBadge = (deductionCount>0 && !isCustomPay)
       ? `<span class="badge badge-amber" style="font-size:10px" title="${deductionCount} session${deductionCount===1?'':'s'} deducted — teacher absent, no make-up booked">− ${deductionCount} deducted</span>`
       : '';
+    // A bundle student here either used every session naturally, or hit
+    // its hard deadline with some still unused (forfeited by
+    // enforceBundlePlanDeadlines) — sessionsCompleted vs sessionsTotal is
+    // the whole story, and it's worth saying plainly which one happened
+    // rather than reusing the monthly plan's "Finished this month" label,
+    // which is both inaccurate (a bundle can span several months) and
+    // silent about which of the two very different reasons applies.
+    const statusBadge = isBundleRow
+      ? (sessionsCompleted>=sessionsTotal
+          ? `<span class="badge badge-red" style="font-size:10px" title="All ${sessionsTotal} sessions were used">Bundle finished (${sessionsCompleted}/${sessionsTotal})</span>`
+          : `<span class="badge badge-amber" style="font-size:10px" title="The ${BUNDLE_PLANS[s.plan]?BUNDLE_PLANS[s.plan].deadlineMonths:''}-month deadline passed before all sessions were used — the remainder was removed">Deadline reached (${sessionsCompleted}/${sessionsTotal} used)</span>`)
+      : `<span class="badge badge-red" style="font-size:10px">Finished this month</span>`;
     // For a single course, the meta line is exactly as before. For a
     // consolidated group, each course gets its own "instrument · day
     // time" clause joined by "&", since teacher/instrument/day/time can
@@ -4073,7 +4221,7 @@ function renderRenewalsDue(){
     return `<div class="unpaid-item">
       <div>
         <div class="unpaid-name">${escapeHtml(s.name)}</div>
-        <div class="unpaid-meta">${metaLine} · <span class="badge badge-red" style="font-size:10px">Finished this month</span> ${remindedBadge} ${customPayBadge} ${deductionBadge} ${courseCountBadge}</div>
+        <div class="unpaid-meta">${metaLine} · ${statusBadge} ${remindedBadge} ${customPayBadge} ${deductionBadge} ${courseCountBadge}</div>
       </div>
       <div style="display:flex;align-items:center;gap:10px">
         ${needsLessonDay
@@ -4180,6 +4328,28 @@ function sendRenewalReminder(studentId){
     if(!student.lesson_day){
       showToast('No regular lesson day set for '+(student.name||'this student')+' — opening Edit Student so you can set one.');
       if(typeof editStudent==='function') editStudent(studentId);
+      return;
+    }
+
+    // Bundle plans (Artist/Premium) are a flat one-time price, not a
+    // recurring monthly charge — everything below this point computes a
+    // NEXT MONTH's session count and price, which has no meaning for a
+    // fixed bundle. Send a simple, bundle-appropriate message instead and
+    // stop here, under the same reminder key renderRenewalsDue reads back
+    // for the "✓ Reminded" badge.
+    if(typeof isBundlePlan==='function' && isBundlePlan(student.plan)){
+      const def=BUNDLE_PLANS[student.plan];
+      const amount=(typeof getStudentPlanAmount==='function') ? getStudentPlanAmount(student) : def.price;
+      const eMusicNote=String.fromCodePoint(0x1F3B6);
+      const msg='Hi! Hope you enjoyed your '+def.label+' plan '+eMusicNote+'\n\n'
+        +'Ready for another round? The '+def.label+' plan is '+Math.round(amount)+' EGP for '+def.sessions+' lessons — just send the payment to lock in your next batch.';
+      const url=(typeof whatsAppSendUrl==='function') ? whatsAppSendUrl(phone, msg) : ('https://wa.me/'+phone+'?text='+encodeURIComponent(msg));
+      window.open(url, '_blank');
+      db.remindersSent=db.remindersSent||{};
+      db.remindersSent[student.id+'_bundle_renewal']=new Date().toISOString();
+      save();
+      if(typeof syncReminderSentToSupabase==='function'){ try{ syncReminderSentToSupabase(student.id+'_bundle_renewal', db.remindersSent[student.id+'_bundle_renewal']); }catch(_){} }
+      renderRenewalsDue();
       return;
     }
 
@@ -5105,13 +5275,57 @@ function calcAge(dob){
  if(m<0 || (m===0 && t.getDate()<d.getDate())) age--;
  return age;
 }
+// Database tab sort state. Clicking a header sorts by it; clicking the
+// same header again flips direction.
+window._dbSort=window._dbSort||{key:null, dir:1};
+function sortDatabase(key){
+  if(window._dbSort.key===key) window._dbSort.dir=-window._dbSort.dir;
+  else { window._dbSort.key=key; window._dbSort.dir=1; }
+  renderDatabase();
+}
+// The four attendance columns are computed per row rather than stored on
+// the student, so they need the same counting here that the cells use —
+// otherwise sorting by them would silently sort by nothing.
+function dbSortValue(s, key){
+  const lessons=db.lessons||[];
+  const count=fn=>lessons.filter(l=>lessonBelongsToStudent(l, s) && fn(l)).length;
+  switch(key){
+    case 'attended': return count(l=>l.status==='attended');
+    case 'absent_paid': return count(l=>l.status==='absent_paid');
+    case 'teacher_absent': return count(l=>l.status==='teacher_absent');
+    case 'makeups': return count(l=>typeof isMakeupOwed==='function' && isMakeupOwed(l));
+    case 'age': { const a=studentAge(s); const n=Number(a); return Number.isNaN(n)?-1:n; }
+    default: return s[key];
+  }
+}
 function renderDatabase(){
  const tb=document.getElementById('database-body');
  if(!tb) return;
  const q=(document.getElementById('db-search')?.value||'').toLowerCase();
- tb.innerHTML=(db.students||[]).filter(s=>
+ let rows=(db.students||[]).filter(s=>
    !q || (s.name||'').toLowerCase().includes(q)
- ).map(s=>`<tr${s.status==='archived'?' style="opacity:0.5"':''}>
+ );
+ const sort=window._dbSort||{};
+ if(sort.key){
+   rows=rows.slice().sort((a,b)=>{
+     const av=dbSortValue(a, sort.key), bv=dbSortValue(b, sort.key);
+     // Numbers compare numerically; everything else as case-insensitive
+     // text, with blanks always sorted last regardless of direction so an
+     // empty cell never outranks a real value.
+     const aEmpty=(av==null||av==='');
+     const bEmpty=(bv==null||bv==='');
+     if(aEmpty && bEmpty) return 0;
+     if(aEmpty) return 1;
+     if(bEmpty) return -1;
+     if(typeof av==='number' && typeof bv==='number') return (av-bv)*sort.dir;
+     return String(av).toLowerCase().localeCompare(String(bv).toLowerCase())*sort.dir;
+   });
+ }
+ // Reflect the active sort in the header arrows.
+ document.querySelectorAll('.db-sort-arrow').forEach(el=>{
+   el.textContent = (sort.key && el.dataset.key===sort.key) ? (sort.dir>0?' ▲':' ▼') : '';
+ });
+ tb.innerHTML=rows.map(s=>`<tr${s.status==='archived'?' style="opacity:0.5"':''}>
 <td>${escapeHtml(s.public_id||'Pending Sync')}${s.status==='archived'?' <span class="badge badge-red" style="font-size:9px">Archived</span>':''}</td>
 <td>${escapeHtml(s.first_name)}</td><td>${escapeHtml(s.last_name)}</td><td>${escapeHtml(s.email)}</td>
 <td>${db.lessons.filter(l=>lessonBelongsToStudent(l, s) && l.status==='attended').length}</td>
@@ -5569,6 +5783,12 @@ function exportBackup(){
  a.href=URL.createObjectURL(blob);
  a.download='cymatics-backup-'+new Date().toISOString().slice(0,10)+'.json';
  a.click();
+ // Powers the "last backup was N days ago" reminder below. Deliberately
+ // stored in localStorage, not db — a backup is a point-in-time file on
+ // Mario's machine, not application data, and it must not get overwritten
+ // by the next cloud sync the way db does.
+ try{ localStorage.setItem('cymatics_last_backup_at', new Date().toISOString()); }catch(_){}
+ if(typeof updateBackupReminderBanner==='function') updateBackupReminderBanner();
 }
 
 function restoreBackup(event){
@@ -6000,6 +6220,90 @@ function applyDuplicateLessonRepair(){
   autoMerge.forEach(function(g){ mergeLessonDuplicates(g.keeper, g.remove); });
   showToast('Merged '+autoMerge.length+' duplicate pair(s) ✓');
   previewDuplicateLessonRepair();
+}
+
+// ── Link pre-existing separate records as one person's courses ───────────
+// A second course is MEANT to be its own db.students record, joined to the
+// first by linkedPersonId — that's what makes "Course 1 of 2" appear and
+// keeps the two courses' lessons, payments and payroll correctly separate.
+// But records created before that mechanism existed have no linkedPersonId,
+// so the same person shows up as two unrelated students. They are NOT
+// duplicates and must never be merged — merging would destroy one course's
+// entire history. They just need connecting.
+//
+// Grouping rule: same name AND (same phone OR one of them has no phone),
+// but a DIFFERENT course — different instrument, teacher or day. Identical
+// instrument+teacher+day is a genuine duplicate record instead, which the
+// duplicate tools handle, so it is deliberately excluded here.
+function findUnlinkedCourseGroups(){
+  const norm=v=>String(v||'').trim().toLowerCase();
+  const active=(db.students||[]).filter(s=>(s.status||'active')!=='archived');
+  const byName={};
+  active.forEach(s=>{ (byName[norm(s.name)]=byName[norm(s.name)]||[]).push(s); });
+  const groups=[];
+  Object.values(byName).forEach(rows=>{
+    if(rows.length<2) return;
+    // Already fully linked? Nothing to do.
+    const roots=new Set(rows.map(r=>r.linkedPersonId||r.public_id||('id:'+r.id)));
+    if(roots.size<=1) return;
+    // Phones must not actively contradict each other.
+    const phones=new Set(rows.map(r=>norm(r.phone1)).filter(Boolean));
+    if(phones.size>1) return;
+    // Must be genuinely DIFFERENT courses, not identical duplicate rows.
+    const courseKeys=new Set(rows.map(r=>norm(r.instrument)+'|'+norm(r.teacher)+'|'+norm(r.lesson_day)));
+    if(courseKeys.size!==rows.length) return;
+    groups.push({name:rows[0].name, rows:rows.slice().sort((a,b)=>Number(a.id)-Number(b.id))});
+  });
+  return groups;
+}
+
+function previewLinkCourses(){
+  const el=document.getElementById('linkcourses-results');
+  if(!el) return;
+  const groups=findUnlinkedCourseGroups();
+  if(!groups.length){
+    el.innerHTML='<div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px;color:#a8e8a8">✅ No unlinked courses — every person taking more than one course is already connected.</div>';
+    return;
+  }
+  el.innerHTML='<div style="background:#1b3a5c;border:1px solid #2c5a8a;border-radius:6px;padding:12px;margin-bottom:10px">'
+    +'<div style="font-weight:700;color:#e2c47a;margin-bottom:6px">'+groups.length+' person(s) whose courses aren\'t linked yet</div>'
+    +'<div style="font-size:13px;color:#c8d8e8;line-height:1.6">These are the SAME person taking different courses, currently showing as unrelated students. Linking connects them so they read "Course 1 of 2" and count as one person in the student total — while their lessons, payments and payroll stay correctly separate per course. <strong>Nothing is merged or deleted</strong>; each course record keeps its own history exactly as it is.</div></div>'
+    +'<div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px">'
+    +'<div style="font-weight:700;color:#a8e8a8;margin-bottom:6px">Will link ('+groups.length+')</div>'
+    +'<div style="font-size:13px;color:#c8d8e8;line-height:1.8">'
+    + groups.slice(0,30).map(function(g){
+        return '<strong>'+escapeHtml(g.name)+'</strong> — '+g.rows.map(function(r){ return escapeHtml((r.instrument||'?')+' · '+(r.teacher||'?')+' · '+(r.lesson_day||'?')); }).join('  +  ');
+      }).join('<br>')
+    + (groups.length>30 ? '<br>…and '+(groups.length-30)+' more' : '')
+    +'</div><button class="btn btn-gold" style="margin-top:12px" onclick="applyLinkCourses()">Link these '+groups.length+' person(s)</button></div>';
+}
+
+function applyLinkCourses(){
+  const groups=findUnlinkedCourseGroups();
+  if(!groups.length){ showToast('Nothing to link.'); return; }
+  if(!confirm('Link '+groups.length+' person\'s courses together?\n\nNothing is merged or deleted — each course keeps its own lessons, payments and payroll. They will simply be recognised as the same person.')) return;
+  let linked=0;
+  groups.forEach(function(g){
+    // Root is the earliest record's stable public_id (or student_code as a
+    // fallback) — the same identifier openAddCourseForm uses, so a course
+    // added later through the normal flow joins the same group.
+    const root=g.rows[0];
+    const rootId=root.linkedPersonId||root.public_id||root.student_code;
+    if(!rootId) return;
+    g.rows.forEach(function(r){
+      if(r===root) return;
+      r.linkedPersonId=rootId;
+      r._localModifiedAt=Date.now();
+      if(typeof syncStudentUpdateToSupabase==='function'){ try{ syncStudentUpdateToSupabase(r); }catch(_){} }
+      linked++;
+    });
+  });
+  save();
+  ['renderStudents','renderOverview','renderProfiles'].forEach(function(fn){
+    if(typeof window[fn]==='function'){ try{ window[fn](); }catch(_){} }
+  });
+  showToast('Linked '+linked+' course record(s) ✓');
+  previewLinkCourses();
 }
 
 // ── Cloud duplicate ROW cleanup ──────────────────────────────────────────
@@ -7888,7 +8192,18 @@ function calculatePayrollAmount(lessons, rate){
       if(!Number.isNaN(n)) return sum+n;
     }
     const perSession = r * (isPayrollGroupSession(l) ? PAYROLL_GROUP_RATE_MULTIPLIER : 1);
-    return sum + (perSession * (l.isDoubleSession ? 2 : 1));
+    // Round each session to whole EGP AS IT IS EARNED, not just when
+    // displayed. The 1.5x group multiplier produces a half-unit on any
+    // ODD rate (175 -> 262.5), and every display path rounds that to 263
+    // independently — so four such payslips each read 263 while the
+    // aggregate total, summing the true 262.5s, reads 1,050 rather than
+    // 1,052. The books then disagree with the payslips actually handed
+    // to teachers, by a couple of EGP that has no traceable source.
+    // Rounding here means one number exists, and everything downstream
+    // reports that same number. Currently dormant (all rates are even)
+    // but it would surface silently the first time an odd rate is set.
+    const earned = Math.round(perSession) * (l.isDoubleSession ? 2 : 1);
+    return sum + earned;
   }, 0);
 }
 
@@ -8029,6 +8344,34 @@ function autoLoadFromCloud(){
   return _autoLoadFromCloudInFlight;
 }
 
+// A plain .select('*') with no .limit() is silently capped by Supabase's
+// server-side row limit (1000 by default) — a table that grows past that
+// just returns its first page, forever, with no error to signal it.
+// db.lessons was then WHOLESALE REPLACED from that partial result, so
+// anything past the cap simply disappeared from every device on every
+// load. Ordered oldest-first, the rows cut off were the NEWEST ones —
+// which is exactly "add a student today, their lesson vanishes after a
+// reload," one of the very first symptoms reported this session.
+// Top-level (not nested inside autoLoadFromCloud) specifically so every
+// loader — including the practice_sessions/expenses/notes decorators that
+// wrap autoLoadFromCloud from OUTSIDE it — can share this one
+// implementation instead of each needing its own inlined copy.
+async function fetchAllRows(supabaseClient, table, columns, orderCol, ascending){
+  const pageSize=1000;
+  let allRows=[], from=0;
+  while(true){
+    let q=supabaseClient.from(table).select(columns).range(from, from+pageSize-1);
+    if(orderCol) q=q.order(orderCol, {ascending: ascending!==false});
+    const {data, error}=await q;
+    if(error) return {data:allRows.length?allRows:null, error};
+    if(!data || !data.length) break;
+    allRows=allRows.concat(data);
+    if(data.length<pageSize) break;
+    from+=pageSize;
+  }
+  return {data:allRows, error:null};
+}
+
 async function _autoLoadFromCloudImpl(){
  // Reuse the already-initialized client — avoids multiple GoTrueClient instances
  const client = window.supabaseClientV1;
@@ -8041,39 +8384,13 @@ async function _autoLoadFromCloudImpl(){
    const el = document.getElementById('cloud-status');
    if(el) el.textContent = '⏳ Loading from cloud...';
 
-   // A plain .select('*') with no .limit() is silently capped by
-   // Supabase's server-side row limit (1000 by default) — a table that
-   // grows past that just returns its first page, forever, with no error
-   // to signal it. db.lessons is then WHOLESALE REPLACED from that partial
-   // result (see below), so anything past the cap simply disappears from
-   // every device on every load. Ordered oldest-first, the rows cut off
-   // are the NEWEST ones — which is exactly "add a student today, their
-   // lesson vanishes after a reload," one of the very first symptoms
-   // reported this session. Page through in fixed-size chunks so the
-   // number of rows on the server can never silently cap what comes back.
-   async function fetchAllRows(table, columns, orderCol, ascending){
-     const pageSize=1000;
-     let allRows=[], from=0;
-     while(true){
-       let q=client.from(table).select(columns).range(from, from+pageSize-1);
-       if(orderCol) q=q.order(orderCol, {ascending: ascending!==false});
-       const {data, error}=await q;
-       if(error) return {data:allRows.length?allRows:null, error};
-       if(!data || !data.length) break;
-       allRows=allRows.concat(data);
-       if(data.length<pageSize) break;
-       from+=pageSize;
-     }
-     return {data:allRows, error:null};
-   }
-
    const [{data:students,error:e1},{data:teachers,error:e2},{data:lessons,error:e3},{data:payments,error:e4},{data:teacherPaidRows,error:e5},{data:lessonUpdates,error:e6}] = await Promise.all([
-     fetchAllRows('students','*'),
+     fetchAllRows(client,'students','*'),
      client.from('teachers').select('*'),
-     fetchAllRows('lessons','*','lesson_date',true),
-     fetchAllRows('payments','*'),
-     client.from('teacher_paid').select('*'),
-     fetchAllRows('lesson_updates','*')
+     fetchAllRows(client,'lessons','*','lesson_date',true),
+     fetchAllRows(client,'payments','*'),
+     fetchAllRows(client,'teacher_paid','*'),
+     fetchAllRows(client,'lesson_updates','*')
    ]);
 
    if(e1) throw e1;
@@ -8393,7 +8710,7 @@ async function _autoLoadFromCloudImpl(){
    // critical feature, so a failure here shouldn't block or fail
    // everything else that just loaded successfully.
    try{
-     const {data:resources,error:eRes}=await client.from('resources').select('*');
+     const {data:resources,error:eRes}=await fetchAllRows(client,'resources','*');
      if(eRes) console.warn('Resources load failed:', eRes.message);
      else if(resources){
        db.resources=resources.map(r=>{
@@ -8445,7 +8762,7 @@ async function _autoLoadFromCloudImpl(){
    // own try/catch (like the tables above) so a not-yet-created table
    // can't fail the whole load.
    try{
-     const {data:absRows,error:eAbs}=await client.from('teacher_absences').select('*');
+     const {data:absRows,error:eAbs}=await fetchAllRows(client,'teacher_absences','*');
      if(eAbs){ /* table may not exist yet — silent */ }
      else if(absRows){
        db.teacherAbsences=absRows.map(r=>({
@@ -8474,7 +8791,7 @@ async function _autoLoadFromCloudImpl(){
    // local entry the cloud has never seen at all (neither active nor
    // tombstoned) is genuinely new — preserve it and re-queue it for upload.
    try{
-     const {data:wlRows,error:eWl}=await client.from('waiting_list').select('*');
+     const {data:wlRows,error:eWl}=await fetchAllRows(client,'waiting_list','*');
      if(eWl){ window._waitingListSyncState='error'; /* table may not exist yet */ }
      else if(wlRows){
        window._waitingListSyncState='ok';
@@ -8511,6 +8828,7 @@ async function _autoLoadFromCloudImpl(){
 
    // Nudge stale cached clients to refresh (safety net; silent if unavailable).
    if(typeof checkVersionFreshness==='function'){ try{ await checkVersionFreshness(); }catch(_){} }
+   if(typeof updateBackupReminderBanner==='function'){ try{ updateBackupReminderBanner(); }catch(_){} }
 
    // Reminder-sent records — small but worth syncing: without them the
    // "✓ Reminded" badge is invisible on other devices, making it easy to
@@ -8530,7 +8848,7 @@ async function _autoLoadFromCloudImpl(){
    // Independent for the same reason as resources above — a newer,
    // less critical feature shouldn't be able to fail the main load.
    try{
-     const {data:refunds,error:eRef}=await client.from('refunds').select('*');
+     const {data:refunds,error:eRef}=await fetchAllRows(client,'refunds','*');
      if(eRef) console.warn('Refunds load failed:', eRef.message);
      else if(refunds){
        db.refunds=refunds.map(r=>({
@@ -8546,7 +8864,7 @@ async function _autoLoadFromCloudImpl(){
    // Same pattern again — other_revenue is small, non-critical, and
    // shouldn't be able to fail the main load either.
    try{
-     const {data:otherRev,error:eOR}=await client.from('other_revenue').select('*');
+     const {data:otherRev,error:eOR}=await fetchAllRows(client,'other_revenue','*');
      if(eOR) console.warn('Other revenue load failed:', eOR.message);
      else if(otherRev){
        db.otherRevenue=otherRev.map(r=>({
@@ -10700,10 +11018,6 @@ function lessonDateKey(value){
   return String(value||'').slice(0,10);
 }
 
-function logMonth(log){
-  return log.month || String(log.lessonDate||'').slice(0,7) || null;
-}
-
 // Local-timezone "today", not UTC. new Date().toISOString() is always
 // UTC — for a timezone ahead of UTC (Egypt is UTC+2), any time between
 // midnight and 2 AM local still has the UTC date on the PREVIOUS day,
@@ -11647,6 +11961,20 @@ function addDaysToDateString(dateStr, days){
   return d.toISOString().slice(0,10);
 }
 
+// UTC setUTCMonth correctly rolls the year over (e.g. Nov + 3 -> Feb next
+// year). For a start date late in a month (29th-31st), landing on a
+// month that's shorter overflows forward a few days rather than clamping
+// (Jan 31 + 1 month -> Mar 3, not Feb 28) — standard Date arithmetic. For
+// a deadline that only ever makes the window very slightly more
+// generous, never shorter, so it's left as-is rather than special-cased.
+function addMonthsToDateString(dateStr, months){
+  const d=parseDateUTC(dateStr);
+  if(!d) return '';
+  d.setUTCMonth(d.getUTCMonth()+months);
+  return d.toISOString().slice(0,10);
+}
+
+
 // Opens the log editor for a LESSON that has no log record yet, creating
 // one first. A session with no log is exactly the session that most needs
 // logging, so it must not be a dead end.
@@ -12551,7 +12879,7 @@ function getPlanSessionCount(plan){
   // 'monthly'/'group-monthly' are auto-calculated from the remaining
   // lesson-days in the month (see planSessionCountFrom); the 4 here is
   // only a fallback for callers that don't supply a start date.
-  const sessionCounts={'trial':1,'group-trial':1,'monthly':4,'group-monthly':4,'monthly-4':4,'monthly-5':5,'weekly':1,'weekly-group':1,'group':4,'lesson-1':1,'lesson-2':2,'lesson-3':3,'group-1':1,'group-2':2,'group-3':3};
+  const sessionCounts={'trial':1,'group-trial':1,'monthly':4,'group-monthly':4,'monthly-4':4,'monthly-5':5,'weekly':1,'weekly-group':1,'group':4,'lesson-1':1,'lesson-2':2,'lesson-3':3,'group-1':1,'group-2':2,'group-3':3,'artist':BUNDLE_PLANS.artist.sessions,'premium':BUNDLE_PLANS.premium.sessions};
   return sessionCounts[plan]||0;
 }
 
@@ -12608,6 +12936,7 @@ function scheduleMonthlyLessons(student, startPreference){
   // lesson-days remain this month starting from the first scheduled date.
   const count=planSessionCountFrom(student, firstDate);
   if(!count) return 0;
+  if(typeof applyBundlePlanDeadline==='function') applyBundlePlanDeadline(student, firstDate);
   return scheduleWeeklyLessonsFrom(student, firstDate, count);
 }
 
@@ -12826,12 +13155,13 @@ function renewCourseWithExistingSettings(courseId, markPaid, paymentMethod){
     : nextWeekdayOnOrAfter(todayKey, lessonDay);
   if(soonestPossible && firstNewDate<soonestPossible) firstNewDate=soonestPossible;
 
-  const sessionCounts={trial:1,'group-trial':1,weekly:1,'weekly-group':1,'lesson-1':1,'lesson-2':2,'lesson-3':3};
+  const sessionCounts={trial:1,'group-trial':1,weekly:1,'weekly-group':1,'lesson-1':1,'lesson-2':2,'lesson-3':3,artist:BUNDLE_PLANS.artist.sessions,premium:BUNDLE_PLANS.premium.sessions};
   const count=(plan==='monthly'||plan==='group-monthly')
     ? weekdayOccurrencesLeftInMonth(firstNewDate, lessonDay)
     : (sessionCounts[plan]||4);
   if(!count) return {ok:false, name:course.name||'', reason:'no lesson-days remain this month'};
 
+  if(typeof applyBundlePlanDeadline==='function') applyBundlePlanDeadline(course, firstNewDate);
   const created=scheduleWeeklyLessonsFrom(course, firstNewDate, count, course.teacher, course.lessonTime, isGroupPlan(plan));
   if(!created) return {ok:false, name:course.name||'', reason:'those sessions may already exist'};
 
@@ -12918,7 +13248,7 @@ function confirmRenewal(id){
   if(!lessonDay){ showToast('Please choose a lesson day'); return; }
   if(!lessonTime){ showToast('Please choose a time slot'); return; }
 
-  const sessionCounts={'trial':1,'monthly':4,'group-monthly':4,'monthly-4':4,'monthly-5':5,'weekly':1,'weekly-group':1,'lesson-1':1,'lesson-2':2,'lesson-3':3,'group':4,'group-trial':1,'group-1':1,'group-2':2,'group-3':3};
+  const sessionCounts={'trial':1,'monthly':4,'group-monthly':4,'monthly-4':4,'monthly-5':5,'weekly':1,'weekly-group':1,'lesson-1':1,'lesson-2':2,'lesson-3':3,'group':4,'group-trial':1,'group-1':1,'group-2':2,'group-3':3,'artist':BUNDLE_PLANS.artist.sessions,'premium':BUNDLE_PLANS.premium.sessions};
   // For the auto monthly plans the real count is computed below, once the
   // first new date is known. This fixed value is just a validity check.
   if(!sessionCounts[plan]){ showToast('Please choose a valid plan'); return; }
@@ -13042,6 +13372,7 @@ function confirmRenewal(id){
   }
   if(!count){ showToast('No lesson-days remain this month for that plan — pick a Weekly session or a date next month.'); return; }
 
+  if(typeof applyBundlePlanDeadline==='function') applyBundlePlanDeadline(student, firstNewDate);
   const created=scheduleWeeklyLessonsFrom(student, firstNewDate, count, teacher, lessonTime, isGroupPlan(plan));
 
   // Ask (via the modal's own fields) rather than assume: was this renewal
@@ -14125,7 +14456,16 @@ function findTeacherDoubleSessionWindows(teacherName, excludeLessonId){
 function studentHasPendingRenewal(student){
   if(!student) return false;
   if((student.status||'active')==='archived' || student.frozen) return false;
-  if(typeof isMonthlyPlan!=='function' || !isMonthlyPlan(student.plan)) return false;
+  // Monthly plans AND bundle plans (Artist/Premium) both belong here —
+  // everything below (no upcoming scheduled lesson + attended something
+  // recently) is already plan-agnostic. A bundle student reaches this
+  // state either by finishing all their sessions normally, or by having
+  // an unfinished remainder forfeited when enforceBundlePlanDeadlines
+  // deletes it — either way, "no upcoming lesson" is the exact right
+  // signal that they need a renewal decision.
+  const eligiblePlan=(typeof isMonthlyPlan==='function' && isMonthlyPlan(student.plan))
+    || (typeof isBundlePlan==='function' && isBundlePlan(student.plan));
+  if(!eligiblePlan) return false;
 
   const todayKey=new Date().toISOString().slice(0,10);
   const ownLessons=(db.lessons||[]).filter(l=>
@@ -15655,13 +15995,19 @@ function resolveMakeupIfLinked(id){
   if(l && l.makeupForLessonId){
     const original=(db.lessons||[]).find(x=>x.id===l.makeupForLessonId);
     if(original && !original.makeupResolved){
-      original.makeupResolved=true;
+      // makeupCreditsDue is set at booking time by the double-session
+      // credit rule (1 or 2, depending on whether this fell on the
+      // student's usual day and whether that usual lesson was still
+      // separately scheduled that week — see doubleSessionCreditCost).
+      // A plain single-lesson "Book a Separate Day" makeup never sets it,
+      // so it correctly defaults to consuming just the one linked credit.
+      const due=l.makeupCreditsDue || 1;
+      const count=consumeMakeupCredits((db.students||[]).find(s=>String(s.id)===String(original.studentId)||s.name===original.student), original, due);
       save();
-      if(typeof syncLessonUpdateToSupabase==='function') syncLessonUpdateToSupabase(original);
       renderLessons();
       renderOverview();
       if(typeof renderReports==='function') renderReports();
-      showToast('Makeup completed — original lesson resolved ✓');
+      showToast(count>1 ? 'Makeup completed — '+count+' owed make-ups resolved ✓' : 'Makeup completed — original lesson resolved ✓');
     }
   }
 }
@@ -15757,7 +16103,7 @@ function openScheduleMakeup(missedLessonId){
     if(l.status!=='scheduled') return false;
     if(l.isDoubleSession || l.makeupForLessonId) return false; // exclude lessons already serving as someone else's makeup
     if(!(String(l.studentId)===String(missed.studentId) || l.student===missed.student)) return false;
-    if((l.date||'') < new Date().toISOString().slice(0,10)) return false;
+    if((l.date||'') < getLocalTodayKey()) return false;
     if(!l.time) return false;
     // The FULL 90-minute range must be clear — sampling only the
     // follow-up slot's start instant misses staggered bookings that
@@ -15772,55 +16118,163 @@ function openScheduleMakeup(missedLessonId){
   // follow-up slot at all, this is what actually gives the admin a way
   // forward instead of a dead end.
   const otherWindows=missed.teacher ? findTeacherDoubleSessionWindows(missed.teacher, missedLessonId) : [];
-
   const hasAnyOption=upcomingCandidates.length || otherWindows.length;
 
   openModal('Schedule Makeup — '+escapeHtml(missed.student||''), `
     <p style="color:var(--text-muted);margin-bottom:14px">Missed lesson: ${escapeHtml(formatLedgerDate(missed.date))}${missed.time?' at '+escapeHtml(formatTime12h(missed.time)):''} — ${escapeHtml(STATUS_LABELS[missed.status]||missed.status)}</p>
 
-    <div class="card-title">Option 1 — Double Session</div>
-    <small>Merge this makeup into one of ${escapeHtml(student?.name||'the student')}'s upcoming lessons (becomes 90 minutes), any other genuinely open 90-minute window ${escapeHtml(missed.teacher||'the teacher')} has, or pick your own day &amp; start time below.</small>
-    <div style="margin-top:8px">
-      ${hasAnyOption ? `
-        <select id="ms-double-target" style="width:100%">
+    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
+      <button type="button" class="btn ms-path-btn" id="ms-path-btn-double" onclick="switchMakeupPath('double',${missedLessonId})">💠 Double Session</button>
+      <button type="button" class="btn ms-path-btn" id="ms-path-btn-separate" onclick="switchMakeupPath('separate',${missedLessonId})">📅 Separate Day</button>
+      <button type="button" class="btn ms-path-btn" id="ms-path-btn-done" onclick="switchMakeupPath('done',${missedLessonId})">✅ Already Made Up</button>
+    </div>
+
+    <div id="ms-panel-double" class="ms-path-panel">
+      <small style="color:var(--text-muted)">Combine this makeup with a lesson (90 minutes total) instead of booking a separate visit.</small>
+      <div style="margin-top:10px">
+        <select id="ms-double-target" style="width:100%" onchange="onMakeupDoubleTargetChange(${missedLessonId})">
           ${upcomingCandidates.map(l=>`<option value="existing:${l.id}">${escapeHtml(formatLedgerDate(l.date))} at ${escapeHtml(formatTime12h(l.time))} — ${escapeHtml(student?.name||missed.student||'')}'s regular lesson</option>`).join('')}
           ${otherWindows.map(w=>`<option value="new:${w.date}:${w.time}">${escapeHtml(formatLedgerDate(w.date))} at ${escapeHtml(formatTime12h(w.time))} — new time with ${escapeHtml(missed.teacher||'')}</option>`).join('')}
+          <option value="custom">Custom day &amp; start time…</option>
         </select>
-        <button class="btn btn-sm btn-gold" style="margin-top:8px" onclick="confirmDoubleSessionMakeup(${missedLessonId})">Make This a Double Session</button>
-      ` : `<p style="color:var(--text-muted)">No auto-detected 90-minute window — use the custom picker below.</p>`}
-    </div>
-    <div style="margin-top:14px;padding-top:12px;border-top:1px dashed var(--border)">
-      <div style="font-size:13px;font-weight:600;margin-bottom:8px">Or pick a custom day &amp; start time</div>
-      <div class="teacher-log-grid">
-        <div class="form-field"><label for="msd-date">Date</label><div style="display:flex;gap:4px"><input id="msd-date" type="text" placeholder="dd/mm/yyyy" maxlength="10" oninput="maskDateInput(this)" onchange="updateDoubleSessionCustomSlots(${missedLessonId})"><button type="button" class="btn btn-sm" onclick="openDatePicker('msd-date')">📅</button></div></div>
-        <div class="form-field"><label for="msd-time">Start Time</label><select id="msd-time"><option value="">Pick a day first</option></select></div>
       </div>
-      <div id="msd-note" style="margin-top:6px;font-size:12px;color:var(--text-muted)"></div>
-      <button class="btn btn-sm btn-gold" style="margin-top:10px" onclick="confirmCustomDoubleSession(${missedLessonId})">Book Custom Double Session</button>
+      <div id="ms-double-custom-fields" style="display:${hasAnyOption?'none':'block'};margin-top:10px">
+        <div class="teacher-log-grid">
+          <div class="form-field"><label for="msd-date">Date</label><div style="display:flex;gap:4px"><input id="msd-date" type="text" placeholder="dd/mm/yyyy" maxlength="10" oninput="maskDateInput(this)" onchange="updateDoubleSessionCustomSlots(${missedLessonId})"><button type="button" class="btn btn-sm" onclick="openDatePicker('msd-date')">📅</button></div></div>
+          <div class="form-field"><label for="msd-time">Start Time</label><select id="msd-time" onchange="updateMakeupPreview(${missedLessonId})"><option value="">Pick a day first</option></select></div>
+        </div>
+        <div id="msd-note" style="margin-top:6px;font-size:12px;color:var(--text-muted)"></div>
+      </div>
     </div>
 
-    <div class="card-title" style="margin-top:20px">Option 2 — Book a Separate Day</div>
-    <small>Book a brand-new one-off makeup session on any day (subject to the normal 3-room limit).</small>
-    <div class="teacher-log-grid" style="margin-top:8px">
-      <div class="form-field"><label for="ms-date">Date</label><div style="display:flex;gap:4px"><input id="ms-date" type="text" placeholder="dd/mm/yyyy" maxlength="10" oninput="maskDateInput(this)" onchange="updateMakeupSeparateDaySlots(${missedLessonId})"><button type="button" class="btn btn-sm" onclick="openDatePicker('ms-date')">📅</button></div></div>
-      <div class="form-field"><label for="ms-teacher">Teacher</label><select id="ms-teacher" onchange="updateMakeupSeparateDaySlots(${missedLessonId})">
-        ${(db.teacherProfiles||[]).filter(p=>(p.status||'active')!=='archived').map(p=>`<option value="${escapeAttr(p.name)}" ${p.name===missed.teacher?'selected':''}>${escapeHtml(p.name)}</option>`).join('')}
-      </select></div>
-      <div class="form-field"><label for="ms-time">Time Slot</label><select id="ms-time"><option value="">Pick a date first</option></select></div>
+    <div id="ms-panel-separate" class="ms-path-panel" style="display:none">
+      <small style="color:var(--text-muted)">Book a brand-new one-off makeup session on any day (subject to the normal 3-room limit). This does not touch ${escapeHtml(student?.name||'the student')}'s regular lesson.</small>
+      <div class="teacher-log-grid" style="margin-top:10px">
+        <div class="form-field"><label for="ms-date">Date</label><div style="display:flex;gap:4px"><input id="ms-date" type="text" placeholder="dd/mm/yyyy" maxlength="10" oninput="maskDateInput(this)" onchange="updateMakeupSeparateDaySlots(${missedLessonId})"><button type="button" class="btn btn-sm" onclick="openDatePicker('ms-date')">📅</button></div></div>
+        <div class="form-field"><label for="ms-teacher">Teacher</label><select id="ms-teacher" onchange="updateMakeupSeparateDaySlots(${missedLessonId})">
+          ${(db.teacherProfiles||[]).filter(p=>(p.status||'active')!=='archived').map(p=>`<option value="${escapeAttr(p.name)}" ${p.name===missed.teacher?'selected':''}>${escapeHtml(p.name)}</option>`).join('')}
+        </select></div>
+        <div class="form-field"><label for="ms-time">Time Slot</label><select id="ms-time" onchange="updateMakeupPreview(${missedLessonId})"><option value="">Pick a date first</option></select></div>
+      </div>
+      <div id="ms-capacity-note" style="margin-top:6px;font-size:12px;color:var(--text-muted)"></div>
     </div>
-    <div id="ms-capacity-note" style="margin-top:6px;font-size:12px;color:var(--text-muted)"></div>
-    <button class="btn btn-sm btn-gold" style="margin-top:10px" onclick="confirmSeparateDayMakeup(${missedLessonId})">Book Separate Makeup</button>
 
-    <div class="card-title" style="margin-top:20px">Option 3 — Already Made Up</div>
-    <small>Use this if the makeup already happened informally (or outside the app) — no new session gets booked, this just clears the owed status.</small>
-    <div style="margin-top:8px;display:flex;align-items:center;gap:8px">
-      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:normal;text-transform:none;font-size:13px">
-        <input id="ms-mark-madeup" type="checkbox" style="width:auto">
+    <div id="ms-panel-done" class="ms-path-panel" style="display:none">
+      <small style="color:var(--text-muted)">Use this if the makeup already happened informally (or outside the app) — no new session gets booked, this just clears the owed status.</small>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:normal;text-transform:none;font-size:13px;margin-top:10px">
+        <input id="ms-mark-madeup" type="checkbox" style="width:auto" onchange="updateMakeupPreview(${missedLessonId})">
         Mark as Made-Up
       </label>
-      <button class="btn btn-sm btn-gold" onclick="confirmMakeupAlreadyDone(${missedLessonId})">Confirm</button>
     </div>
+
+    <div id="ms-preview-line" style="margin-top:16px;padding:10px 12px;border-radius:6px;background:var(--surface2,#1e1c17);border:1px solid var(--border);font-size:13px;color:var(--text-muted)"></div>
+
+    <button class="btn btn-gold" id="ms-primary-btn" style="margin-top:12px;width:100%" onclick="confirmMakeupPrimary(${missedLessonId})">Make This a Double Session</button>
   `);
+  switchMakeupPath('double', missedLessonId);
+}
+
+// Shows only the chosen path's fields, relabels the single primary button
+// to say exactly what it will do, and refreshes the consequence preview.
+// A person picking between three things they can't currently see side by
+// side, with four differently-labelled buttons of the same visual weight,
+// is exactly the confusion this replaces.
+function switchMakeupPath(path, missedLessonId){
+  window._msActivePath=path;
+  ['double','separate','done'].forEach(p=>{
+    const panel=document.getElementById('ms-panel-'+p);
+    if(panel) panel.style.display = (p===path) ? 'block' : 'none';
+    const btn=document.getElementById('ms-path-btn-'+p);
+    if(btn) btn.classList.toggle('active', p===path);
+  });
+  const primary=document.getElementById('ms-primary-btn');
+  if(primary){
+    primary.textContent = path==='double' ? 'Make This a Double Session'
+      : path==='separate' ? 'Book Separate Makeup'
+      : 'Confirm Already Made Up';
+  }
+  updateMakeupPreview(missedLessonId);
+}
+
+// Custom day/time fields only make sense once "Custom…" is actually
+// chosen — showing them unconditionally alongside every dropdown option
+// was the original dialog's biggest source of "which of these am I
+// actually filling in" confusion.
+function onMakeupDoubleTargetChange(missedLessonId){
+  const val=document.getElementById('ms-double-target')?.value||'';
+  const customFields=document.getElementById('ms-double-custom-fields');
+  if(customFields) customFields.style.display = (val==='custom') ? 'block' : 'none';
+  updateMakeupPreview(missedLessonId);
+}
+
+// The one thing the old dialog never told anyone: what a choice actually
+// costs. Computed the same way the booking functions themselves compute
+// it, so this can never drift from what confirming will really do.
+function updateMakeupPreview(missedLessonId){
+  const el=document.getElementById('ms-preview-line');
+  if(!el) return;
+  const missed=(db.lessons||[]).find(l=>l.id===missedLessonId);
+  if(!missed){ el.textContent=''; return; }
+  const student=(db.students||[]).find(s=>String(s.id)===String(missed.studentId) || s.name===missed.student);
+  const path=window._msActivePath||'double';
+
+  if(path==='double'){
+    const val=document.getElementById('ms-double-target')?.value||'';
+    let date=null, time=null, teacherLabel=missed.teacher||'';
+    if(val==='custom'){
+      date=dmyToIso(document.getElementById('msd-date')?.value||'');
+      time=document.getElementById('msd-time')?.value||'';
+    } else if(val.startsWith('existing:')){
+      const l=(db.lessons||[]).find(x=>String(x.id)===val.slice('existing:'.length));
+      if(l){ date=l.date; time=l.time; }
+    } else if(val.startsWith('new:')){
+      const rest=val.slice('new:'.length); const i=rest.indexOf(':');
+      date=rest.slice(0,i); time=rest.slice(i+1);
+    }
+    if(!date || !time){ el.textContent='Pick a time to see what this will use.'; return; }
+    const cost=doubleSessionCreditCost(student, date);
+    el.innerHTML=`<strong>${escapeHtml(formatLedgerDate(date))} at ${escapeHtml(formatTime12h(time))}</strong> with ${escapeHtml(teacherLabel)}, 90 minutes — will use <strong>${cost} of ${student?makeupsOwedCountForStudent(student):'?'} owed make-up${cost===1?'':'s'}</strong> once attended.`;
+    return;
+  }
+  if(path==='separate'){
+    const date=dmyToIso(document.getElementById('ms-date')?.value||'');
+    const teacher=document.getElementById('ms-teacher')?.value||'';
+    const time=document.getElementById('ms-time')?.value||'';
+    if(!date || !teacher || !time){ el.textContent='Pick a date, teacher and time to see the summary.'; return; }
+    el.innerHTML=`<strong>${escapeHtml(formatLedgerDate(date))} at ${escapeHtml(formatTime12h(time))}</strong> with ${escapeHtml(teacher)} — a genuinely separate session; uses <strong>1 owed make-up</strong> once attended. ${escapeHtml(student?.name||'The student')}'s regular lesson is unaffected.`;
+    return;
+  }
+  // done
+  const checked=!!document.getElementById('ms-mark-madeup')?.checked;
+  el.textContent = checked
+    ? 'No new session will be booked — this just clears the owed status.'
+    : 'Check "Mark as Made-Up" above, then confirm.';
+}
+
+// Small helper purely for the preview line's "of N owed" wording.
+function makeupsOwedCountForStudent(student){
+  if(!student) return 0;
+  return (db.lessons||[]).filter(l=>
+    (l.status_record||'active')!=='archived' &&
+    lessonBelongsToStudent(l, student) &&
+    typeof isMakeupOwed==='function' && isMakeupOwed(l)
+  ).length;
+}
+
+// The dialog's single button. Dispatches to whichever confirm function
+// the active path (and, for Double Session, the dropdown selection)
+// actually needs — every one of these is the same tested booking logic
+// that existed before, just reached through one place instead of four.
+function confirmMakeupPrimary(missedLessonId){
+  const path=window._msActivePath||'double';
+  if(path==='double'){
+    const val=document.getElementById('ms-double-target')?.value||'';
+    if(val==='custom') confirmCustomDoubleSession(missedLessonId);
+    else confirmDoubleSessionMakeup(missedLessonId);
+    return;
+  }
+  if(path==='separate'){ confirmSeparateDayMakeup(missedLessonId); return; }
+  confirmMakeupAlreadyDone(missedLessonId);
 }
 
 // Marks a single missed lesson as made-up without booking anything — the
@@ -15854,7 +16308,7 @@ function updateMakeupSeparateDaySlots(missedLessonId){
     timeEl.innerHTML='<option value="">Pick a date first</option>';
     return;
   }
-  if(date<new Date().toISOString().slice(0,10)){
+  if(date<getLocalTodayKey()){
     timeEl.innerHTML='<option value="">Invalid date</option>';
     if(noteEl) noteEl.textContent='Makeup sessions can\'t be booked in the past.';
     return;
@@ -15893,6 +16347,75 @@ function updateMakeupSeparateDaySlots(missedLessonId){
   }
 }
 
+// How many owed make-ups a double session actually consumes, per the
+// academy's rule. A double session is two 45-minute halves; the question is
+// how many of those halves are make-up (versus the student's normal
+// weekly session that would have happened anyway):
+//   * On the student's USUAL day → one half IS their normal session, so
+//     only the other half is a make-up. 1 credit.
+//   * On a DIFFERENT day, and their usual day that week still has a
+//     scheduled lesson → the normal session still happens separately, so
+//     BOTH halves here are make-ups. 2 credits.
+//   * On a DIFFERENT day, and their usual day that week has no scheduled
+//     lesson → this session is standing in for the normal one, so only the
+//     other half is a make-up. 1 credit.
+// Returns 1 or 2. Never returns more owed lessons than actually exist.
+function doubleSessionCreditCost(student, date){
+  if(!student || !date) return 1;
+  const WD=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const d=new Date(String(date)+'T00:00:00Z');
+  if(isNaN(d)) return 1;
+  const dayName=WD[d.getUTCDay()];
+  const usualDay=String(student.lesson_day||'').trim();
+  if(!usualDay) return 1;
+  if(dayName.toLowerCase()===usualDay.toLowerCase()) return 1;
+  // Different day: does their usual slot that same week still hold a
+  // scheduled lesson? Compare within the same Friday-anchored week the
+  // rest of the app uses, so "that week" means the same thing everywhere.
+  let weekStart;
+  try{ weekStart=getFridayWeekStart(String(date)); }catch(_){ return 1; }
+  const weekEnd=addDaysToDateStringLocal(weekStart, 6);
+  const stillScheduled=(db.lessons||[]).some(l=>
+    (l.status_record||'active')!=='archived' &&
+    l.status==='scheduled' &&
+    lessonBelongsToStudent(l, student) &&
+    String(l.date||'')>=weekStart && String(l.date||'')<=weekEnd &&
+    (function(){
+      const ld=new Date(String(l.date)+'T00:00:00Z');
+      return !isNaN(ld) && WD[ld.getUTCDay()].toLowerCase()===usualDay.toLowerCase();
+    })()
+  );
+  return stillScheduled ? 2 : 1;
+}
+
+// Marks the right number of owed make-ups resolved for a double session.
+// The originally-selected missed lesson is always consumed first; a second
+// credit (when the rule calls for it) comes from that student's next
+// oldest still-owed lesson. Returns how many were actually resolved, which
+// can be 1 even when 2 were due if only one is genuinely owed.
+function consumeMakeupCredits(student, missedLesson, cost){
+  const resolved=[];
+  if(missedLesson && !missedLesson.makeupResolved){
+    missedLesson.makeupResolved=true;
+    resolved.push(missedLesson);
+  }
+  if(cost>resolved.length && student){
+    const others=(db.lessons||[]).filter(l=>
+      l!==missedLesson &&
+      (l.status_record||'active')!=='archived' &&
+      lessonBelongsToStudent(l, student) &&
+      typeof isMakeupOwed==='function' && isMakeupOwed(l)
+    ).sort((a,b)=>String(a.date||'').localeCompare(String(b.date||'')));
+    for(const l of others){
+      if(resolved.length>=cost) break;
+      l.makeupResolved=true;
+      resolved.push(l);
+    }
+  }
+  resolved.forEach(l=>{ if(typeof syncLessonUpdateToSupabase==='function'){ try{ syncLessonUpdateToSupabase(l); }catch(_){} } });
+  return resolved.length;
+}
+
 function confirmDoubleSessionMakeup(missedLessonId){
   const rawValue=document.getElementById('ms-double-target')?.value||'';
   if(!rawValue){ showToast('No option selected'); return; }
@@ -15926,6 +16449,14 @@ function confirmDoubleSessionMakeup(missedLessonId){
     target.isDoubleSession=true;
     target.isExtendedDuration=true; // recognized by the Group-session-aware slot logic (Calendar, booking dropdowns, schedule photo export) so this lesson is correctly treated as occupying 90 minutes everywhere, not just for payroll credit
     target.makeupForLessonId=missedLessonId;
+    // How many owed make-ups this booking is committed to, per the credit
+    // rule — computed and stored now, but NOT resolved yet. Resolution
+    // happens on ATTENDANCE (see the markLessonAttended hook below), same
+    // as every other makeup path and matching the toast text below ("...
+    // resolves automatically once attended"). Resolving here at booking
+    // time instead would consume the credit even if this session later
+    // gets marked absent or is rescheduled again.
+    target.makeupCreditsDue=doubleSessionCreditCost(student, target.date);
     save();
     closeModal();
     renderLessons();
@@ -15961,6 +16492,9 @@ function confirmDoubleSessionMakeup(missedLessonId){
       isExtendedDuration: true,
       makeupForLessonId: missedLessonId
     };
+    // Same credit rule as the merge branch — computed and stored now,
+    // resolved on attendance (see the markLessonAttended hook), not here.
+    newLesson.makeupCreditsDue=doubleSessionCreditCost(student, date);
     db.lessons.push(newLesson);
     if(student) createLessonLog(student, newLesson);
     save();
@@ -15969,7 +16503,7 @@ function confirmDoubleSessionMakeup(missedLessonId){
     renderOverview();
     if(typeof renderReports==='function') renderReports();
     if(typeof syncLessonToSupabase==='function') syncLessonToSupabase(newLesson);
-    showToast('Double session booked (90 min, '+formatTime12h(time)+'–'+formatTime12h(addSlotMinutes(time,DOUBLE_SESSION_DURATION_MINUTES))+' on '+formatLedgerDate(date)+') — resolves automatically once attended');
+    showToast('Double session booked (90 min, '+formatTime12h(time)+'–'+formatTime12h(addSlotMinutes(time,DOUBLE_SESSION_DURATION_MINUTES))+' on '+formatLedgerDate(date)+') — will use '+newLesson.makeupCreditsDue+' owed make-up'+(newLesson.makeupCreditsDue===1?'':'s')+' once attended');
     return;
   }
 
@@ -15986,7 +16520,7 @@ function updateDoubleSessionCustomSlots(missedLessonId){
   const date=dmyToIso(dateEl.value||'');
   const teacherName=missed.teacher;
   if(!date){ timeEl.innerHTML='<option value="">Pick a date first</option>'; if(noteEl) noteEl.textContent=''; return; }
-  if(date<new Date().toISOString().slice(0,10)){
+  if(date<getLocalTodayKey()){
     timeEl.innerHTML='<option value="">Invalid date</option>';
     if(noteEl) noteEl.textContent='Double sessions can\'t be booked in the past.';
     return;
@@ -16053,7 +16587,8 @@ function confirmCustomDoubleSession(missedLessonId){
     month: String(date).slice(0,7),
     isDoubleSession: true,
     isExtendedDuration: true,
-    makeupForLessonId: missedLessonId
+    makeupForLessonId: missedLessonId,
+    makeupCreditsDue: doubleSessionCreditCost(student, date)
   };
   db.lessons.push(newLesson);
   if(student) createLessonLog(student, newLesson);
@@ -16063,7 +16598,7 @@ function confirmCustomDoubleSession(missedLessonId){
   renderOverview();
   if(typeof renderReports==='function') renderReports();
   if(typeof syncLessonToSupabase==='function') syncLessonToSupabase(newLesson);
-  showToast('Double session booked (90 min, '+formatTime12h(time)+'–'+formatTime12h(addSlotMinutes(time,DOUBLE_SESSION_DURATION_MINUTES))+' on '+formatLedgerDate(date)+') — resolves automatically once attended');
+  showToast('Double session booked (90 min, '+formatTime12h(time)+'–'+formatTime12h(addSlotMinutes(time,DOUBLE_SESSION_DURATION_MINUTES))+' on '+formatLedgerDate(date)+') — will use '+newLesson.makeupCreditsDue+' owed make-up'+(newLesson.makeupCreditsDue===1?'':'s')+' once attended');
 }
 
 function confirmSeparateDayMakeup(missedLessonId){
@@ -16078,7 +16613,7 @@ function confirmSeparateDayMakeup(missedLessonId){
   const time=document.getElementById('ms-time')?.value||'';
 
   if(!date||!teacher||!time){ showToast('Please pick a date, teacher, and time slot'); return; }
-  if(date<new Date().toISOString().slice(0,10)){ showToast('Makeup sessions can\'t be booked in the past.'); return; }
+  if(date<getLocalTodayKey()){ showToast('Makeup sessions can\'t be booked in the past.'); return; }
   if(isRoomFullDuringRange(date,time,SESSION_DURATION_MINUTES,null)){ showToast('The rooms are at the 3-room limit during part of that slot — pick another.'); return; }
   if(isTeacherBusyDuringRange(teacher,date,time,SESSION_DURATION_MINUTES,null)){ showToast('That teacher already has a lesson overlapping that time — pick another slot.'); return; }
 
@@ -16322,15 +16857,6 @@ async function syncWaitingEntryToSupabase(entry){
   }catch(err){ console.warn('Waiting-list sync failed:', err.message); }
 }
 
-async function syncWaitingEntryDeleteToSupabase(entryId){
-  try{
-    if(!window.supabaseClientV1 || entryId==null) return;
-    const {error}=await window.supabaseClientV1.from('waiting_list')
-      .delete().eq('entry_key', String(entryId));
-    if(error) console.warn('Waiting-list delete sync failed:', error.message);
-  }catch(err){ console.warn('Waiting-list delete sync failed:', err.message); }
-}
-
 // ── Version-freshness check ──────────────────────────────────────────────
 // Catches the "I'm looking at a stale cached build" trap. The running build
 // is read from the on-screen badge; the latest known build is a single row in
@@ -16375,6 +16901,38 @@ function showVersionMismatchBanner(running, latest){
       +' <span style="cursor:pointer;text-decoration:underline;margin-left:8px" onclick="this.parentElement.remove()">dismiss</span>';
     document.body.appendChild(bar);
   }catch(_){}
+}
+
+// Nudges toward taking a backup after this many days without one. A
+// backup that only exists in someone's memory of "I should do that
+// sometime" isn't a real safety net — this whole session started from
+// exactly that gap. Dismissing for today doesn't cancel the reminder
+// permanently, only until the check runs again (next load past the
+// dismissal date), so it can't be dismissed once and forgotten forever.
+const BACKUP_REMINDER_DAYS=7;
+function updateBackupReminderBanner(){
+  try{
+    const existing=document.getElementById('backup-reminder-banner');
+    if(existing) existing.remove();
+    const lastStr=localStorage.getItem('cymatics_last_backup_at');
+    const dismissedStr=localStorage.getItem('cymatics_backup_reminder_dismissed_at');
+    const now=new Date();
+    const daysSince=lastStr ? Math.floor((now-new Date(lastStr))/86400000) : Infinity;
+    if(daysSince<BACKUP_REMINDER_DAYS) return;
+    if(dismissedStr && Math.floor((now-new Date(dismissedStr))/86400000)<1) return; // dismissed today — don't nag again until tomorrow
+    const bar=document.createElement('div');
+    bar.id='backup-reminder-banner';
+    bar.style.cssText='position:fixed;top:0;left:0;right:0;z-index:99998;background:#1b3a5c;color:#e8e4d8;padding:10px 16px;font-size:14px;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,0.3)';
+    const whenText=lastStr ? 'It\'s been '+daysSince+' days since your last backup.' : 'You haven\'t taken a backup yet.';
+    bar.innerHTML='💾 '+whenText+' <strong>Database tab → Backup Academy</strong> takes a few seconds and protects everything.'
+      +' <span style="cursor:pointer;text-decoration:underline;margin-left:8px" onclick="dismissBackupReminder()">remind me tomorrow</span>';
+    document.body.appendChild(bar);
+  }catch(_){}
+}
+function dismissBackupReminder(){
+  try{ localStorage.setItem('cymatics_backup_reminder_dismissed_at', new Date().toISOString()); }catch(_){}
+  const el=document.getElementById('backup-reminder-banner');
+  if(el) el.remove();
 }
 
 async function syncWishlistToSupabase(student){
@@ -16887,7 +17445,7 @@ function bookPracticeSession(){
   const fee=Number(document.getElementById('ps-fee')?.value)||PRACTICE_SESSION_FEE;
 
   if(!studentId||!instrument||!date||!time){ showToast('Please fill in student, instrument, date, and time'); return; }
-  if(date<new Date().toISOString().slice(0,10)){ showToast('Practice sessions can\'t be booked in the past.'); return; }
+  if(date<getLocalTodayKey()){ showToast('Practice sessions can\'t be booked in the past.'); return; }
 
   if(isRoomFullDuringRange(date,time,PRACTICE_SESSION_DURATION_MINUTES,null)){ showToast('The rooms are at the 3-room limit during part of that hour — pick another slot.'); return; }
   if(isInstrumentBusyAtDateTime(date,time,instrument,null,null)){ showToast('That instrument is already in use at that time — pick another slot.'); return; }
@@ -16980,7 +17538,13 @@ async function syncPracticeSessionUpdateToSupabase(session){
     await origAutoLoad();
     try{
       if(!window.supabaseClientV1) return;
-      const {data,error}=await window.supabaseClientV1.from('practice_sessions').select('*');
+      // v187: practice_sessions is architecturally the exact same risk
+      // lessons was — one row inserted per booking, genuinely unbounded
+      // growth over time. v189: now shares the single top-level
+      // fetchAllRows implementation (promoted out of autoLoadFromCloud
+      // specifically so decorators like this one could reach it) instead
+      // of an inlined duplicate.
+      const {data, error}=await fetchAllRows(window.supabaseClientV1, 'practice_sessions', '*');
       if(error){ console.warn('Practice session load failed:', error.message); return; }
       if(data){
         db.practiceSessions=data.map(p=>({
@@ -17013,8 +17577,13 @@ async function syncPracticeSessionUpdateToSupabase(session){
     await origAutoLoad2();
     try{
       if(!window.supabaseClientV1) return;
+      // instruments is a small, bounded catalogue (one row per instrument
+      // TYPE offered, not per lesson) — inherently safe, left as a plain
+      // select. expenses grows one row per entry logged over the
+      // academy's whole lifetime, genuinely unbounded, so it gets the
+      // same paginated fetch as every other growing table.
       const [{data:expenseRows,error:eErr},{data:instrumentRows,error:iErr}]=await Promise.all([
-        window.supabaseClientV1.from('expenses').select('*'),
+        fetchAllRows(window.supabaseClientV1,'expenses','*'),
         window.supabaseClientV1.from('instruments').select('*')
       ]);
       if(eErr) console.warn('Expenses load failed:', eErr.message);
@@ -17052,7 +17621,7 @@ async function syncPracticeSessionUpdateToSupabase(session){
     await origAutoLoad3();
     try{
       if(!window.supabaseClientV1) return;
-      const {data,error}=await window.supabaseClientV1.from('notes').select('*');
+      const {data,error}=await fetchAllRows(window.supabaseClientV1,'notes','*');
       if(error){ console.warn('Notes load failed:', error.message); return; }
       if(data){
         db.notes=data.map(n=>({id:n.id, text:n.text||'', createdAt:n.created_at||''}));
