@@ -414,7 +414,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-193</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-194</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1585,10 +1585,11 @@ function isMonthlyPlan(plan){
 // applying the academy's crediting rules in priority order:
 //
 //   1. Custom Pay  — a one-time flat total for THIS renewal, overrides all.
-//   2. Custom Amount — a flat MONTHLY fee (a discount), applied as-is
-//      regardless of session count. (It was once a per-lesson rate × sessions;
-//      the implementation below is flat monthly, with teacher-absent credit
-//      still deducted at the standard per-session rate.)
+//   2. Discount — a PERCENTAGE off the standard total (teacher-absent
+//      credit already subtracted first). Replaces the old "Custom
+//      Amount," a flat monthly EGP figure that had to be manually
+//      recalculated by hand whenever the session count changed; a
+//      percentage scales automatically instead.
 //   3. Standard per-lesson rate for the plan (weekly 600, group 750,
 //      weekly-group 850, otherwise 500).
 //
@@ -1622,22 +1623,25 @@ function computeRenewalPrice(student, sessionCount, opts){
   }
 
   const billableCount=Math.max(0, count-creditedSessions);
-
-  if(student && student.customAmount!=null && student.customAmount!==''){
-    // Custom Amount is a flat MONTHLY fee — the agreed price for the
-    // month regardless of how many sessions fall in it. (It used to be a
-    // per-lesson rate, which meant the figure moved every month as the
-    // session count changed.) Credit for teacher-missed sessions is still
-    // deducted at the standard per-session rate.
-    const monthly=Number(student.customAmount)||0;
-    const creditRate=(typeof whatsAppPerLessonRate==='function') ? whatsAppPerLessonRate(o.planOverride||student.plan) : 500;
-    const amount=Math.max(0, monthly-(creditedSessions*creditRate));
-    return {amount, rate:null, billableCount, creditedSessions, source:'customAmount', monthlyFee:monthly};
-  }
-
   const planForRate=o.planOverride||student?.plan;
   const rate=(typeof whatsAppPerLessonRate==='function') ? whatsAppPerLessonRate(planForRate) : 500;
-  return {amount:billableCount*rate, rate, billableCount, creditedSessions, source:'standard'};
+  const subtotal=billableCount*rate;
+
+  // Discount is a PERCENTAGE off the normally-computed total (after
+  // teacher-absence credit is already subtracted) — not a flat override.
+  // Was "Custom Amount," a flat monthly EGP figure that replaced the
+  // session-count math entirely; that meant the figure had to be
+  // manually recalculated by hand every time the session count changed
+  // (a 4-Sunday month vs a 5-Sunday one), and drifted silently if
+  // forgotten. A percentage scales automatically with whatever the
+  // student's real session count for that batch turns out to be.
+  if(student && student.discountPercent!=null && student.discountPercent!==''){
+    const pct=Math.max(0, Math.min(100, Number(student.discountPercent)||0));
+    const amount=Math.round(subtotal*(1-pct/100));
+    return {amount, rate, billableCount, creditedSessions, source:'discount', discountPercent:pct, subtotal};
+  }
+
+  return {amount:subtotal, rate, billableCount, creditedSessions, source:'standard'};
 }
 
 function getStudentPlanAmount(student){
@@ -1655,16 +1659,21 @@ function getStudentPlanAmount(student){
   } else {
     sessionCount = (typeof getPlanSessionCount==='function' ? getPlanSessionCount(student.plan) : 0) || 1;
   }
-  if(student.customAmount!=null && student.customAmount!==''){
-    // Flat MONTHLY fee — no longer multiplied by the session count.
-    const monthly=Number(student.customAmount);
-    if(!Number.isNaN(monthly)) return monthly;
-  }
+  let baseAmount;
   if(student.plan==='monthly' || student.plan==='group-monthly' || isWeekly){
     const rate=planPerSessionRate(student.plan);
-    return sessionCount*rate;
+    baseAmount=sessionCount*rate;
+  } else {
+    baseAmount=PLAN_AMOUNTS[student.plan]||0;
   }
-  return PLAN_AMOUNTS[student.plan]||0;
+  // Discount is a PERCENTAGE off the normal total, scaling automatically
+  // with whatever the real session count for this batch is — see
+  // computeRenewalPrice for the full reasoning (this mirrors it).
+  if(student.discountPercent!=null && student.discountPercent!==''){
+    const pct=Math.max(0, Math.min(100, Number(student.discountPercent)||0));
+    if(!Number.isNaN(pct)) return Math.round(baseAmount*(1-pct/100));
+  }
+  return baseAmount;
 }
 
 // Per-lesson rate for WhatsApp message pricing. Group plans bill 750/lesson,
@@ -1711,11 +1720,13 @@ function getWhatsAppLessonPricing(student, planForRate){
     }
   }
   const lessonCount=remaining.length;
+  const baseAmount=lessonCount>0 ? lessonCount*rate : rate; // fall back to one lesson if none remain even next month (e.g. no lesson_day set at all)
   let price;
-  if(student && student.customAmount!=null && student.customAmount!==''){
-    price=Number(student.customAmount)||0; // flat custom rate
+  if(student && student.discountPercent!=null && student.discountPercent!==''){
+    const pct=Math.max(0, Math.min(100, Number(student.discountPercent)||0));
+    price=baseAmount*(1-pct/100);
   } else {
-    price=lessonCount>0 ? lessonCount*rate : rate; // fall back to one lesson if none remain even next month (e.g. no lesson_day set at all)
+    price=baseAmount;
   }
   return {
     price: Math.round(price),
@@ -3420,7 +3431,7 @@ function editStudent(id){
          Online student
        </label>
      </div>
-     <div class="form-field"><label for="es-custom-amount">Custom Amount — per MONTH (EGP)</label><input id="es-custom-amount" type="number" min="0" step="1" placeholder="e.g. 1800 for the whole month" value="${s.customAmount!=null?escapeAttr(s.customAmount):''}"><small style="color:var(--text-muted);display:block;margin-top:2px">A flat agreed price for the month, whatever the session count. Leave blank to charge the standard rate per session. Credit for sessions the teacher misses still comes off this.</small></div>
+     <div class="form-field"><label for="es-discount-percent">Discount — per MONTH (%)</label><input id="es-discount-percent" type="number" min="0" max="100" step="1" placeholder="e.g. 10 for 10% off" value="${s.discountPercent!=null?escapeAttr(s.discountPercent):''}"><small style="color:var(--text-muted);display:block;margin-top:2px">A percentage taken off the normal monthly total, whatever the session count turns out to be. Leave blank to charge the standard rate with no discount.</small></div>
      <div class="form-field"><label for="es-custom-pay">Custom Pay — next renewal only (EGP)</label><input id="es-custom-pay" type="number" min="0" step="1" placeholder="e.g. couldn't reschedule a make-up" value="${s.customPay!=null?escapeAttr(s.customPay):''}"><small style="color:var(--text-muted);display:block;margin-top:2px">A one-time flat total for the NEXT renewal only (e.g. adjusting for a make-up that couldn't be rescheduled). Clears itself automatically once that renewal is processed.</small></div>
      <div class="form-field"><label for="es-age">Age</label><input id="es-age" type="number" min="1" max="120" step="1" placeholder="e.g. 10" value="${escapeAttr(studentAge(s))}">${s.dob?`<small style="color:var(--text-muted);display:block;margin-top:2px">From date of birth ${escapeHtml(formatDateDMY(s.dob))}. Typing an age here replaces it.</small>`:''}</div>
      <div class="form-field"><label for="es-joined">Starting Date</label><div style="display:flex;gap:4px"><input id="es-joined" type="text" placeholder="dd/mm/yyyy" maxlength="10" oninput="maskDateInput(this)" value="${escapeAttr(isoToDmy(s.joined_date))}"><button type="button" class="btn btn-sm" onclick="openDatePicker('es-joined')">📅</button></div></div>
@@ -3499,8 +3510,8 @@ function saveEditStudent(id){
    }
    s.plan=nextPlan;
  }
- const customAmountRaw=document.getElementById('es-custom-amount')?.value;
- s.customAmount=(customAmountRaw==null||customAmountRaw==='')?null:Number(customAmountRaw);
+ const discountPercentRaw=document.getElementById('es-discount-percent')?.value;
+ s.discountPercent=(discountPercentRaw==null||discountPercentRaw==='')?null:Math.max(0,Math.min(100,Number(discountPercentRaw)));
  const customPayRaw=document.getElementById('es-custom-pay')?.value;
  s.customPay=(customPayRaw==null||customPayRaw==='')?null:Number(customPayRaw);
  // Age is stored with the date it was entered so it can be rolled
@@ -4141,17 +4152,17 @@ function renderRenewalsDue(){
     if(s.customPay!=null && s.customPay!==''){
       // Custom Pay is a one-time flat override for THIS renewal only (e.g.
       // a make-up that couldn't be rescheduled) — takes priority over both
-      // the per-lesson Custom Amount and the standard rate.
+      // a standing Discount and the standard rate.
       amount=Number(s.customPay)||0;
       isCustomPay=true;
-    } else if(s.customAmount!=null && s.customAmount!==''){
-      // Custom Amount is a flat MONTHLY fee — the agreed price for the
-      // month, not a per-lesson rate. Credit for sessions the teacher
-      // missed still comes off at the standard per-session rate.
-      const monthlyFee=Number(s.customAmount)||0;
-      amount=Math.max(0, monthlyFee-(deductions.length*rate));
     } else {
-      amount=billableCount*rate;
+      const subtotal=billableCount*rate;
+      if(s.discountPercent!=null && s.discountPercent!==''){
+        const pct=Math.max(0, Math.min(100, Number(s.discountPercent)||0));
+        amount=Math.round(subtotal*(1-pct/100));
+      } else {
+        amount=subtotal;
+      }
     }
     const remindedAt=db.remindersSent[s.id+'_renewal_'+nextMonthKey]||null;
     rows.push({s, lessonCount, amount, remindedAt, isCustomPay, deductionCount:deductions.length, nextMonthName});
@@ -4300,13 +4311,15 @@ function computeRenewalCourseDetails(student){
   let amount;
   if(student.customPay!=null && student.customPay!==''){
     amount=Number(student.customPay)||0;
-  } else if(student.customAmount!=null && student.customAmount!==''){
-    // Flat monthly fee (see computeRenewalPrice).
-    const monthlyFee=Number(student.customAmount)||0;
-    amount=Math.max(0, monthlyFee-(deductions.length*whatsAppPerLessonRate(student.plan)));
   } else {
     const rate=whatsAppPerLessonRate(student.plan);
-    amount=billableCount*rate;
+    const subtotal=billableCount*rate;
+    if(student.discountPercent!=null && student.discountPercent!==''){
+      const pct=Math.max(0, Math.min(100, Number(student.discountPercent)||0));
+      amount=Math.round(subtotal*(1-pct/100));
+    } else {
+      amount=subtotal;
+    }
   }
 
   let absenceNote='';
@@ -6865,8 +6878,11 @@ async function runDataHealthCheck(){
     items:orphanTeacherStudents.map(s=>`${s.name} → "${s.teacher}"`)
   });
 
-  // 2. Students with an unrecognized plan and no custom amount to fall back on
-  const badPlanStudents=students.filter(s=>!PLAN_AMOUNTS.hasOwnProperty(s.plan) && (s.customAmount==null||s.customAmount===''));
+  // 2. Students with an unrecognized plan — a Discount percentage can't
+  // rescue this the way the old flat Custom Amount could, since a
+  // percentage needs a real base price to apply against; with no
+  // recognized plan there's nothing to discount from.
+  const badPlanStudents=students.filter(s=>!PLAN_AMOUNTS.hasOwnProperty(s.plan));
   if(badPlanStudents.length) issues.push({
     title:'Students with an unrecognized plan (would show a blank/zero amount)',
     items:badPlanStudents.map(s=>`${s.name} → plan "${s.plan}"`)
@@ -7426,7 +7442,7 @@ async function pushAllDataToCloud(){
       status:s.status||'active', created_at:s.created_at||new Date().toISOString(),
       skill_level:s.skillLevel||'', current_goal:s.currentGoal||'', milestones:s.milestones||[],
       linked_person_id:s.linkedPersonId?String(s.linkedPersonId):null,
-      custom_amount:(s.customAmount!=null && s.customAmount!=='')?Number(s.customAmount):null
+      discount_percent:(s.discountPercent!=null && s.discountPercent!=='')?Number(s.discountPercent):null
     };
     const matchCol=s.public_id?'public_id':(s.student_code?'student_code':null);
     const matchVal=s.public_id||s.student_code||null;
@@ -8450,7 +8466,7 @@ async function _autoLoadFromCloudImpl(){
        currentGoal: s.current_goal||'',
        milestones: Array.isArray(s.milestones) ? s.milestones : [],
        linkedPersonId: s.linked_person_id||'',
-       customAmount: (s.custom_amount!=null) ? s.custom_amount : null,
+       discountPercent: (s.discount_percent!=null) ? s.discount_percent : null,
        frozen: !!s.frozen,
        frozenSince: s.frozen_since||'',
        frozenReason: s.frozen_reason||'',
@@ -9360,7 +9376,7 @@ async function _addStudentToSupabaseImpl(student){
       current_goal: student.currentGoal || '',
       milestones: student.milestones || [],
       linked_person_id: student.linkedPersonId ? String(student.linkedPersonId) : null,
-      custom_amount: (student.customAmount!=null && student.customAmount!=='') ? Number(student.customAmount) : null,
+      discount_percent: (student.discountPercent!=null && student.discountPercent!=='') ? Number(student.discountPercent) : null,
       frozen: !!student.frozen,
       frozen_since: student.frozenSince || null,
       frozen_reason: student.frozenReason || '',
@@ -9557,7 +9573,7 @@ async function syncStudentUpdateToSupabase(student){
       current_goal: student.currentGoal || '',
       milestones: student.milestones || [],
       linked_person_id: student.linkedPersonId ? String(student.linkedPersonId) : null,
-      custom_amount: (student.customAmount!=null && student.customAmount!=='') ? Number(student.customAmount) : null,
+      discount_percent: (student.discountPercent!=null && student.discountPercent!=='') ? Number(student.discountPercent) : null,
       frozen: !!student.frozen,
       frozen_since: student.frozenSince || null,
       frozen_reason: student.frozenReason || '',
@@ -13597,10 +13613,10 @@ function confirmRenewalCustomDates(id, student){
   });
 
   // Priced through the canonical function — respects the plan's real rate
-  // (weekly is 600, not 500), any standing Custom Amount, any one-time
-  // Custom Pay, and credit owed for teacher-absent sessions. Hardcoding
-  // 750/500 here is what made a Custom Dates renewal quietly ignore all
-  // four of those.
+  // (weekly is 600, not 500), any standing Discount percentage, any
+  // one-time Custom Pay, and credit owed for teacher-absent sessions.
+  // Hardcoding 750/500 here is what made a Custom Dates renewal quietly
+  // ignore all three of those.
   const pricing=computeRenewalPrice(student, dates.length, {planOverride: isGroup?'group-monthly':(student.plan||'monthly')});
   const rate=pricing.rate;
   const created=[];
