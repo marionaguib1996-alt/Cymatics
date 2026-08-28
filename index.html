@@ -414,7 +414,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-192</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-193</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1686,7 +1686,7 @@ function getWhatsAppLessonPricing(student, planForRate){
   const plan=planForRate||student?.plan;
   const rate=whatsAppPerLessonRate(plan);
   const now=new Date();
-  const month=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
+  let month=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
   const todayDay=now.getDate();
   let remaining=[];
   if(student && student.lesson_day){
@@ -1696,13 +1696,26 @@ function getWhatsAppLessonPricing(student, planForRate){
     // day is billed for that same session twice. Matches the conversion
     // rule: converting on the trial day starts the following week.
     remaining=getWeekdayDatesInMonth(month, student.lesson_day).filter(d=>d>todayDay);
+    // A trial near the end of the month can genuinely have ZERO more
+    // occurrences of its weekday left this month — the very next one
+    // falls in the month after. That's not "no lessons to quote," it's
+    // "quote NEXT month's full batch" (Mario's exact report: a trial the
+    // last Tuesday of August, next Tuesday already September, which has
+    // 5). Falling back to a flat one-lesson price silently understated
+    // both the amount and the lesson list.
+    if(!remaining.length){
+      const [y,m]=month.split('-').map(Number);
+      const nextMonthDate=new Date(y, m, 1); // JS month is 0-indexed, so m (1-indexed "this month") lands on next month's 1st
+      month=nextMonthDate.getFullYear()+'-'+String(nextMonthDate.getMonth()+1).padStart(2,'0');
+      remaining=getWeekdayDatesInMonth(month, student.lesson_day);
+    }
   }
   const lessonCount=remaining.length;
   let price;
   if(student && student.customAmount!=null && student.customAmount!==''){
     price=Number(student.customAmount)||0; // flat custom rate
   } else {
-    price=lessonCount>0 ? lessonCount*rate : rate; // fall back to one lesson if none remain
+    price=lessonCount>0 ? lessonCount*rate : rate; // fall back to one lesson if none remain even next month (e.g. no lesson_day set at all)
   }
   return {
     price: Math.round(price),
