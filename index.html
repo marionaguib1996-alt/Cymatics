@@ -414,7 +414,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-194</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-195</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -12002,6 +12002,16 @@ function addDaysToDateString(dateStr, days){
   return d.toISOString().slice(0,10);
 }
 
+// Whether a date string actually falls on the given weekday name — a
+// small safety check for any explicitly-chosen date that's meant to
+// match a specific recurring day (e.g. a Starting Date option that could
+// theoretically go stale if the day selector changed underneath it).
+function dateMatchesWeekday(dateStr, dayName){
+  const d=parseDateUTC(dateStr);
+  if(!d || !dayName) return false;
+  return WEEKDAY_NAMES[d.getUTCDay()]===dayName;
+}
+
 // UTC setUTCMonth correctly rolls the year over (e.g. Nov + 3 -> Feb next
 // year). For a start date late in a month (29th-31st), landing on a
 // month that's shorter overflows forward a few days rather than clamping
@@ -13067,6 +13077,11 @@ function renewStudentSubscription(id, preCheckIdsCsv){
           <button type="button" class="btn btn-sm" onclick="openDatePicker('rn-date')">📅</button>
         </div>
       </div>
+      <div class="form-field" id="rn-startdate-field" style="display:${isWeeklyPlan(student.plan)?'none':'block'}">
+        <label for="rn-startdate">Starting Date</label>
+        <select id="rn-startdate"></select>
+        <div class="teacher-row-meta" style="margin-top:2px">Defaults to the soonest one — pick a later occurrence to reserve the slot without starting this week.</div>
+      </div>
     </div>
     <div id="rn-custom-dates-section" style="display:none">
       <div class="form-field wide">
@@ -13104,6 +13119,7 @@ function renewStudentSubscription(id, preCheckIdsCsv){
   window._renewPaymentMethod='InstaPay';
   window._renewCustomDates=[];
   window._renewCustomStudentId=id;
+  refreshRenewStartDateOptions(id);
 }
 
 // Toggles between the normal auto-scheduled Plan section and the free
@@ -13255,6 +13271,33 @@ function selectRenewPaymentMethod(method){
   if(bothBtn) bothBtn.className = 'btn btn-sm'+(method==='InstaPay + Cash'?' btn-gold':'');
 }
 
+// Next N occurrences of a given weekday that are genuinely available for
+// this teacher — used to let the admin explicitly pick WHICH upcoming
+// occurrence a renewal should start from, rather than always silently
+// taking the very next one. Covers the "student wants to reserve their
+// regular slot but skip the immediate week" case: the renewal still
+// recurs on their normal day, it just starts one (or more) occurrences
+// later than the earliest possible one.
+// "Available" here means the teacher isn't marked absent that day — the
+// same check computeRenewalCourseDetails already uses for excluding
+// absence dates from a renewal's date list, applied here as a forward
+// scan instead of a fixed month.
+function findNextAvailableWeekdayDates(teacherName, dayName, count, fromDateKey){
+  const results=[];
+  if(!dayName) return results;
+  const todayKey=fromDateKey || new Date().toISOString().slice(0,10);
+  let cursor=nextWeekdayOnOrAfter(todayKey, dayName);
+  let guard=0;
+  while(cursor && results.length<count && guard<count*8){
+    guard++;
+    if(!teacherName || !isTeacherAbsentOnDate(teacherName, cursor, null)){
+      results.push(cursor);
+    }
+    cursor=addDaysToDateString(cursor, 7);
+  }
+  return results;
+}
+
 function onRenewPlanChange(id){
   // A Weekly plan is a single session, so the exact date matters rather
   // than "the next occurrence of their weekday" — expose a date field for
@@ -13262,6 +13305,8 @@ function onRenewPlanChange(id){
   const plan=document.getElementById('rn-plan')?.value||'';
   const field=document.getElementById('rn-date-field');
   if(field) field.style.display = isWeeklyPlan(plan) ? 'block' : 'none';
+  const startField=document.getElementById('rn-startdate-field');
+  if(startField) startField.style.display = isWeeklyPlan(plan) ? 'none' : 'block';
 }
 
 function onRenewTeacherChange(id){
@@ -13280,10 +13325,32 @@ function onRenewDayChange(id){
   const dayName=document.getElementById('rn-day')?.value||'';
   const slots=getAvailableTimeSlots(teacherName, dayName, id);
   const timeSel=document.getElementById('rn-time');
-  if(!timeSel) return;
-  timeSel.innerHTML=slots.length
-    ? slots.map(t=>`<option value="${escapeAttr(t)}">${escapeHtml(formatTime12h(t))}</option>`).join('')
-    : '<option value="">No available slots</option>';
+  if(timeSel){
+    timeSel.innerHTML=slots.length
+      ? slots.map(t=>`<option value="${escapeAttr(t)}">${escapeHtml(formatTime12h(t))}</option>`).join('')
+      : '<option value="">No available slots</option>';
+  }
+  refreshRenewStartDateOptions(id);
+}
+
+// Refreshes the Starting Date dropdown's options — the next several
+// available occurrences of whatever day/teacher are currently selected.
+// Called on open and whenever Day or Teacher changes underneath it, so
+// the list never shows stale dates for a since-changed selection.
+function refreshRenewStartDateOptions(id){
+  const sel=document.getElementById('rn-startdate');
+  if(!sel) return;
+  const teacherName=document.getElementById('rn-teacher')?.value||'';
+  const dayName=document.getElementById('rn-day')?.value||'';
+  const previousChoice=sel.value;
+  const dates=findNextAvailableWeekdayDates(teacherName, dayName, 6);
+  sel.innerHTML = dates.length
+    ? dates.map((d,i)=>`<option value="${escapeAttr(d)}">${i===0?'Soonest — ':''}${escapeHtml(formatLedgerDate(d))}</option>`).join('')
+    : '<option value="">No available dates found</option>';
+  // Keep whatever the admin had already picked, if it's still on offer —
+  // switching teacher/day shouldn't silently discard a deliberate later
+  // choice back to "soonest" if that same date is still valid.
+  if(previousChoice && dates.includes(previousChoice)) sel.value=previousChoice;
 }
 
 function confirmRenewal(id){
@@ -13362,6 +13429,19 @@ function confirmRenewal(id){
     if(chosen){
       if(chosen<todayKey){ showToast('That session date is in the past — pick another.'); return; }
       firstNewDate=chosen;
+    }
+  } else {
+    // For every recurring plan, an explicit Starting Date pick overrides
+    // the auto-computed "next occurrence after their last lesson" — this
+    // is what lets a student reserve their regular slot while skipping
+    // the immediate week (a genuinely later occurrence than the default).
+    // Only trusted when it actually falls on the selected lesson day and
+    // isn't in the past — a stale option left over from before the admin
+    // changed Teacher/Day (the dropdown refreshes on change, but a race
+    // between two rapid changes is cheap to guard against here too).
+    const chosenStart=document.getElementById('rn-startdate')?.value||'';
+    if(chosenStart && chosenStart>=todayKey && dateMatchesWeekday(chosenStart, lessonDay)){
+      firstNewDate=chosenStart;
     }
   }
   // A trial conversion's firstNewDate is already computed correctly above
