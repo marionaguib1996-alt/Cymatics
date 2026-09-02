@@ -414,7 +414,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-198</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-199</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1193,6 +1193,12 @@ input::placeholder{color:var(--text-dim)}
       <button class="btn" onclick="previewBulkResolveOldMakeups()">🔍 Preview (changes nothing)</button>
     </div>
     <div id="bulk-makeup-results" style="margin-top:14px"></div>
+
+    <div style="border-top:1px solid var(--border);margin:20px 0 16px;"></div>
+    <div class="card-title" style="margin-bottom:10px">Resolve Misassigned Make-ups</div>
+    <small style="display:block;margin-bottom:8px;color:var(--text-muted)">Finds owed make-ups that are definitively wrong — either dated before the linked student even registered, or the lesson's own recorded name doesn't match who its id resolves to now. Both only happen from a reused/misassigned student id, never from a genuine session, so no cutoff date is needed. Same safe resolution as above: only the owed status clears, nothing is deleted.</small>
+    <button class="btn" onclick="previewResolveMisassignedMakeups()">🔍 Preview (changes nothing)</button>
+    <div id="misassigned-makeup-results" style="margin-top:14px"></div>
   </div>
 </div>
 
@@ -5662,6 +5668,14 @@ function renderReports(){
       if(s.joined_date){
         owedLessons=owedLessons.filter(l=>!(l.date && l.date<s.joined_date));
       }
+      // A companion check, date-independent: the lesson's own recorded
+      // name simply isn't this student at all. Catches exactly what the
+      // date check above cannot — a misassigned lesson dated AFTER
+      // registration, if the id it was reused from belonged to someone
+      // whose own activity happened to overlap that period too.
+      if(s.name){
+        owedLessons=owedLessons.filter(l=>!(l.student && normalizeStudentNameForMatch(l.student)!==normalizeStudentNameForMatch(s.name)));
+      }
       // A student who takes more than one instrument can exist as several
       // records (Vocals with one teacher, Guitar with another). Matching a
       // make-up to a record by NAME alone would count every make-up in
@@ -6939,14 +6953,14 @@ async function runDataHealthCheck(){
   });
 
   // 1b. Lessons dated before the student they're linked to even registered
-  // — mathematically impossible for a genuine record, and the strongest
-  // available signal of a reused/misassigned student id (exactly what
-  // caused a brand-new student to show someone else's month-old absence
-  // for an instrument they don't take). The Makeup Dashboard already
-  // excludes these from owed counts on its own; this is purely visibility
-  // into how many such cases exist, and where, so the underlying id-reuse
-  // can be investigated rather than just quietly worked around everywhere
-  // it happens to surface.
+  // — mathematically impossible for a genuine record, and a strong signal
+  // of a reused/misassigned student id (exactly what caused a brand-new
+  // student to show someone else's month-old absence for an instrument
+  // they don't take). The Makeup Dashboard already excludes these from
+  // owed counts on its own; this is purely visibility into how many such
+  // cases exist, and where, so the underlying id-reuse can be
+  // investigated rather than just quietly worked around everywhere it
+  // happens to surface.
   const impossibleDateLessons=(db.lessons||[]).filter(l=>{
     if((l.status_record||'active')==='archived' || !l.date) return false;
     const s=(db.students||[]).find(st=>lessonBelongsToStudent(l, st));
@@ -6954,10 +6968,38 @@ async function runDataHealthCheck(){
   });
   if(impossibleDateLessons.length) issues.push({
     title:'Lessons dated before the linked student registered — likely a reused/misassigned student id',
+    total:impossibleDateLessons.length,
     items:impossibleDateLessons.slice(0,20).map(l=>{
       const s=(db.students||[]).find(st=>lessonBelongsToStudent(l, st));
       return `${s?s.name:l.student} — lesson dated ${l.date}, registered ${s?s.joined_date:'?'} (${l.instrument||'?'} · ${l.teacher||'?'})`;
     }).concat(impossibleDateLessons.length>20 ? [`…and ${impossibleDateLessons.length-20} more`] : [])
+  });
+
+  // 1c. A stronger, DATE-INDEPENDENT companion to the check above: the
+  // lesson's OWN recorded name (set once, at creation) simply does not
+  // match the current name of the student its id resolves to. A genuine
+  // record's l.student always matches who it was created for — this
+  // never happens by accident, only by a reused/misassigned id. Catches
+  // exactly the case a date check alone cannot: a misassigned lesson
+  // dated AFTER the current student's registration, if the id it was
+  // reused from belonged to someone whose own activity happened to
+  // overlap that period too. normalizeStudentNameForMatch only strips
+  // things like a trailing "(online)" — a genuine minor spelling fix
+  // wouldn't normalize to a COMPLETELY different name, so this is a
+  // reliable signal, not a fuzzy guess.
+  const nameMismatchLessons=(db.lessons||[]).filter(l=>{
+    if((l.status_record||'active')==='archived' || !l.student) return false;
+    const s=(db.students||[]).find(st=>lessonBelongsToStudent(l, st));
+    if(!s || !s.name) return false;
+    return normalizeStudentNameForMatch(l.student)!==normalizeStudentNameForMatch(s.name);
+  });
+  if(nameMismatchLessons.length) issues.push({
+    title:'Lessons whose own recorded name doesn\'t match the student their id resolves to — a reused/misassigned student id',
+    total:nameMismatchLessons.length,
+    items:nameMismatchLessons.slice(0,20).map(l=>{
+      const s=(db.students||[]).find(st=>lessonBelongsToStudent(l, st));
+      return `Lesson says "${l.student}" but id ${l.studentId} is now "${s?s.name:'?'}" — dated ${l.date||'?'} (${l.instrument||'?'} · ${l.teacher||'?'})`;
+    }).concat(nameMismatchLessons.length>20 ? [`…and ${nameMismatchLessons.length-20} more`] : [])
   });
 
   // 2. Students with an unrecognized plan — a Discount percentage can't
@@ -15993,6 +16035,65 @@ function findOldOwedMakeups(cutoffDate){
     !findMakeupLessonFor(l.id) &&
     String(l.date||'')<cutoffDate
   ).sort((a,b)=>String(a.date||'').localeCompare(String(b.date||'')));
+}
+
+// Owed make-ups that are DEFINITIVELY misassigned — no cutoff date needed,
+// unlike findOldOwedMakeups above, because the criteria themselves are
+// the proof: either the lesson predates the student's own registration
+// (impossible for a genuine record), or the lesson's own recorded name
+// doesn't match the student its id now resolves to (never happens by
+// accident). Both only ever fire when the relevant field is actually
+// present, so a record with missing information is never caught by
+// guesswork — only ones that are provably wrong.
+function findMisassignedOwedMakeups(){
+  return (db.lessons||[]).filter(l=>{
+    if((l.status_record||'active')==='archived') return false;
+    if(!isMakeupOwed(l)) return false;
+    if(findMakeupLessonFor(l.id)) return false;
+    const s=(db.students||[]).find(st=>lessonBelongsToStudent(l, st));
+    if(!s) return false;
+    const dateImpossible = s.joined_date && l.date && l.date<s.joined_date;
+    const nameMismatch = s.name && l.student && normalizeStudentNameForMatch(l.student)!==normalizeStudentNameForMatch(s.name);
+    return dateImpossible || nameMismatch;
+  }).sort((a,b)=>String(a.date||'').localeCompare(String(b.date||'')));
+}
+
+function previewResolveMisassignedMakeups(){
+  const el=document.getElementById('misassigned-makeup-results');
+  if(!el) return;
+  const rows=findMisassignedOwedMakeups();
+  if(!rows.length){
+    el.innerHTML='<div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px;color:#a8e8a8">✅ No definitively misassigned make-ups found.</div>';
+    return;
+  }
+  el.innerHTML='<div style="background:#3a2020;border:1px solid #6a2a2a;border-radius:6px;padding:12px;margin-bottom:10px">'
+    +'<div style="font-weight:700;color:#f0a0a0;margin-bottom:6px">'+rows.length+' definitively misassigned make-up(s)</div>'
+    +'<div style="font-size:13px;color:#c8d8e8;line-height:1.6">Each of these either predates the student\'s own registration, or the lesson\'s own recorded name doesn\'t match who its id now resolves to — both are only possible from a reused/misassigned student id, never from a genuinely owed session. Resolving clears the owed status only; the lesson record itself is untouched.</div></div>'
+    +'<div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px;max-height:280px;overflow-y:auto">'
+    +'<div style="font-size:13px;color:#c8d8e8;line-height:1.8">'
+    + rows.map(function(l){
+        const s=(db.students||[]).find(function(st){ return lessonBelongsToStudent(l, st); });
+        const why = (s.joined_date && l.date && l.date<s.joined_date)
+          ? 'dated before registration ('+s.joined_date+')'
+          : 'lesson says "'+l.student+'"';
+        return escapeHtml((s?s.name:l.student)||'?')+' — '+escapeHtml(formatLedgerDate(l.date))+' — '+escapeHtml(why);
+      }).join('<br>')
+    +'</div></div>'
+    +'<button class="btn btn-gold" style="margin-top:12px" onclick="applyResolveMisassignedMakeups()">Mark these '+rows.length+' as resolved</button>';
+}
+
+function applyResolveMisassignedMakeups(){
+  const rows=findMisassignedOwedMakeups();
+  if(!rows.length){ showToast('Nothing to resolve.'); return; }
+  if(!confirm('Mark '+rows.length+' definitively misassigned make-up(s) as resolved?\n\nThis only clears the owed status — no lesson is deleted, and nothing else about the record changes.')) return;
+  rows.forEach(function(l){
+    l.makeupResolved=true;
+    if(typeof syncLessonUpdateToSupabase==='function'){ try{ syncLessonUpdateToSupabase(l); }catch(_){} }
+  });
+  save();
+  if(typeof renderReports==='function') renderReports();
+  showToast(rows.length+' misassigned make-up(s) resolved ✓');
+  previewResolveMisassignedMakeups();
 }
 
 function previewBulkResolveOldMakeups(){
