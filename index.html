@@ -414,7 +414,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-200</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-201</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1199,6 +1199,22 @@ input::placeholder{color:var(--text-dim)}
     <small style="display:block;margin-bottom:8px;color:var(--text-muted)">Finds owed make-ups that are definitively wrong — either dated before the linked student even registered, or the lesson's own recorded name doesn't match who its id resolves to now. Both only happen from a reused/misassigned student id, never from a genuine session, so no cutoff date is needed. Same safe resolution as above: only the owed status clears, nothing is deleted.</small>
     <button class="btn" onclick="previewResolveMisassignedMakeups()">🔍 Preview (changes nothing)</button>
     <div id="misassigned-makeup-results" style="margin-top:14px"></div>
+
+    <div style="border-top:1px solid var(--border);margin:20px 0 16px;"></div>
+    <div class="card-title" style="margin-bottom:10px">Deletion Log</div>
+    <small style="display:block;margin-bottom:8px;color:var(--text-muted)">Every student removal recorded on this device — who, when, and why — with a full snapshot so any of them can be restored exactly as they were. Also catches students that disappear from the cloud without being deleted here (they're kept and re-uploaded automatically, and logged so you know it happened).</small>
+    <button class="btn" onclick="renderDeletionLog()">📋 Show deletion log</button>
+    <div id="deletion-log-results" style="margin-top:14px"></div>
+
+    <div style="border-top:1px solid var(--border);margin:20px 0 16px;"></div>
+    <div class="card-title" style="margin-bottom:10px">Archive Lessons Before a Date</div>
+    <small style="display:block;margin-bottom:8px;color:var(--text-muted)">Gives a clean launch point by hiding every lesson before a chosen date. Archived lessons drop out of dashboards, make-up counts, attendance and calculations exactly as deleting them would — but nothing is destroyed, and the Restore button brings the whole batch back. Old lessons are the only surviving trace of some students and underpin past revenue/payroll history, which is why this archives rather than deletes.</small>
+    <div style="display:flex;gap:4px;align-items:flex-end;flex-wrap:wrap">
+      <div class="form-field" style="max-width:180px"><label for="archive-old-cutoff">Archive everything before</label><input id="archive-old-cutoff" type="text" placeholder="dd/mm/yyyy"></div>
+      <button class="btn" onclick="previewArchiveOldLessons()">🔍 Preview (changes nothing)</button>
+      <button class="btn" onclick="restoreArchivedByCutoff()">↩️ Restore archived batch</button>
+    </div>
+    <div id="archive-old-results" style="margin-top:14px"></div>
   </div>
 </div>
 
@@ -4943,7 +4959,17 @@ if(sum){sum.innerHTML=`<div class="metric"><div class="metric-label">Lessons</di
      const owed=isMakeupOwed(l);
      const linkedMakeup=owed ? findMakeupLessonFor(l.id) : null;
      const attendedUnpaid=l.status==='attended' && l.unpaid;
-     const matchedStudent=(db.students||[]).find(s=>String(s.id)===String(l.studentId) || s.name===l.student);
+     // Must use lessonBelongsToStudent, not "id === l.studentId || name
+     // === l.student": for a person enrolled in TWO courses, both student
+     // records carry the SAME NAME with different ids, so the name half
+     // of that OR matches whichever record happens to sit first in the
+     // array — regardless of which course the lesson actually belongs to.
+     // That's what showed a linked student's 4:00 PM E-Guitar lesson as
+     // "Vocals · Mariam" (their other course) in this ledger.
+     // lessonBelongsToStudent is id-authoritative whenever the lesson
+     // carries a studentId, and only falls back to the name when it
+     // genuinely has nothing else to go on.
+     const matchedStudent=(db.students||[]).find(s=>lessonBelongsToStudent(l, s));
      let planBadges=typeof teacherPlanBadgesHtml==='function' ? teacherPlanBadgesHtml(matchedStudent?.plan) : '';
      // A lesson that WAS a trial (stamped at conversion) keeps its Trial
      // badge even though the student is no longer on a trial plan — the
@@ -5256,7 +5282,11 @@ function checkBatchCompletedUnpaid(l){
 // judged against the monthly paid flag.)
 function attendedLessonIsUnpaid(lesson){
   if(!lesson) return false;
-  const student=(db.students||[]).find(s=>String(s.id)===String(lesson.studentId) || s.name===lesson.student);
+  // Same linked-course hazard as the ledger (see renderLessons): matching
+  // by name can pick the WRONG one of a person's two course records, and
+  // here that decides whether an attended lesson counts as unpaid — the
+  // two courses can be on different plans and different paid states.
+  const student=(db.students||[]).find(s=>lessonBelongsToStudent(lesson, s));
   if(!student) return false;
   if(isWeeklyPlan(student.plan)) return false; // billed per session, not monthly
   // Mirror the STUDENT's own paid status, read with the exact same key the
@@ -5540,6 +5570,7 @@ function removeStudentPermanently(id){
   const lessonIds=new Set((db.lessons||[]).filter(l=>String(l.studentId)===String(id)).map(l=>l.id));
   db.lessons=(db.lessons||[]).filter(l=>String(l.studentId)!==String(id));
   db.lessonLogs=(db.lessonLogs||[]).filter(log=>!lessonIds.has(log.lessonId) && String(log.studentId)!==String(s.public_id||s.id));
+  if(typeof logStudentDeletion==='function') logStudentDeletion(s, 'manual permanent delete');
   db.students=db.students.filter(x=>x.id!==id);
   save();
   renderStudents();
@@ -6002,6 +6033,158 @@ async function callCreateAdminFunction(email, password, resetPasswordIfExists){
 // is unsafe here: the whole point of this repair is that several rows
 // share one code, and a code-matched delete would remove the row being
 // KEPT along with the one being removed. This targets a single row only.
+// Records a full snapshot of a student BEFORE they're removed, so a
+// disappearance is never a mystery again. A student was found gone with
+// no idea when or how — the local merge logic deliberately preserves
+// local-only students rather than dropping them, so a removal happening
+// without a trace almost certainly originates cloud-side, where this
+// client has no visibility at all. This log is the client's own record:
+// who, when, by what route, and the complete record itself, which is
+// enough to restore the student outright rather than reconstructing them
+// from whatever lessons happen to survive.
+// Stored in db (so it persists and syncs) rather than being a console
+// message that scrolls away unseen, and capped so it can't grow forever.
+function logStudentDeletion(student, reason){
+  if(!student) return;
+  db.deletionLog=db.deletionLog||[];
+  db.deletionLog.unshift({
+    at:new Date().toISOString(),
+    reason:reason||'unspecified',
+    studentId:student.id,
+    name:student.name||'',
+    studentCode:student.student_code||'',
+    teacher:student.teacher||'',
+    instrument:student.instrument||'',
+    plan:student.plan||'',
+    // The whole record, so a restore is exact rather than approximate.
+    snapshot:JSON.parse(JSON.stringify(student))
+  });
+  // Keep the log bounded; the most recent entries are the useful ones.
+  if(db.deletionLog.length>200) db.deletionLog.length=200;
+  console.warn('Student removed: '+(student.name||'?')+' (id '+student.id+') — reason: '+(reason||'unspecified')+'. Recoverable via Database → Deletion Log.');
+}
+
+// Archives every non-archived lesson dated before a cutoff, giving a
+// clean launch point without destroying anything. Archiving (not
+// deleting) was chosen deliberately: archived lessons are already
+// excluded everywhere that matters — makeup counts, dashboards,
+// attendance, payroll — so the effect is exactly the "fresh start" a
+// hard delete would give, except the data survives. That matters here
+// because old lessons are the ONLY remaining trace of some students
+// (Rebuild Deleted Students reconstructs records from them), and they
+// underpin past months' revenue and payroll history. A hard delete is a
+// one-way door that would take all of that with it.
+function findLessonsBeforeCutoff(cutoffDate){
+  if(!cutoffDate) return [];
+  return (db.lessons||[]).filter(l=>
+    (l.status_record||'active')!=='archived' &&
+    String(l.date||'')<cutoffDate
+  ).sort((a,b)=>String(a.date||'').localeCompare(String(b.date||'')));
+}
+
+function previewArchiveOldLessons(){
+  const el=document.getElementById('archive-old-results');
+  if(!el) return;
+  const cutoff=dmyToIso(document.getElementById('archive-old-cutoff')?.value||'');
+  if(!cutoff){ el.innerHTML='<div style="color:var(--text-muted)">Pick a cutoff date first.</div>'; return; }
+  const rows=findLessonsBeforeCutoff(cutoff);
+  const alreadyArchived=(db.lessons||[]).filter(l=>(l.status_record||'active')==='archived' && String(l.date||'')<cutoff).length;
+  if(!rows.length){
+    el.innerHTML='<div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px;color:#a8e8a8">✅ No active lessons before '+escapeHtml(formatLedgerDate(cutoff))+'.'
+      +(alreadyArchived?' ('+alreadyArchived+' already archived — use Restore below to bring them back.)':'')+'</div>';
+    return;
+  }
+  const byMonth={};
+  rows.forEach(l=>{ const k=String(l.date||'').slice(0,7); byMonth[k]=(byMonth[k]||0)+1; });
+  el.innerHTML='<div style="background:#3a3520;border:1px solid #6a5a2a;border-radius:6px;padding:12px;margin-bottom:10px">'
+    +'<div style="font-weight:700;color:#e2c47a;margin-bottom:6px">'+rows.length+' lesson(s) before '+escapeHtml(formatLedgerDate(cutoff))+'</div>'
+    +'<div style="font-size:13px;color:#c8d8e8;line-height:1.7">'
+    + Object.keys(byMonth).sort().map(k=>escapeHtml(k)+': '+byMonth[k]+' lesson(s)').join('<br>')
+    +'</div>'
+    +'<div style="font-size:13px;color:#c8d8e8;line-height:1.6;margin-top:8px">These get archived, not deleted — they disappear from dashboards, make-up counts and attendance exactly as a delete would, but every record survives and the Restore button below brings them all back.</div></div>'
+    +'<button class="btn btn-gold" onclick="applyArchiveOldLessons()">Archive these '+rows.length+' lesson(s)</button>';
+}
+
+function applyArchiveOldLessons(){
+  const cutoff=dmyToIso(document.getElementById('archive-old-cutoff')?.value||'');
+  const rows=findLessonsBeforeCutoff(cutoff);
+  if(!rows.length){ showToast('Nothing to archive.'); return; }
+  if(!confirm('Archive '+rows.length+' lesson(s) before '+formatLedgerDate(cutoff)+'?\n\nNothing is deleted — they are hidden from dashboards and calculations, and can be restored at any time from this same panel.')) return;
+  rows.forEach(function(l){
+    l.status_record='archived';
+    l.archivedByCutoff=cutoff; // marks THIS batch, so Restore only undoes what this tool did
+    if(typeof syncLessonUpdateToSupabase==='function'){ try{ syncLessonUpdateToSupabase(l); }catch(_){} }
+  });
+  save();
+  if(typeof renderLessons==='function') renderLessons();
+  if(typeof renderReports==='function') renderReports();
+  if(typeof renderOverview==='function') renderOverview();
+  showToast(rows.length+' lesson(s) archived ✓');
+  previewArchiveOldLessons();
+}
+
+// Restores ONLY lessons this tool archived (archivedByCutoff is set), so a
+// lesson archived for some other legitimate reason — alongside an archived
+// student, say — is never wrongly resurrected.
+function restoreArchivedByCutoff(){
+  const rows=(db.lessons||[]).filter(l=>l.archivedByCutoff);
+  if(!rows.length){ showToast('No cutoff-archived lessons to restore.'); return; }
+  if(!confirm('Restore '+rows.length+' lesson(s) that were archived by the cutoff tool?\n\nThey will reappear in dashboards and calculations exactly as before.')) return;
+  rows.forEach(function(l){
+    l.status_record='active';
+    delete l.archivedByCutoff;
+    if(typeof syncLessonUpdateToSupabase==='function'){ try{ syncLessonUpdateToSupabase(l); }catch(_){} }
+  });
+  save();
+  if(typeof renderLessons==='function') renderLessons();
+  if(typeof renderReports==='function') renderReports();
+  if(typeof renderOverview==='function') renderOverview();
+  showToast(rows.length+' lesson(s) restored ✓');
+  previewArchiveOldLessons();
+}
+
+function renderDeletionLog(){
+  const el=document.getElementById('deletion-log-results');
+  if(!el) return;
+  const log=db.deletionLog||[];
+  if(!log.length){
+    el.innerHTML='<div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px;color:#a8e8a8">✅ No student deletions recorded on this device.</div>';
+    return;
+  }
+  el.innerHTML='<div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px;max-height:340px;overflow-y:auto">'
+    + log.map(function(entry, i){
+        const stillPresent=(db.students||[]).some(function(s){ return String(s.id)===String(entry.studentId) || (entry.studentCode && s.student_code===entry.studentCode); });
+        return '<div style="padding:8px 0;border-bottom:1px solid #2c5a2c">'
+          +'<div style="font-weight:700;color:#e2c47a">'+escapeHtml(entry.name||'?')+' <span style="font-weight:400;color:var(--text-muted)">'+escapeHtml(entry.instrument||'?')+' · '+escapeHtml(entry.teacher||'?')+'</span></div>'
+          +'<div style="font-size:12px;color:#c8d8e8">Removed '+escapeHtml(new Date(entry.at).toLocaleString())+' — '+escapeHtml(entry.reason)+'</div>'
+          +(stillPresent
+            ? '<div style="font-size:12px;color:#a8e8a8;margin-top:4px">✓ Currently present in the roster</div>'
+            : '<button class="btn btn-sm btn-gold" style="margin-top:6px" onclick="restoreDeletedStudent('+i+')">Restore this student</button>')
+          +'</div>';
+      }).join('')
+    +'</div>';
+}
+
+function restoreDeletedStudent(index){
+  const entry=(db.deletionLog||[])[index];
+  if(!entry || !entry.snapshot){ showToast('That log entry has no restorable snapshot.'); return; }
+  if((db.students||[]).some(s=>String(s.id)===String(entry.studentId))){
+    showToast((entry.name||'That student')+' is already in the roster.');
+    renderDeletionLog();
+    return;
+  }
+  if(!confirm('Restore '+(entry.name||'this student')+'?\n\nTheir record is put back exactly as it was when removed. Their lessons are NOT recreated — use Rebuild Deleted Students or re-add sessions if needed.')) return;
+  const restored=JSON.parse(JSON.stringify(entry.snapshot));
+  restored._localModifiedAt=Date.now();
+  db.students=db.students||[];
+  db.students.push(restored);
+  save();
+  if(typeof addStudentToSupabase==='function'){ try{ addStudentToSupabase(restored); }catch(_){} }
+  if(typeof renderStudents==='function') renderStudents();
+  renderDeletionLog();
+  showToast((entry.name||'Student')+' restored ✓');
+}
+
 async function deleteStudentCloudRowById(cloudId){
   try{
     if(!window.supabaseClientV1 || cloudId==null) return;
@@ -6589,6 +6772,7 @@ function applyDuplicateCodeRepair(){
           }
         });
       });
+      if(typeof logStudentDeletion==='function') logStudentDeletion(dup, 'merged into duplicate keeper "'+(keeper.name||'')+'" (id '+keeper.id+')');
       db.students=(db.students||[]).filter(s=>s!==dup);
       mergedCount++;
       // Remove the duplicate's own row from Supabase — by id, never by
@@ -8659,6 +8843,22 @@ async function _autoLoadFromCloudImpl(){
        seen.add(k);
        merged.push(ls);
        pendingReupload.push(ls);
+       // A student that exists locally but NOT in the cloud is either
+       // brand-new (not uploaded yet) or was deleted cloud-side by
+       // something outside this client's view — a Supabase-side delete,
+       // another device, or a repair tool run elsewhere. The merge above
+       // deliberately keeps them (never silently drops a local student),
+       // and the re-upload below restores them to the cloud. But a
+       // student who was ALREADY established here (has a real cloud-style
+       // id and lesson history) going missing from the cloud is worth
+       // recording rather than silently healing: it's the only trace of
+       // an event this client didn't cause and can't otherwise explain.
+       const wasEstablished = ls.id!=null && (db.lessons||[]).some(l=>String(l.studentId)===String(ls.id));
+       if(wasEstablished && typeof logStudentDeletion==='function'){
+         db.deletionLog=db.deletionLog||[];
+         const alreadyLogged=db.deletionLog.some(e=>String(e.studentId)===String(ls.id) && e.reason.indexOf('vanished from cloud')===0);
+         if(!alreadyLogged) logStudentDeletion(ls, 'vanished from cloud (restored automatically from this device)');
+       }
      });
      db.students=merged;
      // Push any locally-won recent changes up so the cloud converges, and
@@ -15622,7 +15822,7 @@ function renderCalendarPage(){
       }
       if(booked.length>0){
         const l=booked[0];
-        const matchedStudent=(db.students||[]).find(s=>String(s.id)===String(l.studentId) || s.name===l.student);
+        const matchedStudent=(db.students||[]).find(s=>lessonBelongsToStudent(l, s)); // id-authoritative; see renderLessons for the linked-course reasoning
         // A lesson keeps its OWN stored name/status regardless of what
         // happens to the student record later — so it renders identically
         // whether the student is a normal active student, was archived, or
@@ -18510,7 +18710,7 @@ function generateTeacherSchedulePhoto(teacherName, dayName, silent){
     const key=l.time+'|'+l.student;
     if(alreadyShown.has(key)) return;
     recoveredAny=true;
-    const matchedStudent=(db.students||[]).find(s=>String(s.id)===String(l.studentId) || s.name===l.student);
+    const matchedStudent=(db.students||[]).find(s=>lessonBelongsToStudent(l, s)); // id-authoritative; see renderLessons for the linked-course reasoning
     const dur=getLessonDurationMinutes(l);
     allSlotInfo.push({
       time:l.time,
