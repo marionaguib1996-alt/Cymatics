@@ -414,7 +414,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-196</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-197</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1184,6 +1184,15 @@ input::placeholder{color:var(--text-dim)}
     <button class="btn" onclick="previewDuplicateLessonRepair()">🔍 Preview (changes nothing)</button>
     <small style="display:block;margin-top:8px;color:var(--text-muted)">The same student billed or logged twice on one date. Identical duplicates and a leftover "Scheduled" placeholder superseded by a real recorded outcome are merged automatically. Two DIFFERENT real outcomes on the same day (e.g. Excused vs. Attended) are a genuine conflict only you can resolve — you'll get a picker for each. This also clears up several of the "ambiguous" cases in the tool above, since some of that ambiguity was caused by these duplicates in the first place.</small>
     <div id="duplesson-results" style="margin-top:14px"></div>
+
+    <div style="border-top:1px solid var(--border);margin:20px 0 16px;"></div>
+    <div class="card-title" style="margin-bottom:10px">Bulk Resolve Old Make-ups</div>
+    <small style="display:block;margin-bottom:8px;color:var(--text-muted)">Clears a backlog of stale owed make-ups dated before a chosen date, without reviewing each one individually. Uses the exact same "Already Made Up" resolution as the Details button on the Makeup Dashboard — the lesson, its attendance record, and payroll are untouched; only the owed status clears. Nothing is ever deleted.</small>
+    <div style="display:flex;gap:4px;align-items:flex-end;flex-wrap:wrap">
+      <div class="form-field" style="max-width:180px"><label for="bulk-makeup-cutoff">Resolve everything before</label><input id="bulk-makeup-cutoff" type="text" placeholder="dd/mm/yyyy"></div>
+      <button class="btn" onclick="previewBulkResolveOldMakeups()">🔍 Preview (changes nothing)</button>
+    </div>
+    <div id="bulk-makeup-results" style="margin-top:14px"></div>
   </div>
 </div>
 
@@ -15927,6 +15936,65 @@ function isMakeupOwed(lesson){
   // Teacher-side absences always owe a makeup.
   const owingStatuses=['teacher_absent','absent_excused'];
   return owingStatuses.includes(lesson.status);
+}
+
+// Finds every currently-owed, unbooked makeup dated strictly before a
+// chosen cutoff — for clearing a backlog of stale entries in bulk (e.g.
+// "everything from before September") without reviewing each one by hand,
+// and critically, WITHOUT deleting anything. Uses the exact same
+// resolution as the per-student "Already Made Up" option: the lesson
+// record itself, its attendance history, and its payroll history are
+// left completely untouched — only makeupResolved is set, which is what
+// makes it stop counting as owed. If any of these were never genuinely
+// missed at all (a stale duplicate from historical data cleanup, for
+// instance), the record survives regardless — it simply stops being
+// treated as a debt still open.
+function findOldOwedMakeups(cutoffDate){
+  if(!cutoffDate) return [];
+  return (db.lessons||[]).filter(l=>
+    (l.status_record||'active')!=='archived' &&
+    isMakeupOwed(l) &&
+    !findMakeupLessonFor(l.id) &&
+    String(l.date||'')<cutoffDate
+  ).sort((a,b)=>String(a.date||'').localeCompare(String(b.date||'')));
+}
+
+function previewBulkResolveOldMakeups(){
+  const el=document.getElementById('bulk-makeup-results');
+  if(!el) return;
+  const cutoff=dmyToIso(document.getElementById('bulk-makeup-cutoff')?.value||'');
+  if(!cutoff){ el.innerHTML='<div style="color:var(--text-muted)">Pick a cutoff date first.</div>'; return; }
+  const rows=findOldOwedMakeups(cutoff);
+  if(!rows.length){
+    el.innerHTML='<div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px;color:#a8e8a8">✅ No unresolved make-ups dated before '+escapeHtml(formatLedgerDate(cutoff))+'.</div>';
+    return;
+  }
+  el.innerHTML='<div style="background:#3a3520;border:1px solid #6a5a2a;border-radius:6px;padding:12px;margin-bottom:10px">'
+    +'<div style="font-weight:700;color:#e2c47a;margin-bottom:6px">'+rows.length+' unresolved make-up(s) before '+escapeHtml(formatLedgerDate(cutoff))+'</div>'
+    +'<div style="font-size:13px;color:#c8d8e8;line-height:1.6">Marking these resolved clears the owed status only — the lesson record, attendance history and payroll are untouched. Nothing is deleted. If any of these were never genuinely missed (a leftover from earlier data cleanup, say), the underlying record is unaffected either way.</div></div>'
+    +'<div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px;max-height:280px;overflow-y:auto">'
+    +'<div style="font-size:13px;color:#c8d8e8;line-height:1.8">'
+    + rows.map(function(l){
+        const s=(db.students||[]).find(function(st){ return lessonBelongsToStudent(l, st); });
+        return escapeHtml((s?s.name:l.student)||'?')+' — '+escapeHtml(formatLedgerDate(l.date))+' ('+escapeHtml(STATUS_LABELS[l.status]||l.status)+')';
+      }).join('<br>')
+    +'</div></div>'
+    +'<button class="btn btn-gold" style="margin-top:12px" onclick="applyBulkResolveOldMakeups()">Mark these '+rows.length+' as made up</button>';
+}
+
+function applyBulkResolveOldMakeups(){
+  const cutoff=dmyToIso(document.getElementById('bulk-makeup-cutoff')?.value||'');
+  const rows=findOldOwedMakeups(cutoff);
+  if(!rows.length){ showToast('Nothing to resolve.'); return; }
+  if(!confirm('Mark '+rows.length+' make-up(s) before '+formatLedgerDate(cutoff)+' as already made up?\n\nThis only clears the owed status — no lesson is deleted, and attendance/payroll history is untouched.')) return;
+  rows.forEach(function(l){
+    l.makeupResolved=true;
+    if(typeof syncLessonUpdateToSupabase==='function'){ try{ syncLessonUpdateToSupabase(l); }catch(_){} }
+  });
+  save();
+  if(typeof renderReports==='function') renderReports();
+  showToast(rows.length+' make-up(s) marked as made up ✓');
+  previewBulkResolveOldMakeups();
 }
 
 // Reverse lookup: does any active lesson point back to this missed lesson as its makeup?
