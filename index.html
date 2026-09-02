@@ -414,7 +414,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-197</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-198</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -5648,6 +5648,20 @@ function renderReports(){
    // to schedule, so they drop off the dashboard entirely.
    let rows=db.students.filter(s=>(s.status||'active')!=='archived').map(s=>{
       let owedLessons=db.lessons.filter(l=>lessonBelongsToStudent(l, s) && isMakeupOwed(l) && (l.status_record||'active')!=='archived');
+      // A lesson dated before the student's own registration date is
+      // mathematically impossible — they didn't exist here yet. This is
+      // what actually caught the case a brand-new student (registered
+      // days ago) was shown an owed make-up from over a month earlier,
+      // for an instrument they don't even take: their new student id
+      // happened to match an old, unrelated lesson's studentId — almost
+      // certainly id reuse from the historical data-recovery work this
+      // whole database has been through. Only applied when joined_date is
+      // actually set, so a student without one (never recorded, or an
+      // older record from before this field was tracked) is never
+      // wrongly excluded for lack of information.
+      if(s.joined_date){
+        owedLessons=owedLessons.filter(l=>!(l.date && l.date<s.joined_date));
+      }
       // A student who takes more than one instrument can exist as several
       // records (Vocals with one teacher, Guitar with another). Matching a
       // make-up to a record by NAME alone would count every make-up in
@@ -6922,6 +6936,28 @@ async function runDataHealthCheck(){
   if(orphanTeacherStudents.length) issues.push({
     title:'Students assigned to a teacher that no longer exists',
     items:orphanTeacherStudents.map(s=>`${s.name} → "${s.teacher}"`)
+  });
+
+  // 1b. Lessons dated before the student they're linked to even registered
+  // — mathematically impossible for a genuine record, and the strongest
+  // available signal of a reused/misassigned student id (exactly what
+  // caused a brand-new student to show someone else's month-old absence
+  // for an instrument they don't take). The Makeup Dashboard already
+  // excludes these from owed counts on its own; this is purely visibility
+  // into how many such cases exist, and where, so the underlying id-reuse
+  // can be investigated rather than just quietly worked around everywhere
+  // it happens to surface.
+  const impossibleDateLessons=(db.lessons||[]).filter(l=>{
+    if((l.status_record||'active')==='archived' || !l.date) return false;
+    const s=(db.students||[]).find(st=>lessonBelongsToStudent(l, st));
+    return s && s.joined_date && l.date<s.joined_date;
+  });
+  if(impossibleDateLessons.length) issues.push({
+    title:'Lessons dated before the linked student registered — likely a reused/misassigned student id',
+    items:impossibleDateLessons.slice(0,20).map(l=>{
+      const s=(db.students||[]).find(st=>lessonBelongsToStudent(l, st));
+      return `${s?s.name:l.student} — lesson dated ${l.date}, registered ${s?s.joined_date:'?'} (${l.instrument||'?'} · ${l.teacher||'?'})`;
+    }).concat(impossibleDateLessons.length>20 ? [`…and ${impossibleDateLessons.length-20} more`] : [])
   });
 
   // 2. Students with an unrecognized plan — a Discount percentage can't
