@@ -414,7 +414,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-199</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-200</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -9564,6 +9564,30 @@ async function _addStudentToSupabaseImpl(student){
           return;
         }
         student.id=newId;
+        // A genuinely brand-new student has zero lesson history at the
+        // moment their record is first created — lessons get scheduled in
+        // a separate step, after this. So ANY lesson already sitting at
+        // the newly-assigned Supabase id (other than the student's own
+        // just-created items, still keyed to the temporary oldId below)
+        // can only mean that id previously belonged to someone else whose
+        // lesson records were never cleaned up — exactly what caused a
+        // brand-new student to inherit a stranger's month-old absence.
+        // This is the one moment that reuse is cheap and certain to
+        // detect; by the time it surfaces on the Makeup Dashboard it's
+        // already been sitting there unnoticed for however long.
+        const inheritedLessons=(db.lessons||[]).filter(l=>
+          String(l.studentId)===String(newId) && String(l.studentId)!==String(oldId) &&
+          (l.status_record||'active')!=='archived'
+        );
+        if(inheritedLessons.length){
+          console.warn((student.name||'A new student')+' was assigned id '+newId+
+            ', which already has '+inheritedLessons.length+' pre-existing lesson record(s) attached — '+
+            'almost certainly a reused id from a student whose records were never cleaned up. '+
+            'Check Database → Resolve Misassigned Make-ups, and Health Check for the full picture.');
+          if(typeof showToast==='function'){
+            showToast('⚠ '+(student.name||'New student')+'\'s id already has old lesson history attached — see console and Database tab.');
+          }
+        }
         // Anything already keyed to the TEMPORARY id must be re-pointed,
         // or it's silently orphaned the moment the real id arrives:
         //   * payments  — a trial marked paid on creation would show as
