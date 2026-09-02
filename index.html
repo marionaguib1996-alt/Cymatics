@@ -414,7 +414,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-201</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-204</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1215,6 +1215,13 @@ input::placeholder{color:var(--text-dim)}
       <button class="btn" onclick="restoreArchivedByCutoff()">↩️ Restore archived batch</button>
     </div>
     <div id="archive-old-results" style="margin-top:14px"></div>
+
+    <div style="border-top:1px solid var(--border);margin:20px 0 16px;"></div>
+    <div class="card-title" style="margin-bottom:10px">Compare Backup to Live Data</div>
+    <small style="display:block;margin-bottom:8px;color:var(--text-muted)">Load a backup JSON to see exactly what's missing from the current data — students, lessons, and any records still pointing at students who no longer exist. Read-only: this changes nothing, it only reports. The Deletion Log can only record removals made from this app, so a cloud-side delete leaves no trace there; comparing against a backup taken before the loss is the way to see those.</small>
+    <button class="btn" onclick="document.getElementById('backup-compare-file').click()">📂 Choose backup file to compare</button>
+    <input type="file" id="backup-compare-file" accept=".json" style="display:none" onchange="compareBackupToLive(event)">
+    <div id="backup-compare-results" style="margin-top:14px"></div>
   </div>
 </div>
 
@@ -3113,12 +3120,47 @@ function togglePayment(id){
   `);
 }
 
+// Records (or clears) the snapshot of what a payment was actually worth
+// at the moment it was taken, plus who paid it. Shared by every place
+// that marks a month paid, so historical revenue is a stored fact rather
+// than something re-derived later from a student's current plan — which
+// silently rewrote past months whenever a plan or discount changed, and
+// erased the money entirely if the student was ever deleted.
+function recordPaymentSnapshot(studentId, monthKey, isPaid){
+  const key=studentId+'_'+monthKey;
+  db.paymentAmounts=db.paymentAmounts||{};
+  db.paymentStudentNames=db.paymentStudentNames||{};
+  if(!isPaid){
+    delete db.paymentAmounts[key];
+    delete db.paymentStudentNames[key];
+    if(typeof syncPaymentAmountToSupabase==='function'){
+      try{ syncPaymentAmountToSupabase(key, null, null); }catch(_){}
+    }
+    return;
+  }
+  const s=(db.students||[]).find(st=>String(st.id)===String(studentId));
+  db.paymentAmounts[key]=(typeof getStudentPlanAmount==='function' && s) ? getStudentPlanAmount(s) : 0;
+  if(s) db.paymentStudentNames[key]=s.name||'';
+  if(typeof syncPaymentAmountToSupabase==='function'){
+    try{ syncPaymentAmountToSupabase(key, db.paymentAmounts[key], db.paymentStudentNames[key]); }catch(_){}
+  }
+}
+
 function confirmMarkPaid(id, method){
   const month=currentMonth();
   const key=id+'_'+month;
   db.payments[key]=true;
   db.paymentMethods=db.paymentMethods||{};
   db.paymentMethods[key]=method;
+  // Record WHAT WAS ACTUALLY CHARGED, at the moment it was charged.
+  // Revenue history previously re-derived every past month's figure from
+  // the student's CURRENT plan and discount, so July's revenue silently
+  // changed whenever a plan or discount changed later — and dropped to
+  // zero entirely if the student was ever deleted, even though the
+  // payment record itself survived. A collected amount is a historical
+  // fact; it must not move because something about the student changed
+  // afterward.
+  recordPaymentSnapshot(id, month, true);
   save(); closeModal(); renderStudents(); renderOverview();
   syncPaymentToggleToSupabase(id, month, true, method);
 }
@@ -5568,9 +5610,35 @@ function removeStudentPermanently(id){
   if(!s) return;
   if(!confirm('Permanently delete '+(s.name||'this student')+'? This cannot be undone -- their record, lessons, and lesson logs will all be removed for good, including from Supabase if connected. Consider Archive instead if you might need this data later.')) return;
   const lessonIds=new Set((db.lessons||[]).filter(l=>String(l.studentId)===String(id)).map(l=>l.id));
+  // Snapshot the DEPENDENT data before destroying it, not just the
+  // student record. Logging only the student made a "recovery" that
+  // restored a name with no history behind it — the lessons, attendance
+  // and logs (the part that actually takes work to rebuild) were already
+  // gone by then. Captured here, while they still exist.
+  const doomedLessons=(db.lessons||[]).filter(l=>String(l.studentId)===String(id));
+  const doomedLogs=(db.lessonLogs||[]).filter(log=>lessonIds.has(log.lessonId) || String(log.studentId)===String(s.public_id||s.id));
+  const doomedPayments={};
+  Object.keys(db.payments||{}).forEach(k=>{
+    const idx=k.indexOf('_');
+    if(idx>0 && k.slice(0,idx)===String(id)) doomedPayments[k]=db.payments[k];
+  });
   db.lessons=(db.lessons||[]).filter(l=>String(l.studentId)!==String(id));
   db.lessonLogs=(db.lessonLogs||[]).filter(log=>!lessonIds.has(log.lessonId) && String(log.studentId)!==String(s.public_id||s.id));
-  if(typeof logStudentDeletion==='function') logStudentDeletion(s, 'manual permanent delete');
+  if(typeof logStudentDeletion==='function'){
+    logStudentDeletion(s, 'manual permanent delete');
+    // Attach the dependent data to the entry just created.
+    if(db.deletionLog && db.deletionLog[0]){
+      db.deletionLog[0].lessons=JSON.parse(JSON.stringify(doomedLessons));
+      db.deletionLog[0].lessonLogs=JSON.parse(JSON.stringify(doomedLogs));
+      db.deletionLog[0].payments=JSON.parse(JSON.stringify(doomedPayments));
+      // The dependent data is attached after logStudentDeletion already
+      // pushed the bare entry — re-sync so the cloud copy carries the
+      // lessons/logs/payments too, not just the student record.
+      if(typeof syncDeletionLogEntryToSupabase==='function'){
+        try{ syncDeletionLogEntryToSupabase(db.deletionLog[0]); }catch(_){}
+      }
+    }
+  }
   db.students=db.students.filter(x=>x.id!==id);
   save();
   renderStudents();
@@ -5927,6 +5995,109 @@ function exportBackup(){
  if(typeof updateBackupReminderBanner==='function') updateBackupReminderBanner();
 }
 
+// Compares a backup JSON against the CURRENT live data and reports what
+// disappeared — read-only, changes nothing. Built after several students
+// went missing without appearing in the deletion log (which only records
+// removals this client performed; a cloud-side delete leaves no local
+// trace at all, which is exactly why it needed a way to be seen).
+//
+// A backup taken before the loss contains the ground truth, so diffing
+// the two answers "who is gone, and what did they have" precisely,
+// rather than inferring it from whatever orphaned fragments survive.
+// Also surfaces lessons/payments still present for students who no
+// longer exist — the fingerprint of a student record deleted while its
+// dependent data was left behind.
+function compareBackupToLive(event){
+  const file=event.target.files[0];
+  if(!file) return;
+  const el=document.getElementById('backup-compare-results');
+  const reader=new FileReader();
+  reader.onload=function(e){
+    let backup;
+    try{ backup=JSON.parse(e.target.result); }
+    catch(err){ if(el) el.innerHTML='<div style="color:var(--danger,#e06c6c)">Could not read that file as JSON.</div>'; return; }
+    if(!backup || !Array.isArray(backup.students)){
+      if(el) el.innerHTML='<div style="color:var(--danger,#e06c6c)">That file does not look like a Cymatics backup (no students array).</div>';
+      return;
+    }
+
+    const liveById=new Map((db.students||[]).map(s=>[String(s.id), s]));
+    const liveByCode=new Map((db.students||[]).filter(s=>s.student_code).map(s=>[String(s.student_code), s]));
+    const liveByName=new Map((db.students||[]).map(s=>[normalizeStudentNameForMatch(s.name), s]));
+
+    // A student counts as missing only if NONE of id, student_code or
+    // name finds them live — an id can legitimately change (the temp-id
+    // reconciliation on first upload does exactly that), so matching on
+    // id alone would report false losses.
+    const missing=backup.students.filter(bs=>{
+      if(liveById.has(String(bs.id))) return false;
+      if(bs.student_code && liveByCode.has(String(bs.student_code))) return false;
+      if(liveByName.has(normalizeStudentNameForMatch(bs.name))) return false;
+      return true;
+    });
+
+    const backupLessons=Array.isArray(backup.lessons)?backup.lessons:[];
+    const liveLessonIds=new Set((db.lessons||[]).map(l=>String(l.id)));
+    const missingLessons=backupLessons.filter(bl=>!liveLessonIds.has(String(bl.id)));
+
+    // Live data still referencing a student who no longer exists.
+    const orphanLiveLessons=(db.lessons||[]).filter(l=>
+      l.studentId!=null && !(db.students||[]).some(s=>lessonBelongsToStudent(l, s))
+    );
+    const orphanPaymentKeys=Object.keys(db.payments||{}).filter(k=>{
+      const idPart=k.indexOf('_')>0 ? k.slice(0, k.indexOf('_')) : k;
+      return !(db.students||[]).some(s=>String(s.id)===idPart);
+    });
+
+    const backupDate=backup._backupTakenAt || 'unknown';
+    let html='<div style="background:#1e2a3a;border:1px solid #2c4a6a;border-radius:6px;padding:12px;margin-bottom:10px">'
+      +'<div style="font-weight:700;color:#8ab4e8;margin-bottom:6px">Backup vs. live comparison</div>'
+      +'<div style="font-size:13px;color:#c8d8e8;line-height:1.7">'
+      +'Backup: '+backup.students.length+' students, '+backupLessons.length+' lessons<br>'
+      +'Live now: '+((db.students||[]).length)+' students, '+((db.lessons||[]).length)+' lessons'
+      +'</div></div>';
+
+    if(missing.length){
+      html+='<div style="background:#3a2020;border:1px solid #6a2a2a;border-radius:6px;padding:12px;margin-bottom:10px">'
+        +'<div style="font-weight:700;color:#f0a0a0;margin-bottom:6px">⚠️ '+missing.length+' student(s) in the backup are GONE from live data</div>'
+        +'<div style="max-height:260px;overflow-y:auto;font-size:13px;color:#c8d8e8;line-height:1.8">'
+        + missing.map(function(bs){
+            const theirLessons=backupLessons.filter(function(bl){ return String(bl.studentId)===String(bs.id); });
+            const lastSeen=theirLessons.map(function(bl){ return bl.date||''; }).sort().slice(-1)[0]||'—';
+            return escapeHtml(bs.name||'?')+' <span style="color:var(--text-muted)">('+escapeHtml(bs.instrument||'?')+' · '+escapeHtml(bs.teacher||'?')
+              +' · code '+escapeHtml(bs.student_code||'—')+') — '+theirLessons.length+' lesson(s) in backup, last '+escapeHtml(lastSeen)+'</span>';
+          }).join('<br>')
+        +'</div></div>';
+    } else {
+      html+='<div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px;margin-bottom:10px;color:#a8e8a8">✅ Every student in the backup is still present live.</div>';
+    }
+
+    if(missingLessons.length){
+      const byStudent={};
+      missingLessons.forEach(function(bl){ const n=bl.student||'?'; byStudent[n]=(byStudent[n]||0)+1; });
+      html+='<div style="background:#3a3520;border:1px solid #6a5a2a;border-radius:6px;padding:12px;margin-bottom:10px">'
+        +'<div style="font-weight:700;color:#e2c47a;margin-bottom:6px">'+missingLessons.length+' lesson(s) in the backup are gone from live data</div>'
+        +'<div style="max-height:200px;overflow-y:auto;font-size:13px;color:#c8d8e8;line-height:1.8">'
+        + Object.keys(byStudent).sort().map(function(n){ return escapeHtml(n)+': '+byStudent[n]; }).join('<br>')
+        +'</div></div>';
+    }
+
+    if(orphanLiveLessons.length || orphanPaymentKeys.length){
+      html+='<div style="background:#3a3520;border:1px solid #6a5a2a;border-radius:6px;padding:12px">'
+        +'<div style="font-weight:700;color:#e2c47a;margin-bottom:6px">Live data still pointing at students who no longer exist</div>'
+        +'<div style="font-size:13px;color:#c8d8e8;line-height:1.7">'
+        + orphanLiveLessons.length+' orphaned lesson(s)<br>'
+        + orphanPaymentKeys.length+' orphaned payment record(s)'
+        +'</div>'
+        +'<div style="font-size:12px;color:var(--text-muted);margin-top:6px">This is the fingerprint of a student record being removed while its data was left behind — the shape a cloud-side delete leaves.</div></div>';
+    }
+
+    if(el) el.innerHTML=html;
+    event.target.value='';
+  };
+  reader.readAsText(file);
+}
+
 function restoreBackup(event){
  const file=event.target.files[0];
  if(!file) return;
@@ -6061,6 +6232,12 @@ function logStudentDeletion(student, reason){
   });
   // Keep the log bounded; the most recent entries are the useful ones.
   if(db.deletionLog.length>200) db.deletionLog.length=200;
+  // Push to the cloud so the record — and its restore snapshot — exists
+  // beyond this one browser. Deliberately fired here rather than only at
+  // the call sites, so every route into this function is covered.
+  if(typeof syncDeletionLogEntryToSupabase==='function'){
+    try{ syncDeletionLogEntryToSupabase(db.deletionLog[0]); }catch(_){}
+  }
   console.warn('Student removed: '+(student.name||'?')+' (id '+student.id+') — reason: '+(reason||'unspecified')+'. Recoverable via Database → Deletion Log.');
 }
 
@@ -6178,11 +6355,43 @@ function restoreDeletedStudent(index){
   restored._localModifiedAt=Date.now();
   db.students=db.students||[];
   db.students.push(restored);
+  // Bring back their history too, where it was captured — a restore that
+  // returns only the name leaves the real work (rebuilding every lesson
+  // and attendance record) still undone.
+  let restoredLessons=0, restoredLogs=0, restoredPayments=0;
+  if(Array.isArray(entry.lessons)){
+    db.lessons=db.lessons||[];
+    entry.lessons.forEach(function(l){
+      if(!db.lessons.some(function(x){ return String(x.id)===String(l.id); })){
+        db.lessons.push(JSON.parse(JSON.stringify(l)));
+        restoredLessons++;
+        if(typeof syncLessonToSupabase==='function'){ try{ syncLessonToSupabase(l); }catch(_){} }
+      }
+    });
+  }
+  if(Array.isArray(entry.lessonLogs)){
+    db.lessonLogs=db.lessonLogs||[];
+    entry.lessonLogs.forEach(function(lg){
+      if(!db.lessonLogs.some(function(x){ return String(x.id)===String(lg.id); })){
+        db.lessonLogs.push(JSON.parse(JSON.stringify(lg)));
+        restoredLogs++;
+      }
+    });
+  }
+  if(entry.payments && typeof entry.payments==='object'){
+    db.payments=db.payments||{};
+    Object.keys(entry.payments).forEach(function(k){
+      if(db.payments[k]===undefined){ db.payments[k]=entry.payments[k]; restoredPayments++; }
+    });
+  }
   save();
   if(typeof addStudentToSupabase==='function'){ try{ addStudentToSupabase(restored); }catch(_){} }
   if(typeof renderStudents==='function') renderStudents();
   renderDeletionLog();
-  showToast((entry.name||'Student')+' restored ✓');
+  showToast((entry.name||'Student')+' restored ✓'+
+    (restoredLessons||restoredLogs||restoredPayments
+      ? ' — with '+restoredLessons+' lesson(s), '+restoredLogs+' log(s), '+restoredPayments+' payment(s)'
+      : ''));
 }
 
 async function deleteStudentCloudRowById(cloudId){
@@ -9209,6 +9418,54 @@ async function _autoLoadFromCloudImpl(){
        save();
      }
    }catch(remErr){ /* silent — non-critical */ }
+
+   // Deletion log — merged, never replaced. Each device may hold entries
+   // the cloud hasn't seen yet (a deletion made while offline), and the
+   // cloud holds entries from other devices. Losing either direction
+   // would defeat the point: this is the record you consult precisely
+   // when something has gone missing. Keyed by timestamp+studentId so
+   // the same event from two sources collapses to one entry.
+   try{
+     const {data:delRows,error:eDel}=await client.from('deletion_log').select('*');
+     if(eDel){ /* table may not exist yet — silent */ }
+     else if(delRows){
+       db.deletionLog=db.deletionLog||[];
+       const keyOf=e=>String(e.at||'')+'|'+String(e.studentId||'');
+       const have=new Set(db.deletionLog.map(keyOf));
+       delRows.forEach(r=>{
+         const entry={
+           at:r.deleted_at, reason:r.reason||'', studentId:r.student_id,
+           name:r.name||'', studentCode:r.student_code||'', teacher:r.teacher||'',
+           instrument:r.instrument||'', plan:r.plan||'',
+           snapshot:r.snapshot||null, lessons:r.lessons||null,
+           lessonLogs:r.lesson_logs||null, payments:r.payments||null
+         };
+         if(!have.has(keyOf(entry))){ db.deletionLog.push(entry); have.add(keyOf(entry)); }
+       });
+       db.deletionLog.sort((a,b)=>String(b.at||'').localeCompare(String(a.at||'')));
+       if(db.deletionLog.length>200) db.deletionLog.length=200;
+       save();
+     }
+   }catch(delErr){ /* silent — non-critical */ }
+
+   // Payment amount snapshots — what each payment was actually worth when
+   // taken. Without these a second device re-derives historical revenue
+   // from each student's CURRENT plan, which is exactly the bug that made
+   // past months' figures change retroactively.
+   try{
+     const {data:amtRows,error:eAmt}=await client.from('payment_amounts').select('*');
+     if(eAmt){ /* table may not exist yet — silent */ }
+     else if(amtRows){
+       db.paymentAmounts=db.paymentAmounts||{};
+       db.paymentStudentNames=db.paymentStudentNames||{};
+       amtRows.forEach(r=>{
+         if(!r.payment_key) return;
+         db.paymentAmounts[r.payment_key]=r.amount;
+         if(r.student_name) db.paymentStudentNames[r.payment_key]=r.student_name;
+       });
+       save();
+     }
+   }catch(amtErr){ /* silent — non-critical */ }
 
    // Independent for the same reason as resources above — a newer,
    // less critical feature shouldn't be able to fail the main load.
@@ -13884,6 +14141,7 @@ function confirmRenewal(id){
       db.paymentMethods=db.paymentMethods||{};
       if(markPaid) db.paymentMethods[key]=paymentMethod;
       else delete db.paymentMethods[key];
+      if(typeof recordPaymentSnapshot==='function') recordPaymentSnapshot(student.id, m, markPaid);
       if(typeof syncPaymentToggleToSupabase==='function') syncPaymentToggleToSupabase(student.id, m, markPaid, markPaid?paymentMethod:null);
     });
     // Custom Pay is a one-time override for THIS renewal only — clear it
@@ -14084,6 +14342,7 @@ function confirmRenewalCustomDates(id, student){
     db.paymentMethods=db.paymentMethods||{};
     if(markPaid) db.paymentMethods[key]=paymentMethod;
     else delete db.paymentMethods[key];
+    if(typeof recordPaymentSnapshot==='function') recordPaymentSnapshot(student.id, m, markPaid);
     if(typeof syncPaymentToggleToSupabase==='function') syncPaymentToggleToSupabase(student.id, m, markPaid, markPaid?paymentMethod:null);
   });
   if(student.customPay!=null) student.customPay=null;
@@ -17416,6 +17675,57 @@ function toggleWishlistItemDone(student, itemId){
 // Reminder-sent records ("✓ Reminded 3h ago" badges). Without syncing
 // these, a reminder sent on one device leaves no trace on another — so
 // the same student can easily be messaged twice from a different browser.
+// Pushes a deletion-log entry to the cloud. Previously the log lived only
+// in the browser where the deletion happened — so a student removed on the
+// office laptop left no trace, and no restore snapshot, on any other
+// device. That made it unreliable as the recovery net it's meant to be.
+// entry_key is a stable client-side key so re-syncing the same entry
+// updates its row rather than creating duplicates.
+async function syncDeletionLogEntryToSupabase(entry){
+  try{
+    if(!window.supabaseClientV1 || !entry) return;
+    const key=String(entry.at||'')+'|'+String(entry.studentId||'');
+    const payload={
+      entry_key:key,
+      deleted_at:entry.at||new Date().toISOString(),
+      reason:entry.reason||'',
+      student_id:entry.studentId!=null?String(entry.studentId):null,
+      name:entry.name||'',
+      student_code:entry.studentCode||'',
+      teacher:entry.teacher||'',
+      instrument:entry.instrument||'',
+      plan:entry.plan||'',
+      snapshot:entry.snapshot||null,
+      lessons:entry.lessons||null,
+      lesson_logs:entry.lessonLogs||null,
+      payments:entry.payments||null
+    };
+    const {error}=await window.supabaseClientV1.from('deletion_log')
+      .upsert(payload, {onConflict:'entry_key'});
+    if(error) console.warn('Deletion-log sync failed:', error.message);
+  }catch(err){ console.warn('Deletion-log sync failed:', err.message); }
+}
+
+// Pushes the amount a payment was actually worth when it was taken. Without
+// this in the cloud, a second device falls back to re-deriving historical
+// revenue from the student's CURRENT plan — the exact behaviour that made
+// past months' figures silently change whenever a plan or discount did.
+async function syncPaymentAmountToSupabase(paymentKey, amount, studentName){
+  try{
+    if(!window.supabaseClientV1 || !paymentKey) return;
+    if(amount==null){
+      const {error}=await window.supabaseClientV1.from('payment_amounts')
+        .delete().eq('payment_key', String(paymentKey));
+      if(error) console.warn('Payment-amount clear failed:', error.message);
+      return;
+    }
+    const {error}=await window.supabaseClientV1.from('payment_amounts')
+      .upsert({payment_key:String(paymentKey), amount:Number(amount)||0, student_name:studentName||''},
+              {onConflict:'payment_key'});
+    if(error) console.warn('Payment-amount sync failed:', error.message);
+  }catch(err){ console.warn('Payment-amount sync failed:', err.message); }
+}
+
 async function syncReminderSentToSupabase(reminderKey, sentAtIso){
   try{
     if(!window.supabaseClientV1 || !reminderKey) return;
@@ -18975,10 +19285,23 @@ function printTeacherPayrollLessons(teacherName){
 // already covered by the existing Revenue Analytics card).
 function getMonthlyCollectedRevenue(monthKey){
   let collected=0;
-  (db.students||[]).forEach(s=>{
-    const paid=!!db.payments[s.id+'_'+monthKey];
-    if(!paid) return;
-    collected += getStudentPlanAmount(s);
+  const suffix='_'+monthKey;
+  // Iterate the PAYMENT records, not the current student roster — a
+  // payment that was genuinely collected stays collected even if that
+  // student is later deleted, and the old roster-driven version silently
+  // dropped their money from history the moment they were removed.
+  Object.keys(db.payments||{}).forEach(key=>{
+    if(!db.payments[key]) return;
+    if(key.slice(-suffix.length)!==suffix) return;
+    const id=key.slice(0, key.length-suffix.length);
+    // Prefer the amount snapshotted AT PAYMENT TIME. Falling back to a
+    // live recalculation is only for records predating that snapshot;
+    // it's the same re-derivation that made history unstable, so it's a
+    // last resort rather than the default.
+    const snapshot=(db.paymentAmounts||{})[key];
+    if(snapshot!=null){ collected += Number(snapshot)||0; return; }
+    const s=(db.students||[]).find(st=>String(st.id)===String(id));
+    if(s) collected += getStudentPlanAmount(s);
   });
   return collected;
 }
