@@ -414,7 +414,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-195</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-196</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -2209,6 +2209,30 @@ sel.value=(MONTHS.find(m=>m.key===currentKey)||MONTHS[0]).key;
 
 function currentMonth(){return document.getElementById('global-month').value;}
 
+// A MONTHLY-RECURRING plan genuinely owes a fresh payment every cycle, so
+// its "paid" status must stay tied to whichever specific month is being
+// checked — that part was always correct. But a ONE-TIME payment plan
+// (trial, weekly, the legacy lesson-N/group-N packages, and the Artist/
+// Premium bundles) is paid or not paid, full stop — it isn't billed per
+// calendar month at all. Checking it against whatever month happened to
+// be selected in "Viewing" meant a trial registered in August for a
+// September lesson — or a bundle plan spanning several months — read as
+// "Unpaid" the instant anyone looked at any month other than the one the
+// payment happened to get recorded under, even though the money was
+// genuinely already collected. This is the single source of truth for
+// "is this student currently paid" everywhere that question is asked;
+// a genuine per-month PAYMENT HISTORY display (showing several months'
+// status side by side) is a different question and still reads
+// db.payments directly, unaffected by this.
+function isStudentPaidForMonth(student, month){
+  if(!student) return false;
+  if(typeof isMonthlyPlan==='function' && isMonthlyPlan(student.plan)){
+    return !!db.payments[student.id+'_'+month];
+  }
+  const prefix=student.id+'_';
+  return Object.keys(db.payments||{}).some(k=>k.indexOf(prefix)===0 && db.payments[k]);
+}
+
 // State
 let db = JSON.parse(localStorage.getItem('musicacademy_db')||'{"students":[],"payments":{},"expenses":[],"lessons":[],"lessonLogs":[]}'); db.lessons=db.lessons||[]; db.lessonLogs=db.lessonLogs||[]; db.instruments=db.instruments||[]; db.teacherProfiles=db.teacherProfiles||[]; db.payrollPaid=db.payrollPaid||{}; db.practiceSessions=db.practiceSessions||[]; db.paymentMethods=db.paymentMethods||{}; db.resources=db.resources||[]; db.refunds=db.refunds||[]; db.otherRevenue=db.otherRevenue||[]; db.wishlists=db.wishlists||{}; db.remindersSent=db.remindersSent||{}; db.teacherAbsences=db.teacherAbsences||[]; db.renewalsDismissed=db.renewalsDismissed||{}; db.waitingList=db.waitingList||[];
 function save(){try{localStorage.setItem('musicacademy_db',JSON.stringify(db));}catch(e){console.error('save() failed:',e);}}
@@ -3224,7 +3248,11 @@ function getStudentHealthFlags(student){
 
   // 1) Payment overdue this month (only meaningful once the student has had
   //    a lesson this month — a brand-new mid-month signup isn't "overdue").
-  const paid=!!db.payments[student.id+'_'+month];
+  // v196: a ONE-TIME plan (trial, weekly, bundle) isn't billed per
+  // calendar month at all — isStudentPaidForMonth checks whether they've
+  // EVER paid rather than strictly this one month, so a trial paid in
+  // August doesn't wrongly read as overdue the moment September starts.
+  const paid=isStudentPaidForMonth(student, month);
   const hadLessonThisMonth=(db.lessons||[]).some(l=>
     lessonBelongsToStudent(l, student) &&
     (l.month===month) && (l.date||'')<=todayKey && (l.status_record||'active')!=='archived'
@@ -3282,7 +3310,7 @@ function renderStudents(){
     (!fi || (s.instrument||'').toLowerCase().includes(fi)) &&
     (!fp || (fp==='weekly_group' ? weeklyGroup.includes(s.plan) : fp==='monthly_group' ? monthlyGroup.includes(s.plan) : s.plan===fp)) &&
     (!fd || s.lesson_day===fd) &&
-    (!fs || ((!!db.payments[s.id+'_'+month]) ? 'paid':'unpaid')===fs)
+    (!fs || (isStudentPaidForMonth(s, month) ? 'paid':'unpaid')===fs)
   );
 
   const sort=(document.getElementById('student-sort')||{}).value||'name_asc';
@@ -5223,7 +5251,7 @@ function attendedLessonIsUnpaid(lesson){
   // as unpaid the moment their lesson was marked attended.
   const month=(typeof currentMonth==='function' && currentMonth()) ? currentMonth() : String(lesson.date||lesson.month||'').slice(0,7);
   if(!month) return false;
-  const paid=!!db.payments[student.id+'_'+month];
+  const paid=isStudentPaidForMonth(student, month);
   return !paid;
 }
 
@@ -5614,12 +5642,21 @@ function renderReports(){
       // A student who takes more than one instrument can exist as several
       // records (Vocals with one teacher, Guitar with another). Matching a
       // make-up to a record by NAME alone would count every make-up in
-      // every record. When a record has an instrument/teacher, keep only
-      // the owed lessons that match it — so each row counts its own
-      // instrument's make-ups. Lessons with no instrument recorded fall
-      // back to matching by name (legacy data).
-      if(s.instrument || s.teacher){
+      // every record — but lessonBelongsToStudent ALREADY resolves this
+      // correctly whenever the lesson has its own studentId (it trusts the
+      // id completely, ignoring instrument/teacher). This filter is only
+      // genuinely needed for the fallback case — a lesson with no
+      // studentId that lessonBelongsToStudent matched by NAME alone, which
+      // really could belong to any of the person's course records.
+      // Applying it unconditionally meant an already-correctly-ID-matched
+      // lesson could be silently hidden here just because a stale
+      // instrument/teacher string on the lesson didn't match the
+      // student's current record — the makeup stayed genuinely owed and
+      // correctly deducted, but became invisible on this dashboard with
+      // no way to find or schedule it.
+      if((s.instrument || s.teacher)){
         owedLessons=owedLessons.filter(l=>{
+          if(l.studentId!=null && l.studentId!=='') return true; // already uniquely resolved by id
           const instOk = !l.instrument || !s.instrument || l.instrument===s.instrument;
           const teacherOk = !l.teacher || !s.teacher || l.teacher===s.teacher;
           return instOk && teacherOk;
@@ -12529,7 +12566,7 @@ function openAdminStudentProfile(studentId,studentName){
   const makeupsOwed=studentLessons.filter(l=>isMakeupOwed(l)).length;
 
   const month=currentMonth();
-  const paidThisMonth=!!db.payments[student.id+'_'+month];
+  const paidThisMonth=isStudentPaidForMonth(student, month);
   const paidMonthKeys=MONTHS.filter(m=>db.payments[student.id+'_'+m.key]).map(m=>m.key).sort();
   const firstPaidMonth=paidMonthKeys[0]||null;
   const paymentHistory=MONTHS.filter(m=>m.key<=month && (!firstPaidMonth || m.key>=firstPaidMonth)).reverse().slice(0,6);
@@ -14841,19 +14878,29 @@ function waitingMatchesFor(entry){
   );
   const out=[];
   const todayKey=new Date().toISOString().slice(0,10);
-  const weekStart=(typeof getFridayWeekStart==='function') ? getFridayWeekStart(todayKey) : todayKey;
   teachers.forEach(t=>{
     wantDays.forEach(dayName=>{
       if(!(((t.timeSlots||{})[dayName])||[]).length) return;
-      const dayIdx=WEEKDAY_NAMES.indexOf(dayName);
-      const offsetFromFriday=(dayIdx-5+7)%7;
-      const dateThisWeek=(typeof addDaysToDateStringLocal==='function')
-        ? addDaysToDateStringLocal(weekStart, offsetFromFriday) : null;
+      // v197: was "this Friday-anchored week's occurrence of dayName" —
+      // which can already be in the PAST relative to today whenever
+      // today falls later in that same week (e.g. checking "Sunday" on a
+      // Tuesday, once the week already started the previous Friday). A
+      // waiting-list match offering an already-passed date is worse than
+      // no match at all. nextWeekdayOnOrAfter always finds the next
+      // genuinely-upcoming occurrence, today included if it's a match.
+      const dateThisWeek=(typeof nextWeekdayOnOrAfter==='function')
+        ? nextWeekdayOnOrAfter(todayKey, dayName) : null;
       // An existing student's own slot isn't a "free slot" for them —
       // excluding it stops a day-change request matching where they
       // already are.
       const slots=getEffectiveTeacherDaySlots(t.name, dayName, entry.studentId||null, dateThisWeek);
       slots.filter(s=>!s.occupiedBy).forEach(s=>{
+        // The teacher's own calendar can show a slot as open while every
+        // physical room is already booked by OTHER teachers' students at
+        // that exact time — offering it here would be a match that turns
+        // out to have nowhere to actually happen. Room capacity is a
+        // shared, academy-wide constraint, not a per-teacher one.
+        if(typeof isRoomFullDuringRange==='function' && isRoomFullDuringRange(dateThisWeek, s.time, 45)) return;
         out.push({teacher:t.name, day:dayName, time:s.time});
       });
     });
@@ -16810,7 +16857,7 @@ function renderStudentPortalPayments(){
   if(!student){ host.innerHTML=''; return; }
 
   const thisMonth=realCurrentMonth();
-  const paidThisMonth=!!db.payments[student.id+'_'+thisMonth];
+  const paidThisMonth=isStudentPaidForMonth(student, thisMonth);
   const amount=isWeeklyPlan(student.plan) ? egp(getStudentPlanAmount(student))+' / session' : egp(getStudentPlanAmount(student));
   const thisMonthLabel=(MONTHS.find(m=>m.key===thisMonth)||{}).label||thisMonth;
 
