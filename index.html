@@ -414,7 +414,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-210</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-211</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -4349,6 +4349,159 @@ function dismissFromRenewalsDue(idsCsv){
   showToast(who+' hidden from Renewals Due');
 }
 
+// Normalizes a parent phone number so the SAME number entered in
+// different formats groups together (spaces, dashes, or the +20 country
+// code vs the local 01... form).
+//
+// Returns '' for anything that must NOT be used as a grouping key. That
+// exclusion is the important part: a blank field would otherwise group
+// every student without a parent number into one enormous "family", and
+// a partial entry like "0100" would merge unrelated students on the
+// strength of a typo. Both are far worse than simply not grouping, so
+// anything shorter than a real mobile number is rejected outright.
+function normalizeParentPhone(raw){
+  let d=String(raw||'').replace(/\D/g,'');
+  if(!d) return '';
+  if(d.length===12 && d.slice(0,2)==='20') d='0'+d.slice(2); // +20 1x xxxx xxxx
+  else if(d.length===10 && d[0]==='1') d='0'+d;              // 1x xxxx xxxx (leading 0 dropped)
+  if(d.length<10) return '';                                  // too short to trust
+  return d;
+}
+
+// Groups already-consolidated renewal rows into FAMILIES by shared parent
+// phone. Siblings are different people (unlike linked courses, which are
+// one person taking two instruments), so this is a second, outer level of
+// grouping applied on top of that one — a family member may themselves
+// have several linked courses, and keeps them.
+//
+// Bundle rows stay out, consistent with linked-course consolidation: a
+// bundle renewal and a monthly renewal are different modals with
+// different pricing, and summing them produces a total that matches
+// neither.
+function groupRenewalsByFamily(rows){
+  const out=[];
+  const byPhone={};
+  rows.forEach(row=>{
+    const key=(row.isBundleRow || row.needsLessonDay)
+      ? '' : normalizeParentPhone(row.s && row.s.phone2);
+    if(!key){ out.push({...row, members:[row]}); return; }
+    (byPhone[key]=byPhone[key]||[]).push(row);
+  });
+  Object.keys(byPhone).forEach(key=>{
+    const members=byPhone[key];
+    if(members.length===1){ out.push({...members[0], members:[members[0]]}); return; }
+    out.push({
+      s:members[0].s,
+      isFamily:true,
+      familyPhone:key,
+      members,
+      courses:members.reduce((acc,m)=>acc.concat(m.courses||[m.s]), []),
+      lessonCount:members.reduce((sum,m)=>sum+(m.lessonCount||0), 0),
+      amount:members.reduce((sum,m)=>sum+(m.amount||0), 0),
+      // Most recent reminder across the family — the badge should reflect
+      // that SOMEONE in this group was messaged, since one message covers
+      // all of them.
+      remindedAt:members.map(m=>m.remindedAt).filter(Boolean).sort().slice(-1)[0]||null,
+      isCustomPay:members.some(m=>m.isCustomPay),
+      deductionCount:members.reduce((sum,m)=>sum+(m.deductionCount||0), 0),
+      nextMonthName:members[0].nextMonthName
+    });
+  });
+  return out;
+}
+
+// One WhatsApp message covering every sibling on a shared parent number,
+// with a per-student breakdown and a combined total. Distinct from
+// sendConsolidatedRenewalReminder (which combines one person's several
+// COURSES and labels each by instrument) — here the clauses belong to
+// different children, so each is labelled by the child's name.
+function sendFamilyRenewalReminder(memberIdsCsv){
+  try{
+    const ids=String(memberIdsCsv||'').split(',').filter(Boolean);
+    const members=ids.map(id=>(db.students||[]).find(s=>String(s.id)===String(id))).filter(Boolean);
+    if(!members.length){ showToast('Could not find those students.'); return; }
+
+    const phone=String(members[0].phone2||'').trim();
+    if(!phone){ showToast('No parent phone on file.'); return; }
+
+    // One clause per COURSE, grouped under each student's name, so a
+    // sibling who takes two instruments still reads correctly.
+    const perStudent=members.map(st=>{
+      const courses=[st].concat(
+        (typeof getLinkedCourses==='function' ? getLinkedCourses(st) : [])
+          .filter(c=>c.lesson_day && (typeof studentHasPendingRenewal!=='function' || studentHasPendingRenewal(c)))
+      );
+      const details=courses.map(c=>computeRenewalCourseDetails(c));
+      const firstName=st.first_name||String(st.name||'').split(' ')[0]||st.name;
+      return {student:st, courses, details, firstName,
+              amount:details.reduce((sum,d)=>sum+d.amount, 0)};
+    });
+
+    const monthName=perStudent[0].details[0].monthName;
+    const totalAmount=perStudent.reduce((sum,p)=>sum+p.amount, 0);
+
+    const clauseTexts=perStudent.map(p=>{
+      const inner=p.details.map(d=>
+        '('+d.lessonCount+(d.lessonCount===1?' lesson':' lessons')+' on the '+d.dateList+')'
+      ).join(' & ');
+      return p.firstName+': '+inner;
+    });
+    const clauseBlock = clauseTexts.length>1
+      ? clauseTexts.slice(0,-1).join('\n')+'\n& '+clauseTexts[clauseTexts.length-1]
+      : clauseTexts[0];
+
+    const absenceNotes=perStudent.map(p=>p.details.map(d=>d.absenceNote).join('')).join('');
+    const deductionNotes=perStudent.map(p=>p.details.map(d=>d.deductionNoteBlock).join('')).join('');
+
+    // Already-reminded guard, same intent as the single-student path: the
+    // message covers everyone, so a previous send to ANY member means the
+    // parent has already had it.
+    const already=perStudent.find(p=>p.details.some(d=>db.remindersSent[p.student.id+'_renewal_'+d.month]));
+    if(already){
+      const key=already.student.id+'_renewal_'+already.details[0].month;
+      const when=(typeof timeAgoLabel==='function') ? timeAgoLabel(db.remindersSent[key]) : 'earlier';
+      if(!confirm('This family was already reminded '+when+' for '+monthName+'.\n\nSend another reminder anyway?')) return;
+    }
+
+    // A parent number covering several children shouldn't be greeted by
+    // one child's name.
+    const ePiano=String.fromCodePoint(0x1F3B9), eMic=String.fromCodePoint(0x1F3A4), eSparkle=String.fromCodePoint(0x1F4AB);
+    const message='Hello!\n'+
+      'Hope they\'re having a blast at Cymatics!\n'+
+      '\n'+
+      'Just a little reminder that the payment for '+monthName+' sessions:\n'+
+      clauseBlock+'\nis due Today '+ePiano+eMic+'\n'+
+      'It\'s '+Math.round(totalAmount)+' EGP in total for '+perStudent.length+' students — keeping things up to date means they won\'t miss a single beat of the fun!\n'+
+      '\n'+
+      'Instapay: 01277336092 -Mario Naguib\n'+
+      '\n'+
+      'Can\'t wait to see them at the next session! '+eSparkle+
+      absenceNotes+
+      deductionNotes;
+
+    const win=window.open(whatsAppSendUrl(phone, message), '_blank');
+    if(!win){
+      showToast('Your browser blocked the WhatsApp popup — allow popups for this site, then try again.');
+      return;
+    }
+    // Mark EVERY course of EVERY member reminded — otherwise the rows
+    // would still invite sending the same parent a second message.
+    perStudent.forEach(p=>{
+      p.details.forEach((d,i)=>{
+        const key=p.courses[i].id+'_renewal_'+d.month, at=new Date().toISOString();
+        db.remindersSent[key]=at;
+        if(typeof syncReminderSentToSupabase==='function'){ try{ syncReminderSentToSupabase(key, at); }catch(_){} }
+      });
+    });
+    save();
+    renderRenewalsDue();
+    showToast('Combined reminder sent for '+perStudent.length+' students');
+  }catch(err){
+    console.warn('Family reminder failed:', err && err.message);
+    showToast('Could not build that combined reminder.');
+  }
+}
+
 function renderRenewalsDue(){
   const host=document.getElementById('renewals-due-list');
   if(!host) return;
@@ -4489,11 +4642,65 @@ function renderRenewalsDue(){
   });
   grouped.sort((a,b)=>(a.s.name||'').localeCompare(b.s.name||''));
 
-  if(!grouped.length){
+  // Second, outer level of grouping: siblings sharing a parent phone
+  // become ONE row with one combined message, since the parent settles
+  // for all their children together. Applied after linked-course
+  // consolidation so a sibling who takes two instruments keeps them
+  // grouped inside their own entry.
+  const familyRows=(typeof groupRenewalsByFamily==='function') ? groupRenewalsByFamily(grouped) : grouped;
+  familyRows.sort((a,b)=>(a.s.name||'').localeCompare(b.s.name||''));
+
+  if(!familyRows.length){
     host.innerHTML='<div class="empty"><div class="empty-icon">✅</div><div class="empty-text">No renewals due right now.</div></div>';
     return;
   }
-  host.innerHTML=grouped.map(({s,courses,lessonCount,amount,remindedAt,isCustomPay,deductionCount,nextMonthName,needsLessonDay,isBundleRow,sessionsCompleted,sessionsTotal})=>{
+  host.innerHTML=familyRows.map(({s,courses,lessonCount,amount,remindedAt,isCustomPay,deductionCount,nextMonthName,needsLessonDay,isBundleRow,sessionsCompleted,sessionsTotal,isFamily,members})=>{
+    // ── FAMILY ROW: siblings on one parent number ──────────────────────
+    // One combined reminder (the parent gets a single message for all
+    // their children), but a SEPARATE Renew button per student. Renewing
+    // is a per-student scheduling decision — own day, time, teacher and
+    // plan — and the renewal modal only offers checkboxes for one
+    // person's linked courses. Batching siblings through it would
+    // silently apply one student's settings to another.
+    if(isFamily){
+      const memberIds=members.map(m=>m.s.id).join(',');
+      const famRemindedBadge = remindedAt
+        ? `<span class="badge badge-blue" style="font-size:10px" title="Reminded ${escapeAttr(new Date(remindedAt).toLocaleString())}">✓ Reminded ${escapeHtml(timeAgoLabel(remindedAt))}</span>`
+        : '';
+      const famDeductionBadge = deductionCount>0
+        ? `<span class="badge badge-amber" style="font-size:10px" title="${deductionCount} session${deductionCount===1?'':'s'} deducted across this family — teacher absent, no make-up booked">− ${deductionCount} deducted</span>`
+        : '';
+      const names=members.map(m=>escapeHtml(m.s.name||'?')).join(' + ');
+      const perMember=members.map(m=>{
+        const cs=m.courses||[m.s];
+        const detail=cs.map(c=>`${escapeHtml(c.instrument||'')}${c.lesson_day?' · '+escapeHtml(c.lesson_day):''}${c.lessonTime?' '+escapeHtml(formatTime12h(c.lessonTime)):''}`).join(' & ');
+        return `<div style="font-size:12px;color:var(--text-muted);margin-top:2px">
+          <b style="color:var(--text)">${escapeHtml(m.s.name||'?')}</b> — ${detail}
+          · <b style="color:var(--gold)">${m.lessonCount} lesson${m.lessonCount===1?'':'s'} · ${egp(m.amount)}</b>
+        </div>`;
+      }).join('');
+      const renewButtons=members.map(m=>{
+        const ids=(m.courses||[m.s]).map(c=>c.id).join(',');
+        const first=escapeHtml(m.s.first_name||String(m.s.name||'').split(' ')[0]||'student');
+        return `<button class="btn btn-sm btn-gold" onclick="renewStudentSubscription(${m.s.id},'${escapeAttr(ids)}')" title="Renew ${escapeAttr(m.s.name||'')} — each student is scheduled separately">🔁 ${first}</button>`;
+      }).join(' ');
+      return `<div class="unpaid-item" style="align-items:flex-start">
+        <div>
+          <div class="unpaid-name">${names}
+            <span class="badge badge-purple" style="font-size:10px" title="Same parent phone — one payment covers all of them">👪 ${members.length} students</span>
+            ${famRemindedBadge} ${famDeductionBadge}
+          </div>
+          ${perMember}
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end">
+          <span style="font-size:12px;color:var(--text-muted)">${escapeHtml(nextMonthName)} total: <b style="color:var(--gold)">${lessonCount} lesson${lessonCount===1?'':'s'} · ${egp(amount)}</b></span>
+          <button class="btn btn-sm" onclick="sendFamilyRenewalReminder('${escapeAttr(memberIds)}')" title="One WhatsApp message to the parent covering every student">${remindedAt?'📱 Remind Again':'📱 Reminder'}</button>
+          ${renewButtons}
+          <button class="btn btn-sm" title="Hide this family from the list" onclick="dismissFromRenewalsDue('${escapeAttr(courses.map(c=>c.id).join(','))}')">✕</button>
+        </div>
+      </div>`;
+    }
+
     const remindedBadge = remindedAt
       ? `<span class="badge badge-blue" style="font-size:10px" title="Reminded ${escapeAttr(new Date(remindedAt).toLocaleString())}">✓ Reminded ${escapeHtml(timeAgoLabel(remindedAt))}</span>`
       : '';
