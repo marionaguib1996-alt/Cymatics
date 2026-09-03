@@ -414,7 +414,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-204</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-205</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -528,6 +528,21 @@ input::placeholder{color:var(--text-dim)}
           <option value="artist">Artist — 8 lessons, 3mo max (5,000 EGP)</option>
           <option value="premium">Premium — 12 lessons, 4mo max (7,000 EGP)</option>
         </select>
+      </div>
+      <div class="form-field wide">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:normal;text-transform:none;letter-spacing:normal;font-size:13px;color:var(--text)">
+          <input id="s-custom-dates-toggle" type="checkbox" style="width:auto" onchange="onAddStudentCustomDatesToggle()">
+          Use Custom Dates instead of the regular weekly day
+        </label>
+        <div id="s-custom-dates-section" style="display:none;margin-top:8px">
+          <div class="teacher-row-meta" style="margin-bottom:6px">Pick specific dates by hand — any day of the week — instead of auto-scheduling from the regular lesson day.</div>
+          <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap">
+            <input id="s-custom-date" type="text" placeholder="dd/mm/yyyy" maxlength="10" oninput="maskDateInput(this)" style="max-width:150px">
+            <button type="button" class="btn btn-sm" onclick="openDatePicker('s-custom-date')">📅</button>
+            <button type="button" class="btn btn-sm btn-gold" onclick="addNewStudentCustomDate()">+ Add date</button>
+          </div>
+          <div id="s-custom-date-chips" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px"></div>
+        </div>
       </div>
       <div class="form-field">
         <label>Session Type</label>
@@ -849,6 +864,24 @@ input::placeholder{color:var(--text-dim)}
 </div>
 <div class="card">
   <div class="card-title">Booked Practice Sessions</div>
+  <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap">
+    <button class="btn btn-sm" onclick="shiftPracticeWeek(-1)">← Previous Week</button>
+    <span id="practice-week-label" style="font-weight:600;color:var(--gold-light)"></span>
+    <button class="btn btn-sm" onclick="shiftPracticeWeek(1)">Next Week →</button>
+    <button class="btn btn-sm" onclick="resetPracticeWeek()">This Week</button>
+    <select id="ps-filter-range" onchange="renderPracticeSessionsPage()" style="max-width:150px">
+      <option value="week">This week only</option>
+      <option value="all">All sessions</option>
+    </select>
+    <input id="ps-filter-student" placeholder="Filter by student..." oninput="renderPracticeSessionsPage()" style="max-width:180px">
+    <select id="ps-filter-status" onchange="renderPracticeSessionsPage()" style="max-width:150px">
+      <option value="">All statuses</option>
+      <option value="scheduled">Scheduled</option>
+      <option value="attended">Attended</option>
+      <option value="unpaid">Unpaid only</option>
+    </select>
+  </div>
+  <div id="practice-week-summary" style="margin-bottom:10px;font-size:13px;color:var(--text-muted)"></div>
   <div class="table-wrap"><table>
     <thead><tr><th>Date</th><th>Time</th><th>Student</th><th>Instrument</th><th>Fee</th><th>Status</th><th>Actions</th></tr></thead>
     <tbody id="practice-sessions-tbody"></tbody>
@@ -9587,10 +9620,21 @@ try{
  // already handled by the calling code's own error checking. Flagging
  // those here would just be false alarms.
  window.syncFailures=window.syncFailures||[];
+ // Writes that are genuinely OPTIONAL — their failure changes nothing the
+ // user would notice, and the calling code already treats it as fine.
+ // app_meta holds a "latest build seen" marker used only to nudge a stale
+ // browser tab to hard-refresh; if RLS blocks writing it (common, since
+ // it's a table admins rarely grant write access to) the version check
+ // simply doesn't fire, which is harmless. Logging it turned the Sync
+ // Issues panel — which exists to surface data that FAILED TO SAVE — into
+ // something showing a permanent error that needs no action, training the
+ // eye to ignore the panel exactly when it does matter.
+ const OPTIONAL_SYNC_TABLES=['app_meta'];
  const recordSyncFailure=(url, options, detail)=>{
    const method=(options&&options.method)||'GET';
    const tableMatch=String(url).match(/\/rest\/v1\/([a-zA-Z_]+)/);
    const table=tableMatch?tableMatch[1]:'unknown';
+   if(OPTIONAL_SYNC_TABLES.indexOf(table)>=0) return; // non-essential; never surfaced as a sync issue
    // Collapse repeats: a batch operation (e.g. logging a whole lesson
    // batch) can fail the same way dozens of times in one second. Showing
    // each one individually just buries every other issue past the 20-row
@@ -14473,7 +14517,96 @@ function chooseStudentStart(studentId, when){
   finalizeNewStudentSchedule(student, when==='next' ? 'next' : 'today');
 }
 
+// Custom Dates for a NEW student — mirrors the renewal flow's version so
+// the two behave identically. Useful when someone's first block of
+// sessions doesn't follow a clean weekly cadence (make-up-heavy starts,
+// a student joining around travel, an intensive over consecutive days).
+window._newStudentCustomDates=[];
+
+function onAddStudentCustomDatesToggle(){
+  const on=!!document.getElementById('s-custom-dates-toggle')?.checked;
+  const sec=document.getElementById('s-custom-dates-section');
+  if(sec) sec.style.display = on ? 'block' : 'none';
+  if(!on){ window._newStudentCustomDates=[]; renderNewStudentCustomDateChips(); }
+}
+
+function addNewStudentCustomDate(){
+  const raw=document.getElementById('s-custom-date')?.value||'';
+  const iso=dmyToIso(raw);
+  if(!iso){ showToast('Enter a valid date (dd/mm/yyyy).'); return; }
+  const todayKey=new Date().toISOString().slice(0,10);
+  if(iso<todayKey){ showToast('That date is in the past.'); return; }
+  window._newStudentCustomDates=window._newStudentCustomDates||[];
+  if(!window._newStudentCustomDates.includes(iso)) window._newStudentCustomDates.push(iso);
+  window._newStudentCustomDates.sort();
+  document.getElementById('s-custom-date').value='';
+  renderNewStudentCustomDateChips();
+}
+
+function removeNewStudentCustomDate(iso){
+  window._newStudentCustomDates=(window._newStudentCustomDates||[]).filter(d=>d!==iso);
+  renderNewStudentCustomDateChips();
+}
+
+function renderNewStudentCustomDateChips(){
+  const host=document.getElementById('s-custom-date-chips');
+  if(!host) return;
+  const dates=window._newStudentCustomDates||[];
+  host.innerHTML=dates.map(iso=>{
+    const dayName=WEEKDAY_NAMES[parseDateUTC(iso).getUTCDay()];
+    return `<span class="badge badge-blue" style="display:flex;align-items:center;gap:4px">${escapeHtml(dayName.slice(0,3))} ${escapeHtml(formatDateDMY(iso))} <span style="cursor:pointer" onclick="removeNewStudentCustomDate('${escapeAttr(iso)}')">✕</span></span>`;
+  }).join('');
+}
+
 function finalizeNewStudentSchedule(student, startPreference){
+  // Custom dates take precedence over the regular weekly auto-schedule —
+  // choosing them explicitly is a deliberate override of the lesson-day
+  // cadence, not something to merge with it.
+  const customDates=(document.getElementById('s-custom-dates-toggle')?.checked)
+    ? (window._newStudentCustomDates||[]) : [];
+  if(customDates.length){
+    let made=0;
+    db.lessons=db.lessons||[];
+    customDates.forEach(function(iso, i){
+      // Don't stack a second record on a date that already has one —
+      // same guard the renewal custom-dates path uses.
+      const already=(db.lessons||[]).some(function(l){
+        return String(l.studentId)===String(student.id) &&
+               (l.status_record||'active')!=='archived' &&
+               l.date===iso;
+      });
+      if(already) return;
+      const lesson={
+        id:Date.now()+i,
+        studentId:student.id,
+        student:student.name,
+        instrument:student.instrument||'',
+        teacher:student.teacher||'',
+        date:iso,
+        time:student.lessonTime||'',
+        status:'scheduled',
+        month:iso.slice(0,7),
+        isExtendedDuration:(typeof isGroupPlan==='function' && isGroupPlan(student.plan))||undefined
+      };
+      db.lessons.push(lesson);
+      if(typeof createLessonLog==='function') createLessonLog(student, lesson);
+      if(typeof syncLessonToSupabase==='function'){ try{ syncLessonToSupabase(lesson); }catch(_){} }
+      made++;
+    });
+    save();
+    if(typeof renderLessons==='function') renderLessons();
+    if(typeof renderTeacherWorkspace==='function') renderTeacherWorkspace();
+    if(typeof renderOverview==='function') renderOverview();
+    if(typeof renderCalendarPage==='function') renderCalendarPage();
+    showToast(made+' custom session(s) scheduled for '+(student.name||'student'));
+    window._newStudentCustomDates=[];
+    const tog=document.getElementById('s-custom-dates-toggle');
+    if(tog){ tog.checked=false; onAddStudentCustomDatesToggle(); }
+    const dEl=document.getElementById('s-joined-date');
+    if(dEl) dEl.value='';
+    if(typeof setDefaultJoinedDate==='function') setDefaultJoinedDate();
+    return;
+  }
   const created=scheduleMonthlyLessons(student, startPreference);
   if(created){
     save();
@@ -18247,9 +18380,55 @@ function renderPracticeSessionsPage(){
   instSel.innerHTML='<option value="">Select Instrument</option>'+
     (db.instruments||[]).map(i=>`<option value="${escapeAttr(i.name)}">${escapeHtml(i.name)}</option>`).join('');
 
+  // Week-scoped and filtered, matching how the Attendance Ledger presents
+  // lessons — a flat all-time list stopped being usable once bookings
+  // built up, for exactly the same reason the ledger needed weeks.
+  // Friday-anchored to match the ledger's convention, so "this week"
+  // means the same span in both places rather than two different ones.
+  initPracticeWeek();
+  const rangeMode=document.getElementById('ps-filter-range')?.value||'week';
+  const nameFilter=(document.getElementById('ps-filter-student')?.value||'').trim().toLowerCase();
+  const statusFilter=document.getElementById('ps-filter-status')?.value||'';
+  const weekStart=practiceWeekAnchor;
+  const weekEnd=addDaysToDateStringLocal(weekStart, 6);
+
+  const weekLabel=document.getElementById('practice-week-label');
+  if(weekLabel){
+    weekLabel.textContent = rangeMode==='week'
+      ? formatLedgerDate(weekStart)+' – '+formatLedgerDate(weekEnd)
+      : 'All sessions';
+  }
+
   const sessions=[...(db.practiceSessions||[])]
     .filter(p=>(p.status_record||'active')!=='archived')
-    .sort((a,b)=>String(b.date+b.time).localeCompare(String(a.date+a.time)));
+    .filter(p=>{
+      if(rangeMode!=='week') return true;
+      const d=String(p.date||'');
+      return d>=weekStart && d<=weekEnd;
+    })
+    .filter(p=>!nameFilter || String(p.studentName||'').toLowerCase().includes(nameFilter))
+    .filter(p=>{
+      if(!statusFilter) return true;
+      if(statusFilter==='unpaid') return !p.paid;
+      if(statusFilter==='attended') return p.status==='attended';
+      if(statusFilter==='scheduled') return p.status!=='attended';
+      return true;
+    })
+    // Ascending within a week (chronological, like the ledger); the
+    // all-sessions view keeps newest-first since there's no week to read
+    // through in order.
+    .sort((a,b)=> rangeMode==='week'
+      ? String(a.date+a.time).localeCompare(String(b.date+b.time))
+      : String(b.date+b.time).localeCompare(String(a.date+a.time)));
+
+  const totalFee=sessions.reduce((sum,p)=>sum+(Number(p.fee)||PRACTICE_SESSION_FEE),0);
+  const unpaidCount=sessions.filter(p=>!p.paid).length;
+  const summaryEl=document.getElementById('practice-week-summary');
+  if(summaryEl){
+    summaryEl.textContent = sessions.length
+      ? sessions.length+' session(s) · '+egp(totalFee)+' total'+(unpaidCount?' · '+unpaidCount+' unpaid':'')
+      : '';
+  }
 
   tbody.innerHTML=sessions.map(p=>`
     <tr>
@@ -18267,7 +18446,35 @@ function renderPracticeSessionsPage(){
         ${p.status!=='attended' ? `<button class="btn btn-sm btn-gold" onclick="markPracticeSessionAttended(${p.id})">Attended</button>` : ''}
         <button class="btn btn-sm btn-danger" onclick="deletePracticeSession(${p.id})">Delete</button>
       </td>
-    </tr>`).join('') || '<tr><td colspan="7">No practice sessions booked yet.</td></tr>';
+    </tr>`).join('') || `<tr><td colspan="7">${rangeMode==='week' ? 'No practice sessions this week.' : 'No practice sessions match those filters.'}</td></tr>`;
+}
+
+// Friday-anchored week navigation for the practice sessions table, using
+// the same helpers and convention as the Attendance Ledger so "this week"
+// means an identical span in both views.
+let practiceWeekAnchor=null;
+function initPracticeWeek(){
+  if(practiceWeekAnchor) return;
+  const now=new Date();
+  const todayKey=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');
+  practiceWeekAnchor=getFridayWeekStart(todayKey);
+}
+function shiftPracticeWeek(delta){
+  initPracticeWeek();
+  practiceWeekAnchor=addDaysToDateStringLocal(practiceWeekAnchor, delta*7);
+  // Stepping through weeks implies wanting the week view, not the
+  // all-sessions list where the arrows would appear to do nothing.
+  const rangeSel=document.getElementById('ps-filter-range');
+  if(rangeSel) rangeSel.value='week';
+  renderPracticeSessionsPage();
+}
+function resetPracticeWeek(){
+  const now=new Date();
+  const todayKey=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');
+  practiceWeekAnchor=getFridayWeekStart(todayKey);
+  const rangeSel=document.getElementById('ps-filter-range');
+  if(rangeSel) rangeSel.value='week';
+  renderPracticeSessionsPage();
 }
 
 // Instrument-scoped counterpart to getEffectiveTeacherDaySlots — practice
