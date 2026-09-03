@@ -414,7 +414,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-208</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-209</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1255,6 +1255,18 @@ input::placeholder{color:var(--text-dim)}
     <button class="btn" onclick="document.getElementById('backup-compare-file').click()">📂 Choose backup file to compare</button>
     <input type="file" id="backup-compare-file" accept=".json" style="display:none" onchange="compareBackupToLive(event)">
     <div id="backup-compare-results" style="margin-top:14px"></div>
+
+    <div style="border-top:1px solid var(--border);margin:20px 0 16px;"></div>
+    <div class="card-title" style="margin-bottom:10px">Fix Course Instrument / Teacher Mismatches</div>
+    <small style="display:block;margin-bottom:8px;color:var(--text-muted)">Finds upcoming lessons carrying a different instrument or teacher than the course they belong to — which makes a two-course student show two identical-looking rows in the Attendance Ledger, and credits the wrong teacher in payroll. Only future scheduled lessons are corrected; past sessions keep whatever was actually recorded.</small>
+    <button class="btn" onclick="previewFixCourseFields()">🔍 Preview (changes nothing)</button>
+    <div id="course-fields-results" style="margin-top:14px"></div>
+
+    <div style="border-top:1px solid var(--border);margin:20px 0 16px;"></div>
+    <div class="card-title" style="margin-bottom:10px">Link Unlinked Multi-Course Students</div>
+    <small style="display:block;margin-bottom:8px;color:var(--text-muted)">Finds same-name students taking genuinely different courses who aren't connected — so they count as two people in your student total and don't show the "Course 1 of 2" badge. Only the connection changes; lessons, payments and payroll are untouched.</small>
+    <button class="btn" onclick="previewLinkUnlinkedCourses()">🔍 Preview (changes nothing)</button>
+    <div id="unlinked-courses-results" style="margin-top:14px"></div>
   </div>
 </div>
 
@@ -6494,6 +6506,146 @@ function restoreArchivedByCutoff(){
   if(typeof renderOverview==='function') renderOverview();
   showToast(rows.length+' lesson(s) restored ✓');
   previewArchiveOldLessons();
+}
+
+// Finds lessons whose instrument/teacher disagree with the student record
+// they belong to. A lesson stores its own copy of both (correct — a
+// lesson should record who actually taught it, even if the student later
+// changes teacher), but when a SECOND course is added and its lessons end
+// up carrying the FIRST course's details, the ledger shows two rows for
+// the same person with identical instrument and teacher — indistinguishable
+// from a duplicate, and wrong in payroll too, since the lesson credits the
+// wrong teacher.
+// Only flags lessons that are still SCHEDULED: a past lesson may legitimately
+// record a different teacher (a cover, a since-changed assignment), and
+// rewriting delivered history would be wrong.
+function findCourseFieldMismatches(){
+  const todayKey=new Date().toISOString().slice(0,10);
+  return (db.lessons||[]).filter(l=>{
+    if((l.status_record||'active')==='archived') return false;
+    if(l.status!=='scheduled') return false;
+    if(!l.date || l.date<todayKey) return false;
+    const s=(db.students||[]).find(st=>lessonBelongsToStudent(l, st));
+    if(!s) return false;
+    const instMismatch = s.instrument && l.instrument && l.instrument!==s.instrument;
+    const teacherMismatch = s.teacher && l.teacher && l.teacher!==s.teacher;
+    return instMismatch || teacherMismatch;
+  }).sort((a,b)=>String(a.date||'').localeCompare(String(b.date||'')));
+}
+
+function previewFixCourseFields(){
+  const el=document.getElementById('course-fields-results');
+  if(!el) return;
+  const rows=findCourseFieldMismatches();
+  if(!rows.length){
+    el.innerHTML='<div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px;color:#a8e8a8">✅ Every upcoming lesson matches its course\'s instrument and teacher.</div>';
+    return;
+  }
+  el.innerHTML='<div style="background:#3a3520;border:1px solid #6a5a2a;border-radius:6px;padding:12px;margin-bottom:10px">'
+    +'<div style="font-weight:700;color:#e2c47a;margin-bottom:6px">'+rows.length+' upcoming lesson(s) don\'t match their course</div>'
+    +'<div style="font-size:13px;color:#c8d8e8;line-height:1.6">These carry a different instrument or teacher than the student record they belong to — which is what makes a two-course student show identical rows in the ledger, and credits the wrong teacher in payroll. Only future scheduled lessons are changed; past sessions keep whatever was actually recorded.</div></div>'
+    +'<div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px;max-height:280px;overflow-y:auto">'
+    +'<div style="font-size:13px;color:#c8d8e8;line-height:1.8">'
+    + rows.map(function(l){
+        const s=(db.students||[]).find(function(st){ return lessonBelongsToStudent(l, st); });
+        return escapeHtml(s?s.name:l.student)+' — '+escapeHtml(formatLedgerDate(l.date))
+          +' — lesson says <b>'+escapeHtml((l.instrument||'?')+' · '+(l.teacher||'?'))+'</b>'
+          +', course is <b>'+escapeHtml((s.instrument||'?')+' · '+(s.teacher||'?'))+'</b>';
+      }).join('<br>')
+    +'</div></div>'
+    +'<button class="btn btn-gold" style="margin-top:12px" onclick="applyFixCourseFields()">Fix these '+rows.length+' lesson(s)</button>';
+}
+
+function applyFixCourseFields(){
+  const rows=findCourseFieldMismatches();
+  if(!rows.length){ showToast('Nothing to fix.'); return; }
+  if(!confirm('Update '+rows.length+' upcoming lesson(s) to match their course\'s instrument and teacher?\n\nOnly future scheduled lessons change — past sessions keep what was actually recorded.')) return;
+  rows.forEach(function(l){
+    const s=(db.students||[]).find(function(st){ return lessonBelongsToStudent(l, st); });
+    if(!s) return;
+    if(s.instrument) l.instrument=s.instrument;
+    if(s.teacher) l.teacher=s.teacher;
+    if(typeof syncLessonUpdateToSupabase==='function'){ try{ syncLessonUpdateToSupabase(l); }catch(_){} }
+  });
+  save();
+  if(typeof renderLessons==='function') renderLessons();
+  if(typeof renderCalendarPage==='function') renderCalendarPage();
+  showToast(rows.length+' lesson(s) corrected ✓');
+  previewFixCourseFields();
+}
+
+// Finds same-name students who look like courses of one person but aren't
+// linked — so they count as separate people in the roster total and don't
+// show the "Course 1 of 2" badge. Distinct from the existing duplicate
+// tools: those merge identical records; this LINKS genuinely different
+// courses, changing nothing except the connection between them.
+function findUnlinkedSameNameCourses(){
+  const active=(db.students||[]).filter(s=>(s.status||'active')!=='archived');
+  const byName={};
+  active.forEach(s=>{
+    const k=normalizeStudentNameForMatch(s.name);
+    if(!k) return;
+    (byName[k]=byName[k]||[]).push(s);
+  });
+  const groups=[];
+  Object.keys(byName).forEach(k=>{
+    const rows=byName[k];
+    if(rows.length<2) return;
+    // Already all sharing one root? Then nothing to do.
+    const roots=new Set(rows.map(r=>String(r.linkedPersonId||r.public_id||r.id)));
+    if(roots.size<=1) return;
+    // Genuinely different courses (not identical duplicates).
+    const distinct=new Set(rows.map(r=>(r.instrument||'')+'|'+(r.teacher||'')+'|'+(r.lesson_day||'')));
+    if(distinct.size<2) return;
+    groups.push(rows);
+  });
+  return groups;
+}
+
+function previewLinkUnlinkedCourses(){
+  const el=document.getElementById('unlinked-courses-results');
+  if(!el) return;
+  const groups=findUnlinkedSameNameCourses();
+  if(!groups.length){
+    el.innerHTML='<div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px;color:#a8e8a8">✅ No unlinked multi-course students found.</div>';
+    return;
+  }
+  el.innerHTML='<div style="background:#3a3520;border:1px solid #6a5a2a;border-radius:6px;padding:12px;margin-bottom:10px">'
+    +'<div style="font-weight:700;color:#e2c47a;margin-bottom:6px">'+groups.length+' person(s) with unlinked courses</div>'
+    +'<div style="font-size:13px;color:#c8d8e8;line-height:1.6">Same name, genuinely different courses, but not connected — so they count as separate people in your student total and don\'t show the "Course 1 of 2" badge. Linking changes only the connection: lessons, payments and payroll stay exactly as they are.</div></div>'
+    +'<div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px;max-height:280px;overflow-y:auto">'
+    +'<div style="font-size:13px;color:#c8d8e8;line-height:1.8">'
+    + groups.map(function(g){
+        return '<b>'+escapeHtml(g[0].name||'?')+'</b> — '+g.map(function(r){ return escapeHtml((r.instrument||'?')+' · '+(r.teacher||'?')); }).join('  +  ');
+      }).join('<br>')
+    +'</div></div>'
+    +'<button class="btn btn-gold" style="margin-top:12px" onclick="applyLinkUnlinkedCourses()">Link these '+groups.length+' person(s)</button>';
+}
+
+function applyLinkUnlinkedCourses(){
+  const groups=findUnlinkedSameNameCourses();
+  if(!groups.length){ showToast('Nothing to link.'); return; }
+  if(!confirm('Link '+groups.length+' person\'s courses together?\n\nOnly the connection changes — no lessons, payments or payroll are touched.')) return;
+  let linked=0;
+  groups.forEach(function(g){
+    // Anchor on the earliest-created record's public_id, matching what
+    // openAddCourseForm would have used.
+    const sorted=g.slice().sort(function(a,b){ return String(a.public_id||a.id).localeCompare(String(b.public_id||b.id)); });
+    const rootId=sorted[0].linkedPersonId||sorted[0].public_id;
+    if(!rootId) return;
+    sorted.forEach(function(r){
+      if(String(r.linkedPersonId||'')===String(rootId)) return;
+      r.linkedPersonId=rootId;
+      r._localModifiedAt=Date.now();
+      if(typeof syncStudentUpdateToSupabase==='function'){ try{ syncStudentUpdateToSupabase(r); }catch(_){} }
+      linked++;
+    });
+  });
+  save();
+  if(typeof renderStudents==='function') renderStudents();
+  if(typeof renderOverview==='function') renderOverview();
+  showToast(linked+' course record(s) linked ✓');
+  previewLinkUnlinkedCourses();
 }
 
 function renderDeletionLog(){
