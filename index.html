@@ -414,7 +414,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-205</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-208</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -2393,11 +2393,13 @@ function migrateLessonLogs(){
   let created=0;
   for(const lesson of db.lessons){
     if(db.lessonLogs.some(log=>log.lessonId===lesson.id)) continue;
+    // Id-authoritative first (lessonBelongsToStudent), then the legacy
+    // public_id form. The old final fallback — bare name — could attach a
+    // log to the WRONG course for a two-course person, since both their
+    // records carry the same name.
     const student =
-      db.students.find(s=>(s.public_id||s.id)==lesson.studentId) ||
-      db.students.find(s=>s.id==lesson.studentId) ||
-      db.students.find(s=>s.name===lesson.student && s.teacher===lesson.teacher) ||
-      db.students.find(s=>s.name===lesson.student);
+      db.students.find(s=>lessonBelongsToStudent(lesson, s)) ||
+      db.students.find(s=>(s.public_id||s.id)==lesson.studentId);
     if(!student) continue;
     db.lessonLogs.push(normalizeLessonLog({
       id:(crypto.randomUUID?crypto.randomUUID():String(Date.now()+created)),
@@ -3142,9 +3144,88 @@ function togglePayment(id){
     return;
   }
 
+  // A person taking several courses pays for all of them together — one
+  // transfer, one amount. Marking each course separately meant entering
+  // the same payment two or three times and, worse, made a partially-
+  // marked person look half-paid when they'd actually settled in full.
+  // Only unpaid sibling courses are offered, so re-marking one course of
+  // an already-paid person doesn't silently re-charge the others.
+  const student=(db.students||[]).find(x=>String(x.id)===String(id));
+  const siblings=(student && typeof getLinkedCourses==='function')
+    ? getLinkedCourses(student).filter(o=>!db.payments[o.id+'_'+month])
+    : [];
+
+  if(siblings.length){
+    const all=[student].concat(siblings);
+    const total=all.reduce((sum,c)=>sum+((typeof getStudentPlanAmount==='function')?getStudentPlanAmount(c):0),0);
+    const breakdown=all.map(c=>
+      '<div style="display:flex;justify-content:space-between;padding:3px 0">'
+      +'<span>'+escapeHtml(c.instrument||'?')+' <span style="color:var(--text-muted)">· '+escapeHtml(c.teacher||'?')+'</span></span>'
+      +'<span style="font-weight:600">'+egp((typeof getStudentPlanAmount==='function')?getStudentPlanAmount(c):0)+'</span></div>'
+    ).join('');
+    const allIds=all.map(c=>c.id).join(',');
+    openModal('Mark as Paid', `
+      <div style="margin-bottom:10px;color:var(--text-muted)">${escapeHtml(student.name||'This student')} takes ${all.length} courses.</div>
+      <div style="background:var(--bg-alt,#1a1a1a);border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:14px">
+        ${breakdown}
+        <div style="display:flex;justify-content:space-between;border-top:1px solid var(--border);margin-top:6px;padding-top:6px;font-weight:700;color:var(--gold-light)">
+          <span>Total</span><span>${egp(total)}</span>
+        </div>
+      </div>
+      <div style="margin-bottom:10px;color:var(--text-muted)">How was this payment received?</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+        <button class="btn btn-gold" style="flex:1;min-width:100px" onclick="confirmMarkPaidMulti('${escapeAttr(allIds)}','Instapay')">Instapay</button>
+        <button class="btn btn-gold" style="flex:1;min-width:100px" onclick="confirmMarkPaidMulti('${escapeAttr(allIds)}','Cash')">Cash</button>
+        <button class="btn btn-gold" style="flex:1;min-width:100px" onclick="confirmMarkPaidMulti('${escapeAttr(allIds)}','InstaPay + Cash')">InstaPay + Cash</button>
+      </div>
+      <div style="border-top:1px solid var(--border);padding-top:10px">
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px">Only paying for ${escapeHtml(student.instrument||'this course')}? (e.g. the other course was cancelled)</div>
+        <button class="btn btn-sm" onclick="markPaidSingleCourseOnly(${id})">Just this one course</button>
+      </div>
+    `);
+    return;
+  }
+
   // Marking as paid — ask how, before completing the action.
   openModal('Mark as Paid', `
     <div style="margin-bottom:14px;color:var(--text-muted)">How was this payment received?</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <button class="btn btn-gold" style="flex:1;min-width:100px" onclick="confirmMarkPaid(${id},'Instapay')">Instapay</button>
+      <button class="btn btn-gold" style="flex:1;min-width:100px" onclick="confirmMarkPaid(${id},'Cash')">Cash</button>
+      <button class="btn btn-gold" style="flex:1;min-width:100px" onclick="confirmMarkPaid(${id},'InstaPay + Cash')">InstaPay + Cash</button>
+    </div>
+  `);
+}
+
+// Marks EVERY listed course paid in one action — same per-course records
+// underneath (each keeps its own payment key, amount snapshot and
+// history), just entered once instead of two or three times.
+function confirmMarkPaidMulti(idsCsv, method){
+  const ids=String(idsCsv||'').split(',').filter(Boolean);
+  if(!ids.length) return;
+  const month=currentMonth();
+  let count=0;
+  ids.forEach(function(rawId){
+    const sid=(db.students||[]).find(x=>String(x.id)===String(rawId))?.id;
+    if(sid==null) return;
+    const key=sid+'_'+month;
+    db.payments[key]=true;
+    db.paymentMethods=db.paymentMethods||{};
+    db.paymentMethods[key]=method;
+    if(typeof recordPaymentSnapshot==='function') recordPaymentSnapshot(sid, month, true);
+    if(typeof syncPaymentToggleToSupabase==='function'){ try{ syncPaymentToggleToSupabase(sid, month, true, method); }catch(_){} }
+    count++;
+  });
+  save(); closeModal(); renderStudents(); renderOverview();
+  showToast(count+' course'+(count===1?'':'s')+' marked paid ✓');
+}
+
+// The escape hatch for the genuine single-course case — a cancelled or
+// paused sibling course that shouldn't be charged.
+function markPaidSingleCourseOnly(id){
+  closeModal();
+  openModal('Mark as Paid', `
+    <div style="margin-bottom:14px;color:var(--text-muted)">Marking ONLY this course as paid. How was it received?</div>
     <div style="display:flex;gap:10px;flex-wrap:wrap">
       <button class="btn btn-gold" style="flex:1;min-width:100px" onclick="confirmMarkPaid(${id},'Instapay')">Instapay</button>
       <button class="btn btn-gold" style="flex:1;min-width:100px" onclick="confirmMarkPaid(${id},'Cash')">Cash</button>
@@ -3311,6 +3392,27 @@ function archiveStudent(id){
   }
   showToast(lessonsArchived?('Student archived with '+lessonsArchived+' lesson(s)'):'Student archived');
 }
+// A short "which course is this" marker for a lesson belonging to
+// someone enrolled in more than one. Views like the Attendance Ledger and
+// Calendar show a bare name, so a two-course person appears twice with no
+// indication they're the same human — which reads as a duplicate-record
+// bug even when the data is perfectly correct, and (worse) is visually
+// identical to the case where it IS one. The instrument disambiguates it
+// at a glance. Returns '' for ordinary single-course students so nothing
+// changes for the overwhelming majority of rows.
+function linkedCourseMarkerFor(lesson){
+  if(!lesson) return '';
+  const s=(db.students||[]).find(st=>lessonBelongsToStudent(lesson, st));
+  if(!s) return '';
+  const others=(typeof getLinkedCourses==='function') ? getLinkedCourses(s) : [];
+  if(!others.length) return '';
+  const total=others.length+1;
+  const inst=s.instrument||lesson.instrument||'';
+  return '<span class="badge badge-blue" style="font-size:10px;margin-left:6px" title="'+
+    escapeAttr(s.name||'')+' takes '+total+' courses — this row is the '+escapeAttr(inst)+' one">🔗 '+
+    escapeHtml(inst||('1 of '+total))+'</span>';
+}
+
 function getLinkedCourses(student){
   const rootId=student.linkedPersonId||student.public_id;
   if(!rootId) return [];
@@ -3477,8 +3579,19 @@ function renderStudents(){
     const method=(db.paymentMethods||{})[key];
     // The amount is the month's total (sessions x rate), which rises in a
     // month containing five of their day rather than four.
-    const amt=egp(getStudentPlanAmount(s));
     const linkedCourses=getLinkedCourses(s);
+    // For a linked person, show this course's own amount PLUS the combined
+    // total across all their courses — they pay it as one transfer, so the
+    // number to check against what actually arrived is the total, not the
+    // per-course slice. Per-course amounts stay visible because that's
+    // what each course is individually worth (and what still applies if
+    // one course is cancelled).
+    const ownAmount=getStudentPlanAmount(s);
+    let amt=egp(ownAmount);
+    if(linkedCourses.length){
+      const combined=[s,...linkedCourses].reduce((sum,c)=>sum+getStudentPlanAmount(c),0);
+      amt=egp(ownAmount)+`<div style="font-size:11px;color:var(--text-muted);font-weight:400;margin-top:2px" title="Combined across all ${linkedCourses.length+1} of this person's courses — what they pay in one transfer">of ${egp(combined)} total</div>`;
+    }
     // Spell out WHICH course this row is, rather than a bare "+1" — two
     // courses can look identical (same name, instrument, teacher, plan),
     // so the row needs to say plainly that it's one of several and which.
@@ -3622,6 +3735,32 @@ function saveEditStudent(id){
  s.phone1=document.getElementById('es-phone1')?.value||'';
  s.phone2=document.getElementById('es-phone2')?.value||'';
  s.email=document.getElementById('es-email')?.value||'';
+ // Contact details belong to the PERSON, not the course. A student taking
+ // two instruments has two records, and editing a phone number on one left
+ // the other holding the old value — so which number you got depended on
+ // which course row you happened to open, and they drifted further apart
+ // with every edit. Name is included for the same reason: a spelling fix
+ // or a surname change applies to the human, not to one of their courses.
+ // Scheduling fields are deliberately NOT synced — day, time, teacher,
+ // instrument and plan are genuinely per-course and must stay independent.
+ {
+   const linked=(typeof getLinkedCourses==='function') ? getLinkedCourses(s) : [];
+   linked.forEach(function(other){
+     other.first_name=s.first_name;
+     other.last_name=s.last_name;
+     other.name=s.name;
+     other.phone1=s.phone1;
+     other.phone2=s.phone2;
+     other.email=s.email;
+     other._localModifiedAt=Date.now();
+     if(typeof syncStudentUpdateToSupabase==='function'){ try{ syncStudentUpdateToSupabase(other); }catch(_){} }
+   });
+   if(linked.length && typeof showToast==='function'){
+     setTimeout(function(){
+       showToast('Contact details also updated on '+linked.length+' linked course'+(linked.length===1?'':'s'));
+     }, 900);
+   }
+ }
  s.lesson_day=document.getElementById('es-day')?.value||'';
  s.lessonTime=document.getElementById('es-time')?.value||'';
  s.isOnline=!!document.getElementById('es-online')?.checked;
@@ -5061,7 +5200,7 @@ if(sum){sum.innerHTML=`<div class="metric"><div class="metric-label">Lessons</di
      return `
    <tr>
     <td>${formatLedgerDate(l.date)}${l.time?' <span class="badge badge-blue">'+escapeHtml(formatTime12h(l.time))+'</span>':''}${l.isDoubleSession?' <span class="badge badge-purple" title="Absorbs a missed lesson as a double session">Double Session</span>':''}${(l.makeupForLessonId && !l.isDoubleSession)?' <span class="badge badge-purple" title="This session is a makeup for a previously missed lesson">🔁 Makeup Session</span>':''}</td>
-    <td>${escapeHtml(l.student)}${planBadges?' '+planBadges:''}</td>
+    <td>${escapeHtml(l.student)}${planBadges?' '+planBadges:''}${typeof linkedCourseMarkerFor==='function'?linkedCourseMarkerFor(l):''}</td>
     <td>${escapeHtml(l.instrument)}</td>
     <td>${escapeHtml(l.teacher)}</td>
     <td><span class="badge ${
@@ -5206,10 +5345,14 @@ function editLesson(id){
  const l=db.lessons.find(x=>x.id===id);
  if(!l) return;
  const VALID_STATUSES=['attended','absent_paid','absent_excused','teacher_absent','scheduled'];
+ // lessonBelongsToStudent, not an id-OR-name chain: for a person taking
+ // two courses both records share a NAME, so the name arm matches
+ // whichever sits first in the array regardless of which course this
+ // lesson is actually part of. The public_id arm is kept because some
+ // legacy lessons key on it rather than the row id.
  const student=db.students.find(s=>
-   String(s.id)===String(l.studentId) ||
-   String(s.public_id||'')===String(l.studentId) ||
-   s.name===l.student
+   lessonBelongsToStudent(l, s) ||
+   (l.studentId!=null && String(s.public_id||'')===String(l.studentId))
  );
  const lessonDay=(l.date ? WEEKDAY_NAMES[parseDateUTC(l.date)?.getUTCDay()??-1] : '') || student?.lesson_day || '';
  const timeOpts=getLessonTimeOptions(l.teacher, lessonDay, l.time, l.date, l.id);
@@ -12575,7 +12718,7 @@ function renderTeacherWorkspace(){
     // whose day changed (e.g. Saturday to Friday) would stay filed under
     // the OLD day forever, since past dates never change.
     const dayFilteredLessons=dayFilter ? attendedLessons.filter(l=>{
-      const matchedStudent=(db.students||[]).find(s=>String(s.id)===String(l.studentId) || s.name===(l.student||l.student_name));
+      const matchedStudent=(db.students||[]).find(s=>lessonBelongsToStudent(l, s));
       return matchedStudent && matchedStudent.lesson_day===dayFilter;
     }) : attendedLessons;
 
@@ -12869,7 +13012,7 @@ async function syncLessonLogToSupabase(log){
     // session. Fall back through the log's own teacherName, then the
     // linked lesson's teacher, then the student's current teacher.
     const linkedLesson=(db.lessons||[]).find(l=>String(l.id)===String(log.lessonId));
-    const linkedStudent=(db.students||[]).find(s=>String(s.id)===String(log.studentId) || s.name===log.studentName);
+    const linkedStudent=(db.students||[]).find(s=>String(s.id)===String(log.studentId) || String(s.public_id||'')===String(log.studentId));
     const teacherId=(log.teacherName||linkedLesson?.teacher||linkedStudent?.teacher||'').trim();
     const payload={
       lesson_id: log.lessonId,
@@ -15065,7 +15208,7 @@ function getLessonDurationMinutes(lesson){
   // so the 90-minute case must be recognized before the generic 60.
   if(lesson.isDoubleSession) return DOUBLE_SESSION_DURATION_MINUTES;
   if(lesson.isExtendedDuration) return GROUP_SESSION_DURATION_MINUTES;
-  const s=(db.students||[]).find(st=>String(st.id)===String(lesson.studentId) || st.name===lesson.student);
+  const s=(db.students||[]).find(st=>lessonBelongsToStudent(lesson, st));
   if(s && isGroupPlan(s.plan)) return GROUP_SESSION_DURATION_MINUTES;
   return SESSION_DURATION_MINUTES;
 }
@@ -16336,7 +16479,7 @@ function renderCalendarPage(){
         // treatment — so a Group session spanning two grid slots reads as
         // one continuous block instead of visually splitting into a
         // different-looking second half.
-        const contMatchedStudent=(db.students||[]).find(s=>String(s.id)===String(continuing.studentId) || s.name===continuing.student);
+        const contMatchedStudent=(db.students||[]).find(s=>lessonBelongsToStudent(continuing, s));
         const contStudentMissing=!contMatchedStudent || (contMatchedStudent.status||'active')==='archived';
         const contPaid=contMatchedStudent ? paidSet.has(String(contMatchedStudent.id)) : paidSet.has(String(continuing.studentId));
         const contIsTrial=contMatchedStudent && (contMatchedStudent.plan==='trial' || contMatchedStudent.plan==='group-trial');
@@ -16800,7 +16943,7 @@ function markMakeupExpired(lessonId){
 // block the slot for everyone else.
 function lessonBelongsToFrozenStudent(l){
   if(!l) return false;
-  const s=(db.students||[]).find(st=>String(st.id)===String(l.studentId) || st.name===l.student);
+  const s=(db.students||[]).find(st=>lessonBelongsToStudent(l, st));
   return !!(s && s.frozen);
 }
 
@@ -16818,7 +16961,7 @@ function lessonBelongsToFrozenStudent(l){
 // extended to "gone or archived" rather than "temporarily paused."
 function lessonStudentIsGone(l){
   if(!l) return false;
-  const s=(db.students||[]).find(st=>String(st.id)===String(l.studentId) || st.name===l.student);
+  const s=(db.students||[]).find(st=>lessonBelongsToStudent(l, st));
   return !s || (s.status||'active')==='archived';
 }
 
@@ -17014,7 +17157,7 @@ function resolveMakeupIfLinked(id){
       // A plain single-lesson "Book a Separate Day" makeup never sets it,
       // so it correctly defaults to consuming just the one linked credit.
       const due=l.makeupCreditsDue || 1;
-      const count=consumeMakeupCredits((db.students||[]).find(s=>String(s.id)===String(original.studentId)||s.name===original.student), original, due);
+      const count=consumeMakeupCredits((db.students||[]).find(s=>lessonBelongsToStudent(original, s)), original, due);
       save();
       renderLessons();
       renderOverview();
@@ -17101,7 +17244,7 @@ function openScheduleMakeup(missedLessonId){
   const missed=(db.lessons||[]).find(l=>l.id===missedLessonId);
   if(!missed) return;
   const student=(db.students||[]).find(s=>
-    String(s.id)===String(missed.studentId) || s.name===missed.student
+    lessonBelongsToStudent(missed, s)
   );
 
   // Source 1: the student's own upcoming lessons — filtered to only ones
@@ -17227,7 +17370,7 @@ function updateMakeupPreview(missedLessonId){
   if(!el) return;
   const missed=(db.lessons||[]).find(l=>l.id===missedLessonId);
   if(!missed){ el.textContent=''; return; }
-  const student=(db.students||[]).find(s=>String(s.id)===String(missed.studentId) || s.name===missed.student);
+  const student=(db.students||[]).find(s=>lessonBelongsToStudent(missed, s));
   const path=window._msActivePath||'double';
 
   if(path==='double'){
@@ -17434,7 +17577,7 @@ function confirmDoubleSessionMakeup(missedLessonId){
   const missed=(db.lessons||[]).find(l=>l.id===missedLessonId);
   if(!missed) return;
   const student=(db.students||[]).find(s=>
-    String(s.id)===String(missed.studentId) || s.name===missed.student
+    lessonBelongsToStudent(missed, s)
   );
 
   if(rawValue.startsWith('existing:')){
@@ -17575,7 +17718,7 @@ function updateDoubleSessionCustomSlots(missedLessonId){
 function confirmCustomDoubleSession(missedLessonId){
   const missed=(db.lessons||[]).find(l=>l.id===missedLessonId);
   if(!missed) return;
-  const student=(db.students||[]).find(s=>String(s.id)===String(missed.studentId) || s.name===missed.student);
+  const student=(db.students||[]).find(s=>lessonBelongsToStudent(missed, s));
   const date=dmyToIso(document.getElementById('msd-date')?.value||'');
   const time=document.getElementById('msd-time')?.value||'';
   if(!date || !time){ showToast('Please pick a date and start time.'); return; }
@@ -17617,7 +17760,7 @@ function confirmSeparateDayMakeup(missedLessonId){
   const missed=(db.lessons||[]).find(l=>l.id===missedLessonId);
   if(!missed) return;
   const student=(db.students||[]).find(s=>
-    String(s.id)===String(missed.studentId) || s.name===missed.student
+    lessonBelongsToStudent(missed, s)
   );
 
   const date=dmyToIso(document.getElementById('ms-date')?.value||'');
@@ -19183,7 +19326,7 @@ function generateTeacherSchedulePhoto(teacherName, dayName, silent){
       return endMin>timeToMinutes(slot.time);
     });
     const shown=lesson||continuing;
-    const matchedStudent=shown ? (db.students||[]).find(s=>String(s.id)===String(shown.studentId) || s.name===shown.student) : null;
+    const matchedStudent=shown ? (db.students||[]).find(s=>lessonBelongsToStudent(shown, s)) : null;
     return {
       time:slot.time,
       timeEnd:slotEnd,
