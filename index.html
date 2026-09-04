@@ -414,7 +414,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-213</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-214</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -3783,6 +3783,70 @@ function saveEditStudent(id){
      }, 900);
    }
  }
+
+ // A student's name is DENORMALIZED onto their lessons, lesson logs,
+ // practice sessions and refunds — each stores its own copy, which is
+ // correct (a lesson should record who it was for even if the student
+ // record later goes away) but means a rename leaves every one of those
+ // records still showing the old name. The ledger and calendar read the
+ // lesson's copy, so the student list would show the new name while their
+ // lessons showed the old one, and the name-mismatch health check would
+ // start flagging a perfectly legitimate rename as a misassigned id.
+ //
+ // Linked courses are included: the contact sync above already renamed
+ // the sibling course records, so their lessons need the same treatment.
+ if(oldName && s.name && oldName!==s.name){
+   const linkedNow=(typeof getLinkedCourses==='function') ? getLinkedCourses(s) : [];
+   const ownIds=new Set([s].concat(linkedNow).map(c=>String(c.id)));
+   const ownPublicIds=new Set([s].concat(linkedNow).map(c=>String(c.public_id||'')).filter(Boolean));
+   let renamed=0;
+
+   (db.lessons||[]).forEach(l=>{
+     // Id-authoritative where possible; the name fallback only covers
+     // legacy lessons that never got a studentId written.
+     const mine = (l.studentId!=null && l.studentId!=='')
+       ? ownIds.has(String(l.studentId))
+       : (l.student===oldName);
+     if(!mine) return;
+     l.student=s.name;
+     renamed++;
+     if(typeof syncLessonUpdateToSupabase==='function'){ try{ syncLessonUpdateToSupabase(l); }catch(_){} }
+   });
+
+   (db.lessonLogs||[]).forEach(log=>{
+     const mine = (log.studentId!=null && log.studentId!=='')
+       ? (ownIds.has(String(log.studentId)) || ownPublicIds.has(String(log.studentId)))
+       : (log.studentName===oldName);
+     if(!mine) return;
+     log.studentName=s.name;
+     if(typeof syncLessonLogToSupabase==='function'){ try{ syncLessonLogToSupabase(log); }catch(_){} }
+   });
+
+   // These two carry the name only — no id to match on — so the old name
+   // is the only handle available.
+   (db.practiceSessions||[]).forEach(p=>{
+     if(p.studentName===oldName){
+       p.studentName=s.name;
+       if(typeof syncPracticeSessionToSupabase==='function'){ try{ syncPracticeSessionToSupabase(p); }catch(_){} }
+     }
+   });
+   (db.refunds||[]).forEach(r=>{ if(r.studentName===oldName) r.studentName=s.name; });
+
+   // A waiting-list entry linked to this student should follow the rename
+   // too, or the list keeps offering slots under a name that no longer
+   // exists.
+   (db.waitingList||[]).forEach(e=>{
+     if(e.studentId!=null && ownIds.has(String(e.studentId)) && e.name===oldName){
+       e.name=s.name;
+       if(typeof syncWaitingEntryToSupabase==='function'){ try{ syncWaitingEntryToSupabase(e); }catch(_){} }
+     }
+   });
+
+   if(renamed && typeof showToast==='function'){
+     setTimeout(function(){ showToast('Renamed on '+renamed+' lesson'+(renamed===1?'':'s')+' too'); }, 1400);
+   }
+ }
+
  s.lesson_day=document.getElementById('es-day')?.value||'';
  s.lessonTime=document.getElementById('es-time')?.value||'';
  s.isOnline=!!document.getElementById('es-online')?.checked;
