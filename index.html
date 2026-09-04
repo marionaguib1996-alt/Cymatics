@@ -414,7 +414,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-211</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-212</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1868,7 +1868,16 @@ function formatMonthName(monthStr){
 // "Cancel" then "continue to WhatsApp Web" before it could be sent.
 // This endpoint skips that entirely — no extension or redirector needed.
 function whatsAppSendUrl(phone, message){
-  return 'https://web.whatsapp.com/send?phone='+phone+'&text='+encodeURIComponent(message);
+  // Normalize HERE rather than trusting every caller. A raw local number
+  // (01012345678) is not a valid WhatsApp address — it needs the country
+  // code (201012345678) — and passing one through produces a link that
+  // opens to a blank/black screen with no error, which is impossible to
+  // diagnose from the UI. That's exactly what happened when a new caller
+  // passed a parent's phone2 straight from the student record.
+  // toWhatsAppNumber is idempotent (a number already in 20... form is
+  // returned unchanged), so callers that already convert are unaffected.
+  const normalized=(typeof toWhatsAppNumber==='function') ? toWhatsAppNumber(phone) : phone;
+  return 'https://web.whatsapp.com/send?phone='+normalized+'&text='+encodeURIComponent(message);
 }
 
 function toWhatsAppNumber(phone){
@@ -2671,6 +2680,7 @@ function enforceBundlePlanDeadlines(){
     );
     if(!forfeited.length) return; // bundle already fully used — nothing to forfeit
     forfeited.forEach(l=>{
+      if(typeof logRecordDeletion==='function') logRecordDeletion('lesson', l, 'lesson deleted');
       db.lessons=(db.lessons||[]).filter(x=>x!==l);
       if(typeof deleteLessonCloudRowById==='function'){ try{ deleteLessonCloudRowById(l.id); }catch(_){} }
     });
@@ -5931,6 +5941,8 @@ async function deleteResource(id){
     const {error}=await window.supabaseClientV1.from('resources').delete().eq('id', r.id);
     if(error){ alert('Failed to delete: '+error.message); return; }
   }
+  { const gone=(db.resources||[]).find(x=>String(x.id)===String(id));
+    if(gone && typeof logRecordDeletion==='function') logRecordDeletion('resource', gone, 'deleted from Resources'); }
   db.resources=(db.resources||[]).filter(x=>String(x.id)!==String(id));
   save();
   if(typeof renderResourcesPage==='function') renderResourcesPage();
@@ -5955,6 +5967,8 @@ function addNote(){
 
 function deleteNote(id){
   if(!confirm('Delete this note?')) return;
+  { const gone=(db.notes||[]).find(n=>n.id===id);
+    if(gone && typeof logRecordDeletion==='function') logRecordDeletion('note', gone, 'deleted from Notes'); }
   db.notes=(db.notes||[]).filter(n=>n.id!==id);
   save();
   renderNotesPage();
@@ -6855,6 +6869,76 @@ function applyLinkUnlinkedCourses(){
   previewLinkUnlinkedCourses();
 }
 
+// Every collection that can be deleted, and how to describe and restore
+// one of its records. Keeping this as data rather than a switch means a
+// new collection is one line here, not a new branch in three functions —
+// and it's the reason the log can cover the small things (a waiting-list
+// entry, a note) as cheaply as it covers a student.
+const DELETABLE_RECORD_TYPES={
+  student:          {collection:'students',         label:'Student',          describe:r=>r.name||'?'},
+  lesson:           {collection:'lessons',          label:'Lesson',           describe:r=>(r.student||'?')+' — '+(r.date||'?')+' '+(r.time||'')},
+  waitingEntry:     {collection:'waitingList',      label:'Waiting-list entry', describe:r=>(r.name||'?')+' — '+(r.instrument||'?')},
+  practiceSession:  {collection:'practiceSessions', label:'Practice session', describe:r=>(r.studentName||'?')+' — '+(r.date||'?')+' '+(r.time||'')},
+  note:             {collection:'notes',            label:'Note',             describe:r=>String(r.text||'').slice(0,60)},
+  resource:         {collection:'resources',        label:'Resource',         describe:r=>r.title||r.name||'?'},
+  teacherAbsence:   {collection:'teacherAbsences',  label:'Teacher absence',  describe:r=>(r.teacher||'?')+' — '+(r.date||'?')},
+  expense:          {collection:'expenses',         label:'Expense',          describe:r=>(r.cat||'?')+' — '+(r.month||'?')+' · '+(r.amount||0)+' EGP'},
+  otherRevenue:     {collection:'otherRevenue',     label:'Other revenue',    describe:r=>(r.label||r.source||'?')+' — '+(r.month||'?')},
+  refund:           {collection:'refunds',          label:'Refund',           describe:r=>(r.studentName||'?')+' — '+(r.month||'?')},
+  teacher:          {collection:'teacherProfiles',  label:'Teacher',          describe:r=>r.name||'?'}
+};
+
+// Generic counterpart to logStudentDeletion, for every OTHER record type.
+// Students keep their own function because they carry dependent data
+// (lessons, logs, payments) that has to be captured alongside them; these
+// records stand alone, so a snapshot of the record itself is a complete
+// restore.
+function logRecordDeletion(type, record, reason){
+  if(!record) return;
+  const def=DELETABLE_RECORD_TYPES[type];
+  if(!def) return;
+  db.deletionLog=db.deletionLog||[];
+  const entry={
+    at:new Date().toISOString(),
+    reason:reason||'unspecified',
+    recordType:type,
+    recordId:record.id,
+    name:def.label+': '+def.describe(record),
+    snapshot:JSON.parse(JSON.stringify(record))
+  };
+  db.deletionLog.unshift(entry);
+  if(db.deletionLog.length>200) db.deletionLog.length=200;
+  if(typeof syncDeletionLogEntryToSupabase==='function'){
+    try{ syncDeletionLogEntryToSupabase(entry); }catch(_){}
+  }
+  console.warn(def.label+' removed: '+def.describe(record)+' — reason: '+(reason||'unspecified')+'. Recoverable via Database → Deletion Log.');
+}
+
+// Restores any non-student record straight back into its collection.
+function restoreDeletedRecord(index){
+  const entry=(db.deletionLog||[])[index];
+  if(!entry || !entry.snapshot){ showToast('That log entry has no restorable snapshot.'); return; }
+  const def=DELETABLE_RECORD_TYPES[entry.recordType];
+  if(!def){ showToast('Unknown record type — cannot restore automatically.'); return; }
+  const list=db[def.collection]=db[def.collection]||[];
+  if(list.some(r=>String(r.id)===String(entry.recordId))){
+    showToast('That '+def.label.toLowerCase()+' is already present.');
+    renderDeletionLog();
+    return;
+  }
+  if(!confirm('Restore this '+def.label.toLowerCase()+'?\n\n'+entry.name)) return;
+  list.push(JSON.parse(JSON.stringify(entry.snapshot)));
+  save();
+  // Re-render whatever view owns this collection.
+  ['renderStudents','renderLessons','renderWaitingList','renderPracticeSessionsPage',
+   'renderNotesPage','renderResources','renderUpcomingAbsences','renderFinances',
+   'renderOverview','renderProfiles'].forEach(fn=>{
+    if(typeof window[fn]==='function'){ try{ window[fn](); }catch(_){} }
+  });
+  renderDeletionLog();
+  showToast(def.label+' restored ✓');
+}
+
 function renderDeletionLog(){
   const el=document.getElementById('deletion-log-results');
   if(!el) return;
@@ -6865,13 +6949,32 @@ function renderDeletionLog(){
   }
   el.innerHTML='<div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px;max-height:340px;overflow-y:auto">'
     + log.map(function(entry, i){
-        const stillPresent=(db.students||[]).some(function(s){ return String(s.id)===String(entry.studentId) || (entry.studentCode && s.student_code===entry.studentCode); });
+        // The log now covers every record type, not just students, so each
+        // entry routes to the restore that knows how to put THAT kind of
+        // record back. Older entries have no recordType and are students
+        // by definition.
+        const type=entry.recordType||'student';
+        const def=(typeof DELETABLE_RECORD_TYPES!=='undefined') ? DELETABLE_RECORD_TYPES[type] : null;
+        let stillPresent, restoreBtn;
+        if(type==='student'){
+          stillPresent=(db.students||[]).some(function(s){ return String(s.id)===String(entry.studentId) || (entry.studentCode && s.student_code===entry.studentCode); });
+          restoreBtn='<button class="btn btn-sm btn-gold" style="margin-top:6px" onclick="restoreDeletedStudent('+i+')">Restore this student</button>';
+        } else {
+          const list=(def && db[def.collection]) || [];
+          stillPresent=list.some(function(r){ return String(r.id)===String(entry.recordId); });
+          restoreBtn='<button class="btn btn-sm btn-gold" style="margin-top:6px" onclick="restoreDeletedRecord('+i+')">Restore this '+escapeHtml((def?def.label:'record').toLowerCase())+'</button>';
+        }
+        const sub=(type==='student')
+          ? escapeHtml(entry.instrument||'?')+' · '+escapeHtml(entry.teacher||'?')
+          : escapeHtml(def?def.label:'Record');
+        const extra=(type==='student' && entry.lessons)
+          ? ' <span style="color:var(--text-muted)">· '+entry.lessons.length+' lesson(s) captured</span>' : '';
         return '<div style="padding:8px 0;border-bottom:1px solid #2c5a2c">'
-          +'<div style="font-weight:700;color:#e2c47a">'+escapeHtml(entry.name||'?')+' <span style="font-weight:400;color:var(--text-muted)">'+escapeHtml(entry.instrument||'?')+' · '+escapeHtml(entry.teacher||'?')+'</span></div>'
-          +'<div style="font-size:12px;color:#c8d8e8">Removed '+escapeHtml(new Date(entry.at).toLocaleString())+' — '+escapeHtml(entry.reason)+'</div>'
+          +'<div style="font-weight:700;color:#e2c47a">'+escapeHtml(entry.name||'?')+' <span style="font-weight:400;color:var(--text-muted)">'+sub+'</span></div>'
+          +'<div style="font-size:12px;color:#c8d8e8">Removed '+escapeHtml(new Date(entry.at).toLocaleString())+' — '+escapeHtml(entry.reason)+extra+'</div>'
           +(stillPresent
-            ? '<div style="font-size:12px;color:#a8e8a8;margin-top:4px">✓ Currently present in the roster</div>'
-            : '<button class="btn btn-sm btn-gold" style="margin-top:6px" onclick="restoreDeletedStudent('+i+')">Restore this student</button>')
+            ? '<div style="font-size:12px;color:#a8e8a8;margin-top:4px">✓ Currently present</div>'
+            : restoreBtn)
           +'</div>';
       }).join('')
     +'</div>';
@@ -8182,6 +8285,127 @@ async function runDataHealthCheck(){
     total:orphanPaymentKeys.length,
     items:orphanPaymentKeys.slice(0,20).concat(orphanPaymentKeys.length>20 ? [`…and ${orphanPaymentKeys.length-20} more`] : [])
   });
+
+  // 15b. Every remaining collection, checked for the same orphan problem.
+  // These are the "small" records — a practice session, a refund, a
+  // wishlist entry — that no check previously touched at all. An orphan
+  // here is quieter than an orphaned lesson but not harmless: it still
+  // counts toward totals, still occupies a room, and still can't be
+  // opened or corrected because the student it names is gone.
+  const teacherNamesLower=new Set((db.teacherProfiles||[])
+    .filter(t=>(t.status||'active')!=='archived')
+    .map(t=>String(t.name||'').toLowerCase()));
+  const studentNamesLower=new Set((db.students||[]).map(s=>String(s.name||'').toLowerCase()));
+
+  function reportOrphans(title, list, describe){
+    if(!list.length) return;
+    issues.push({
+      title,
+      total:list.length,
+      items:list.slice(0,20).map(describe)
+        .concat(list.length>20 ? [`…and ${list.length-20} more`] : [])
+    });
+  }
+
+  // Practice sessions naming a student who no longer exists.
+  reportOrphans(
+    'Practice sessions booked for a student that no longer exists',
+    (db.practiceSessions||[]).filter(p=>
+      (p.status_record||'active')!=='archived' &&
+      p.studentName && !studentNamesLower.has(String(p.studentName).toLowerCase())
+    ),
+    p=>`${p.studentName||'?'} — ${p.date||'?'} ${p.time||''} (${p.instrument||'?'})`
+  );
+
+  // Refunds and other revenue tied to a student who is gone.
+  reportOrphans(
+    'Refunds recorded against a student that no longer exists',
+    (db.refunds||[]).filter(r=>r.studentName && !studentNamesLower.has(String(r.studentName).toLowerCase())),
+    r=>`${r.studentName||'?'} — ${r.month||'?'} · ${r.amount||0} EGP`
+  );
+
+  // Wishlist entries whose student is gone. db.wishlists is an OBJECT
+  // keyed by student (public_id or id), not an array — treating it as one
+  // threw and took the whole health check down with it, which is why this
+  // reads Object.keys rather than .filter.
+  reportOrphans(
+    'Wishlist entries for a student that no longer exists',
+    Object.keys(db.wishlists||{}).filter(key=>
+      !studentIds.has(String(key)) &&
+      !(db.students||[]).some(st=>String(st.public_id||'')===String(key))
+    ),
+    key=>`student ${key} — ${((db.wishlists||{})[key]||[]).length} item(s)`
+  );
+
+  // Teacher absences for a teacher who no longer exists — these silently
+  // block slots on the calendar for someone who isn't here any more.
+  reportOrphans(
+    'Teacher absences recorded for a teacher that no longer exists',
+    (db.teacherAbsences||[]).filter(a=>a.teacher && !teacherNamesLower.has(String(a.teacher).toLowerCase())),
+    a=>`${a.teacher} — ${a.date||'?'}${a.scope==='range'?' ('+(a.fromTime||'')+'–'+(a.toTime||'')+')':''}`
+  );
+
+  // Payroll marked paid for a teacher who no longer exists.
+  reportOrphans(
+    'Payroll marked paid for a teacher that no longer exists',
+    Object.keys(db.payrollPaid||{}).filter(k=>{
+      const idx=k.lastIndexOf('_');
+      if(idx<0) return false;
+      return !teacherNamesLower.has(k.slice(0,idx).toLowerCase());
+    }),
+    k=>k
+  );
+
+  // Payment AMOUNT snapshots left behind after their payment record was
+  // cleared — harmless individually, but they accumulate and would make a
+  // future re-marking read back an amount that no longer applies.
+  reportOrphans(
+    'Payment amount snapshots with no matching payment record',
+    Object.keys(db.paymentAmounts||{}).filter(k=>!(db.payments||{})[k]),
+    k=>`${k} — ${(db.paymentAmounts||{})[k]} EGP`
+  );
+
+  // Waiting-list entries missing the fields the matcher needs. Without an
+  // instrument or any requested day, an entry can never produce a match,
+  // so it sits in the list forever looking like nobody has a slot.
+  reportOrphans(
+    'Waiting-list entries that can never match (no instrument or no day requested)',
+    (db.waitingList||[]).filter(e=>
+      (e.status||'waiting')!=='deleted' &&
+      (!e.instrument || !((typeof waitingDaysFor==='function' ? waitingDaysFor(e) : (e.days||[])).length))
+    ),
+    e=>`${e.name||'?'} — ${e.instrument?'':'no instrument'}${(!e.instrument && !((e.days||[]).length))?', ':''}${((e.days||[]).length)?'':'no days requested'}`
+  );
+
+  // Expenses and other revenue with no amount — they contribute nothing
+  // but look like real entries in the finance lists.
+  reportOrphans(
+    'Expenses with no amount recorded',
+    (db.expenses||[]).filter(e=>!Number(e.amount)),
+    e=>`${e.cat||'?'} — ${e.month||'?'}`
+  );
+  reportOrphans(
+    'Other-revenue entries with no amount recorded',
+    (db.otherRevenue||[]).filter(r=>!Number(r.amount)),
+    r=>`${r.label||r.source||'?'} — ${r.month||'?'}`
+  );
+
+  // Lessons with no date or no time — these fall out of every calendar
+  // and ledger view silently, so they're invisible until something that
+  // counts them disagrees with what's on screen.
+  reportOrphans(
+    'Lessons missing a date or a time',
+    (db.lessons||[]).filter(l=>(l.status_record||'active')!=='archived' && (!l.date || !l.time)),
+    l=>`${l.student||'?'} — ${l.date||'NO DATE'} ${l.time||'NO TIME'} (${l.instrument||'?'})`
+  );
+
+  // Students with no lesson day — they can't be auto-scheduled or renewed
+  // and drop out of Renewals Due entirely.
+  reportOrphans(
+    'Active students with no lesson day set (cannot be scheduled or renewed)',
+    students.filter(s=>!s.lesson_day && s.plan!=='trial' && s.plan!=='group-trial'),
+    s=>`${s.name||'?'} — ${s.instrument||'?'} · ${s.teacher||'?'}`
+  );
 
   // 16. Sync health, surfaced inline — pending writes not yet confirmed on
   // the server, and any recent failed cloud writes. Same numbers the header
@@ -16079,6 +16303,8 @@ function removeFromWaitingList(id){
   // still holding it locally would re-upload it on its next download,
   // resurrecting a removed entry. The tombstone propagates the removal.
   const tombstone=Object.assign({}, e, {status:'deleted'});
+  { const gone=(db.waitingList||[]).find(x=>String(x.id)===String(id));
+    if(gone && typeof logRecordDeletion==='function') logRecordDeletion('waitingEntry', gone, 'removed from Waiting List'); }
   db.waitingList=(db.waitingList||[]).filter(x=>String(x.id)!==String(id));
   save(); renderWaitingList(); updateWaitingBadge();
   if(typeof syncWaitingEntryToSupabase==='function') syncWaitingEntryToSupabase(tombstone);
@@ -19143,6 +19369,8 @@ function markPracticeSessionAttended(id){
 
 function deletePracticeSession(id){
   if(!confirm('Delete this practice session booking?')) return;
+  { const gone=(db.practiceSessions||[]).find(x=>x.id===id);
+    if(gone && typeof logRecordDeletion==='function') logRecordDeletion('practiceSession', gone, 'deleted from Practice Sessions'); }
   db.practiceSessions=(db.practiceSessions||[]).filter(x=>x.id!==id);
   save();
   renderPracticeSessionsPage();
@@ -19527,6 +19755,8 @@ function deleteTeacherAbsence(absenceId){
   const a=(db.teacherAbsences||[]).find(x=>String(x.id)===String(absenceId));
   if(!a) return;
   if(!confirm('Remove this absence for '+a.teacher+' on '+formatDateDMY(a.date)+'?')) return;
+  { const gone=(db.teacherAbsences||[]).find(x=>String(x.id)===String(absenceId));
+    if(gone && typeof logRecordDeletion==='function') logRecordDeletion('teacherAbsence', gone, 'absence removed'); }
   db.teacherAbsences=(db.teacherAbsences||[]).filter(x=>String(x.id)!==String(absenceId));
   save();
   renderUpcomingAbsences();
