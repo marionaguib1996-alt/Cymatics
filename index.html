@@ -414,7 +414,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-215</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-216</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1278,7 +1278,7 @@ input::placeholder{color:var(--text-dim)}
     <div id="backdate-results" style="margin-top:12px;margin-bottom:18px"></div>
 
     <div class="card-title" style="margin-bottom:6px;font-size:14px">2 · Remove Lesson Logs With No Lesson</div>
-    <small style="display:block;margin-bottom:8px;color:var(--text-muted)">Logs left over from before a reset, describing sessions that no longer exist anywhere. Try <b>Reconnect Orphaned Lesson Logs</b> above first if the lessons might still be here under different ids. Everything removed here goes to the Deletion Log and can be restored.</small>
+    <small style="display:block;margin-bottom:8px;color:var(--text-muted)">Only logs with <b>no matching lesson at all</b>. Anything re-linkable is automatically excluded and handled by <b>Reconnect Orphaned Lesson Logs</b> above instead — so this can't throw away a log whose session still exists. Everything removed goes to the Deletion Log and can be restored.</small>
     <button class="btn" onclick="previewCleanOrphanedLogs()">🔍 Preview (changes nothing)</button>
     <div id="orphan-logs-results" style="margin-top:12px;margin-bottom:18px"></div>
 
@@ -1290,7 +1290,12 @@ input::placeholder{color:var(--text-dim)}
     <div class="card-title" style="margin-bottom:6px;font-size:14px">4 · Re-link Waiting-List Entries to Re-entered Students</div>
     <small style="display:block;margin-bottom:8px;color:var(--text-muted)">An entry pointing at a student id that no longer exists, where someone of the same name is back under a new one. Re-linking keeps the entry and their place in the queue.</small>
     <button class="btn" onclick="previewRelinkWaitingEntries()">🔍 Preview (changes nothing)</button>
-    <div id="relink-waiting-results" style="margin-top:12px"></div>
+    <div id="relink-waiting-results" style="margin-top:12px;margin-bottom:18px"></div>
+
+    <div class="card-title" style="margin-bottom:6px;font-size:14px">5 · Update Lesson Names Left Over From a Rename</div>
+    <small style="display:block;margin-bottom:8px;color:var(--text-muted)">Renaming a student now updates their lessons automatically, but any rename done before that left its lessons carrying the old name. This splits them in two: near-identical names (a spelling fix) can be updated in bulk, while names too different to be the same person are listed for you to check by hand — those may be genuinely misassigned lessons, and relabelling them would hide a real problem.</small>
+    <button class="btn" onclick="previewFixStaleLessonNames()">🔍 Preview (changes nothing)</button>
+    <div id="stale-names-results" style="margin-top:12px"></div>
   </div>
 </div>
 
@@ -7104,10 +7109,18 @@ function applyBackdateJoinedDates(){
 // and can never be opened or corrected. Deleted through the deletion log
 // so they remain recoverable, unlike a straight wipe.
 function findOrphanedLessonLogs(){
-  const lessonIds=new Set((db.lessons||[]).map(l=>String(l.id)));
-  return (db.lessonLogs||[]).filter(log=>
-    log.lessonId!=null && !lessonIds.has(String(log.lessonId))
-  );
+  // ONLY the logs that genuinely have no lesson to attach to. Reusing
+  // findOrphanLogMatches (which the Reconnect tool already uses) means a
+  // log whose lesson still exists under a different id can never be
+  // offered for deletion here — it's reconnectable, and deleting it would
+  // throw away a real record of a real session. That mattered
+  // immediately: a log dated 2026-09-04 looked orphaned, but the lesson
+  // was sitting right there in the ledger.
+  // Ambiguous matches are excluded too: more than one candidate lesson
+  // means a person has to choose, not that the log is junk.
+  if(typeof findOrphanLogMatches!=='function') return [];
+  const {unmatched}=findOrphanLogMatches();
+  return (unmatched||[]).map(u=>u.log||u).filter(Boolean);
 }
 
 function previewCleanOrphanedLogs(){
@@ -7120,7 +7133,7 @@ function previewCleanOrphanedLogs(){
   }
   el.innerHTML='<div style="background:#3a3520;border:1px solid #6a5a2a;border-radius:6px;padding:12px;margin-bottom:10px">'
     +'<div style="font-weight:700;color:#e2c47a;margin-bottom:6px">'+rows.length+' lesson log(s) with no lesson</div>'
-    +'<div style="font-size:13px;color:#c8d8e8;line-height:1.6">These describe sessions that no longer exist, so they can\'t be opened or corrected from anywhere in the app. Try <b>Reconnect Orphaned Lesson Logs</b> first if you think the lessons are still here under different ids — this removes them, and every one is restorable from the Deletion Log afterwards.</div></div>'
+    +'<div style="font-size:13px;color:#c8d8e8;line-height:1.6">These have <b>no matching lesson at all</b> — anything that could be re-linked, or that matches more than one lesson, is deliberately excluded and belongs in <b>Reconnect Orphaned Lesson Logs</b> above. Every one removed here is restorable from the Deletion Log.</div></div>'
     +'<div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px;max-height:260px;overflow-y:auto">'
     +'<div style="font-size:13px;color:#c8d8e8;line-height:1.8">'
     + rows.slice(0,40).map(l=>escapeHtml((l.studentName||'?')+' — '+(l.lessonDate||'?'))).join('<br>')
@@ -7234,6 +7247,92 @@ function applyRelinkWaitingEntries(){
   if(typeof renderWaitingList==='function') renderWaitingList();
   showToast(rows.length+' entry(s) re-linked ✓');
   previewRelinkWaitingEntries();
+}
+
+// Lessons still carrying a student's OLD name after a rename. Renaming
+// now propagates automatically, but any rename done before that existed
+// left its lessons behind, and they can't be fixed by renaming again
+// (the name is already correct on the student record).
+//
+// The delicate part: this is the SAME data the "name doesn't match"
+// health check uses to catch reused student ids. Blindly relabelling
+// every mismatch would paper over genuine corruption — a lesson that
+// really does belong to someone else would simply be renamed to look
+// correct. So the two cases are separated by how similar the names are:
+// "Youssef Bakey" vs "Youssef Bakry" is a typo fix; "Moaz Ismail" vs
+// "Old Vocals Student" is a different human being, and no tool should
+// quietly relabel that.
+function nameSimilarity(a, b){
+  a=String(a||'').trim().toLowerCase(); b=String(b||'').trim().toLowerCase();
+  if(!a || !b) return 0;
+  if(a===b) return 1;
+  const m=a.length, n=b.length;
+  const d=Array.from({length:m+1}, (_,i)=>[i].concat(new Array(n).fill(0)));
+  for(let j=1;j<=n;j++) d[0][j]=j;
+  for(let i=1;i<=m;i++){
+    for(let j=1;j<=n;j++){
+      d[i][j]=Math.min(d[i-1][j]+1, d[i][j-1]+1, d[i-1][j-1]+(a[i-1]===b[j-1]?0:1));
+    }
+  }
+  return 1-(d[m][n]/Math.max(m,n));
+}
+
+const RENAME_SIMILARITY_THRESHOLD=0.7;
+
+function findStaleLessonNames(){
+  const safe=[], review=[];
+  (db.lessons||[]).forEach(l=>{
+    if((l.status_record||'active')==='archived' || !l.student) return;
+    const st=(db.students||[]).find(x=>lessonBelongsToStudent(l, x));
+    if(!st || !st.name) return;
+    if(normalizeStudentNameForMatch(l.student)===normalizeStudentNameForMatch(st.name)) return;
+    const sim=nameSimilarity(l.student, st.name);
+    (sim>=RENAME_SIMILARITY_THRESHOLD ? safe : review).push({lesson:l, student:st, sim});
+  });
+  return {safe, review};
+}
+
+function previewFixStaleLessonNames(){
+  const el=document.getElementById('stale-names-results');
+  if(!el) return;
+  const {safe, review}=findStaleLessonNames();
+  if(!safe.length && !review.length){
+    el.innerHTML='<div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px;color:#a8e8a8">✅ Every lesson carries its student\'s current name.</div>';
+    return;
+  }
+  let html='';
+  if(safe.length){
+    html+='<div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px;margin-bottom:10px">'
+      +'<div style="font-weight:700;color:#a8e8a8;margin-bottom:6px">'+safe.length+' lesson(s) left over from a rename — safe to update</div>'
+      +'<div style="font-size:13px;color:#c8d8e8;line-height:1.6;margin-bottom:8px">The old and new names are near-identical, so these are a spelling correction on the same person.</div>'
+      +'<div style="font-size:13px;color:#c8d8e8;line-height:1.8;max-height:220px;overflow-y:auto">'
+      + safe.slice(0,30).map(x=>'"'+escapeHtml(x.lesson.student)+'" → <b>'+escapeHtml(x.student.name)+'</b> — '+escapeHtml(x.lesson.date||'?')).join('<br>')
+      + (safe.length>30 ? '<br>…and '+(safe.length-30)+' more' : '')
+      +'</div><button class="btn btn-gold" style="margin-top:12px" onclick="applyFixStaleLessonNames()">Update these '+safe.length+' lesson(s)</button></div>';
+  }
+  if(review.length){
+    html+='<div style="background:#3a2020;border:1px solid #6a2a2a;border-radius:6px;padding:12px">'
+      +'<div style="font-weight:700;color:#f0a0a0;margin-bottom:6px">'+review.length+' lesson(s) need YOUR review — not touched</div>'
+      +'<div style="font-size:13px;color:#c8d8e8;line-height:1.6;margin-bottom:8px">The names are too different to be a spelling fix, so this may be a genuinely misassigned lesson rather than a rename. Renaming it automatically would hide that. Check these by hand.</div>'
+      +'<div style="font-size:13px;color:#c8d8e8;line-height:1.8;max-height:200px;overflow-y:auto">'
+      + review.slice(0,25).map(x=>'"'+escapeHtml(x.lesson.student)+'" vs <b>'+escapeHtml(x.student.name)+'</b> — '+escapeHtml(x.lesson.date||'?')+' ('+escapeHtml(x.lesson.instrument||'?')+')').join('<br>')
+      +'</div></div>';
+  }
+  el.innerHTML=html;
+}
+
+function applyFixStaleLessonNames(){
+  const {safe}=findStaleLessonNames();
+  if(!safe.length){ showToast('Nothing to update.'); return; }
+  if(!confirm('Update '+safe.length+' lesson(s) to their student\'s current name?\n\nOnly near-identical names are included — anything that looks like a different person is left for you to review.')) return;
+  safe.forEach(function(x){
+    x.lesson.student=x.student.name;
+    if(typeof syncLessonUpdateToSupabase==='function'){ try{ syncLessonUpdateToSupabase(x.lesson); }catch(_){} }
+  });
+  save();
+  if(typeof renderLessons==='function') renderLessons();
+  showToast(safe.length+' lesson name(s) updated ✓');
+  previewFixStaleLessonNames();
 }
 
 function renderDeletionLog(){
