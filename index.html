@@ -414,7 +414,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-214</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-215</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1267,6 +1267,30 @@ input::placeholder{color:var(--text-dim)}
     <small style="display:block;margin-bottom:8px;color:var(--text-muted)">Finds same-name students taking genuinely different courses who aren't connected — so they count as two people in your student total and don't show the "Course 1 of 2" badge. Only the connection changes; lessons, payments and payroll are untouched.</small>
     <button class="btn" onclick="previewLinkUnlinkedCourses()">🔍 Preview (changes nothing)</button>
     <div id="unlinked-courses-results" style="margin-top:14px"></div>
+
+    <div style="border-top:2px solid var(--gold);margin:24px 0 16px;"></div>
+    <div class="card-title" style="margin-bottom:4px">Post-Reset Cleanup</div>
+    <small style="display:block;margin-bottom:14px;color:var(--text-muted)">Four tools for the specific mess a database reset leaves behind, when students are re-entered by hand and their real history is typed back in around them. Each previews before changing anything.</small>
+
+    <div class="card-title" style="margin-bottom:6px;font-size:14px">1 · Fix Start Dates Earlier Than Their Own Lessons</div>
+    <small style="display:block;margin-bottom:8px;color:var(--text-muted)">A re-entered student's Starting Date is the day they were re-typed, not the day they actually started — so their real earlier lessons look impossible and trip the "reused student id" warning. This moves each Starting Date back to that student's own earliest lesson. No lesson, payment or payroll record is touched.</small>
+    <button class="btn" onclick="previewBackdateJoinedDates()">🔍 Preview (changes nothing)</button>
+    <div id="backdate-results" style="margin-top:12px;margin-bottom:18px"></div>
+
+    <div class="card-title" style="margin-bottom:6px;font-size:14px">2 · Remove Lesson Logs With No Lesson</div>
+    <small style="display:block;margin-bottom:8px;color:var(--text-muted)">Logs left over from before a reset, describing sessions that no longer exist anywhere. Try <b>Reconnect Orphaned Lesson Logs</b> above first if the lessons might still be here under different ids. Everything removed here goes to the Deletion Log and can be restored.</small>
+    <button class="btn" onclick="previewCleanOrphanedLogs()">🔍 Preview (changes nothing)</button>
+    <div id="orphan-logs-results" style="margin-top:12px;margin-bottom:18px"></div>
+
+    <div class="card-title" style="margin-bottom:6px;font-size:14px">3 · Clear Payment Snapshots With No Payment</div>
+    <small style="display:block;margin-bottom:8px;color:var(--text-muted)">Left behind when a month is un-marked, or when lessons are entered to correct payroll without a payment attached. They affect no revenue figure — clearing them only stops a stale amount being read back if that month is ever marked paid later.</small>
+    <button class="btn" onclick="previewCleanPaymentSnapshots()">🔍 Preview (changes nothing)</button>
+    <div id="orphan-snapshots-results" style="margin-top:12px;margin-bottom:18px"></div>
+
+    <div class="card-title" style="margin-bottom:6px;font-size:14px">4 · Re-link Waiting-List Entries to Re-entered Students</div>
+    <small style="display:block;margin-bottom:8px;color:var(--text-muted)">An entry pointing at a student id that no longer exists, where someone of the same name is back under a new one. Re-linking keeps the entry and their place in the queue.</small>
+    <button class="btn" onclick="previewRelinkWaitingEntries()">🔍 Preview (changes nothing)</button>
+    <div id="relink-waiting-results" style="margin-top:12px"></div>
   </div>
 </div>
 
@@ -6962,7 +6986,8 @@ const DELETABLE_RECORD_TYPES={
   expense:          {collection:'expenses',         label:'Expense',          describe:r=>(r.cat||'?')+' — '+(r.month||'?')+' · '+(r.amount||0)+' EGP'},
   otherRevenue:     {collection:'otherRevenue',     label:'Other revenue',    describe:r=>(r.label||r.source||'?')+' — '+(r.month||'?')},
   refund:           {collection:'refunds',          label:'Refund',           describe:r=>(r.studentName||'?')+' — '+(r.month||'?')},
-  teacher:          {collection:'teacherProfiles',  label:'Teacher',          describe:r=>r.name||'?'}
+  teacher:          {collection:'teacherProfiles',  label:'Teacher',          describe:r=>r.name||'?'},
+  lessonLog:        {collection:'lessonLogs',       label:'Lesson log',       describe:r=>(r.studentName||'?')+' — '+(r.lessonDate||'?')}
 };
 
 // Generic counterpart to logStudentDeletion, for every OTHER record type.
@@ -7014,6 +7039,201 @@ function restoreDeletedRecord(index){
   });
   renderDeletionLog();
   showToast(def.label+' restored ✓');
+}
+
+// ── Post-reset cleanup ──────────────────────────────────────────────────
+// After the database was cleared and students re-entered by hand, their
+// joined_date became the DAY THEY WERE RE-TYPED, not the day they
+// actually started. Their real August lessons were then entered against
+// that later date, so the "lesson dated before the student registered"
+// check — which exists to catch reused ids — fired on ~29 perfectly
+// correct records.
+//
+// Backdating joined_date to each student's OWN earliest lesson restores
+// the truth (they were clearly here by then) and clears the false alarm
+// without touching a single lesson.
+function findBackdatableStudents(){
+  return (db.students||[]).map(s=>{
+    if(!s.joined_date) return null;
+    const own=(db.lessons||[]).filter(l=>
+      lessonBelongsToStudent(l, s) && (l.status_record||'active')!=='archived' && l.date
+    );
+    if(!own.length) return null;
+    const earliest=own.map(l=>l.date).sort()[0];
+    if(earliest>=s.joined_date) return null;
+    return {student:s, from:s.joined_date, to:earliest, count:own.filter(l=>l.date<s.joined_date).length};
+  }).filter(Boolean).sort((a,b)=>String(a.to).localeCompare(String(b.to)));
+}
+
+function previewBackdateJoinedDates(){
+  const el=document.getElementById('backdate-results');
+  if(!el) return;
+  const rows=findBackdatableStudents();
+  if(!rows.length){
+    el.innerHTML='<div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px;color:#a8e8a8">✅ No students have lessons predating their start date.</div>';
+    return;
+  }
+  el.innerHTML='<div style="background:#3a3520;border:1px solid #6a5a2a;border-radius:6px;padding:12px;margin-bottom:10px">'
+    +'<div style="font-weight:700;color:#e2c47a;margin-bottom:6px">'+rows.length+' student(s) whose start date is later than their own earliest lesson</div>'
+    +'<div style="font-size:13px;color:#c8d8e8;line-height:1.6">Their Starting Date moves back to the first lesson they actually have. No lesson, payment or payroll record is touched — only the student\'s own start date, which is what the mismatch warning is comparing against.</div></div>'
+    +'<div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px;max-height:280px;overflow-y:auto">'
+    +'<div style="font-size:13px;color:#c8d8e8;line-height:1.8">'
+    + rows.map(r=>escapeHtml(r.student.name||'?')+' — '+escapeHtml(r.from)+' → <b>'+escapeHtml(r.to)+'</b> ('+r.count+' lesson(s) affected)').join('<br>')
+    +'</div></div>'
+    +'<button class="btn btn-gold" style="margin-top:12px" onclick="applyBackdateJoinedDates()">Backdate these '+rows.length+' student(s)</button>';
+}
+
+function applyBackdateJoinedDates(){
+  const rows=findBackdatableStudents();
+  if(!rows.length){ showToast('Nothing to backdate.'); return; }
+  if(!confirm('Move '+rows.length+' student(s) Starting Date back to their earliest lesson?\n\nOnly the start date changes — no lesson, payment or payroll record is touched.')) return;
+  rows.forEach(function(r){
+    r.student.joined_date=r.to;
+    r.student._localModifiedAt=Date.now();
+    if(typeof syncStudentUpdateToSupabase==='function'){ try{ syncStudentUpdateToSupabase(r.student); }catch(_){} }
+  });
+  save();
+  if(typeof renderStudents==='function') renderStudents();
+  showToast(rows.length+' start date(s) corrected ✓');
+  previewBackdateJoinedDates();
+}
+
+// Lesson logs whose lesson no longer exists. After a reset these are
+// leftovers from before it — the log rows survived while their lessons
+// did not, so they describe sessions that aren't in the system at all
+// and can never be opened or corrected. Deleted through the deletion log
+// so they remain recoverable, unlike a straight wipe.
+function findOrphanedLessonLogs(){
+  const lessonIds=new Set((db.lessons||[]).map(l=>String(l.id)));
+  return (db.lessonLogs||[]).filter(log=>
+    log.lessonId!=null && !lessonIds.has(String(log.lessonId))
+  );
+}
+
+function previewCleanOrphanedLogs(){
+  const el=document.getElementById('orphan-logs-results');
+  if(!el) return;
+  const rows=findOrphanedLessonLogs();
+  if(!rows.length){
+    el.innerHTML='<div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px;color:#a8e8a8">✅ Every lesson log still has its lesson.</div>';
+    return;
+  }
+  el.innerHTML='<div style="background:#3a3520;border:1px solid #6a5a2a;border-radius:6px;padding:12px;margin-bottom:10px">'
+    +'<div style="font-weight:700;color:#e2c47a;margin-bottom:6px">'+rows.length+' lesson log(s) with no lesson</div>'
+    +'<div style="font-size:13px;color:#c8d8e8;line-height:1.6">These describe sessions that no longer exist, so they can\'t be opened or corrected from anywhere in the app. Try <b>Reconnect Orphaned Lesson Logs</b> first if you think the lessons are still here under different ids — this removes them, and every one is restorable from the Deletion Log afterwards.</div></div>'
+    +'<div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px;max-height:260px;overflow-y:auto">'
+    +'<div style="font-size:13px;color:#c8d8e8;line-height:1.8">'
+    + rows.slice(0,40).map(l=>escapeHtml((l.studentName||'?')+' — '+(l.lessonDate||'?'))).join('<br>')
+    + (rows.length>40 ? '<br>…and '+(rows.length-40)+' more' : '')
+    +'</div></div>'
+    +'<button class="btn btn-gold" style="margin-top:12px" onclick="applyCleanOrphanedLogs()">Remove these '+rows.length+' log(s)</button>';
+}
+
+function applyCleanOrphanedLogs(){
+  const rows=findOrphanedLessonLogs();
+  if(!rows.length){ showToast('Nothing to clean.'); return; }
+  if(!confirm('Remove '+rows.length+' orphaned lesson log(s)?\n\nEach is recorded in the Deletion Log first, so they can be restored.')) return;
+  rows.forEach(function(log){
+    if(typeof logRecordDeletion==='function') logRecordDeletion('lessonLog', log, 'orphaned — its lesson no longer exists');
+  });
+  const ids=new Set(rows.map(l=>String(l.id)));
+  db.lessonLogs=(db.lessonLogs||[]).filter(l=>!ids.has(String(l.id)));
+  save();
+  showToast(rows.length+' orphaned log(s) removed ✓');
+  previewCleanOrphanedLogs();
+}
+
+// Payment AMOUNT snapshots with no matching payment. Harmless to revenue
+// (which reads db.payments, so an unpaid month counts nothing either way)
+// but they accumulate and would make a later re-marking read back a stale
+// figure.
+function findOrphanedPaymentSnapshots(){
+  return Object.keys(db.paymentAmounts||{}).filter(k=>!(db.payments||{})[k]);
+}
+
+function previewCleanPaymentSnapshots(){
+  const el=document.getElementById('orphan-snapshots-results');
+  if(!el) return;
+  const keys=findOrphanedPaymentSnapshots();
+  if(!keys.length){
+    el.innerHTML='<div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px;color:#a8e8a8">✅ Every payment snapshot has a matching payment.</div>';
+    return;
+  }
+  el.innerHTML='<div style="background:#3a3520;border:1px solid #6a5a2a;border-radius:6px;padding:12px;margin-bottom:10px">'
+    +'<div style="font-weight:700;color:#e2c47a;margin-bottom:6px">'+keys.length+' payment snapshot(s) with no payment</div>'
+    +'<div style="font-size:13px;color:#c8d8e8;line-height:1.6">These don\'t affect any revenue figure — collected totals read the payment records, and there are none for these. Clearing them just stops a stale amount being read back if that month is ever marked paid later.</div></div>'
+    +'<div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px;max-height:220px;overflow-y:auto">'
+    +'<div style="font-size:13px;color:#c8d8e8;line-height:1.8">'
+    + keys.map(k=>{
+        const id=k.slice(0, k.indexOf('_'));
+        const st=(db.students||[]).find(x=>String(x.id)===id);
+        return escapeHtml((st?st.name:'student '+id)+' — '+k.slice(k.indexOf('_')+1)+' · '+((db.paymentAmounts||{})[k])+' EGP');
+      }).join('<br>')
+    +'</div></div>'
+    +'<button class="btn btn-gold" style="margin-top:12px" onclick="applyCleanPaymentSnapshots()">Clear these '+keys.length+' snapshot(s)</button>';
+}
+
+function applyCleanPaymentSnapshots(){
+  const keys=findOrphanedPaymentSnapshots();
+  if(!keys.length){ showToast('Nothing to clear.'); return; }
+  if(!confirm('Clear '+keys.length+' payment snapshot(s) with no matching payment?\n\nNo revenue figure changes — these are already uncounted.')) return;
+  keys.forEach(function(k){
+    delete db.paymentAmounts[k];
+    delete (db.paymentStudentNames||{})[k];
+    if(typeof syncPaymentAmountToSupabase==='function'){ try{ syncPaymentAmountToSupabase(k, null, null); }catch(_){} }
+  });
+  save();
+  showToast(keys.length+' snapshot(s) cleared ✓');
+  previewCleanPaymentSnapshots();
+}
+
+// Waiting-list entries pointing at a student id that no longer exists —
+// after a reset, the person is usually back under a NEW id. Re-linking by
+// name keeps the entry (and their place in the queue) rather than losing
+// what they're waiting for.
+function findRelinkableWaitingEntries(){
+  const ids=new Set((db.students||[]).map(s=>String(s.id)));
+  return (db.waitingList||[]).map(e=>{
+    if((e.status||'waiting')==='deleted') return null;
+    if(e.studentId==null || ids.has(String(e.studentId))) return null;
+    const match=(db.students||[]).find(s=>
+      (s.status||'active')!=='archived' &&
+      normalizeStudentNameForMatch(s.name)===normalizeStudentNameForMatch(e.name)
+    );
+    return match ? {entry:e, match} : null;
+  }).filter(Boolean);
+}
+
+function previewRelinkWaitingEntries(){
+  const el=document.getElementById('relink-waiting-results');
+  if(!el) return;
+  const rows=findRelinkableWaitingEntries();
+  if(!rows.length){
+    el.innerHTML='<div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px;color:#a8e8a8">✅ No waiting-list entries need re-linking.</div>';
+    return;
+  }
+  el.innerHTML='<div style="background:#3a3520;border:1px solid #6a5a2a;border-radius:6px;padding:12px;margin-bottom:10px">'
+    +'<div style="font-weight:700;color:#e2c47a;margin-bottom:6px">'+rows.length+' waiting-list entry(s) can be re-linked by name</div>'
+    +'<div style="font-size:13px;color:#c8d8e8;line-height:1.6">Each points at a student id that no longer exists, but a student of the same name is here under a new one. Re-linking keeps the entry and their place in the queue.</div></div>'
+    +'<div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px">'
+    +'<div style="font-size:13px;color:#c8d8e8;line-height:1.8">'
+    + rows.map(r=>escapeHtml(r.entry.name||'?')+' — waiting for '+escapeHtml(r.entry.instrument||'?')+' → re-link to id '+escapeHtml(String(r.match.id))).join('<br>')
+    +'</div></div>'
+    +'<button class="btn btn-gold" style="margin-top:12px" onclick="applyRelinkWaitingEntries()">Re-link these '+rows.length+'</button>';
+}
+
+function applyRelinkWaitingEntries(){
+  const rows=findRelinkableWaitingEntries();
+  if(!rows.length){ showToast('Nothing to re-link.'); return; }
+  if(!confirm('Re-link '+rows.length+' waiting-list entry(s) to the matching student?')) return;
+  rows.forEach(function(r){
+    r.entry.studentId=r.match.id;
+    if(typeof syncWaitingEntryToSupabase==='function'){ try{ syncWaitingEntryToSupabase(r.entry); }catch(_){} }
+  });
+  save();
+  if(typeof renderWaitingList==='function') renderWaitingList();
+  showToast(rows.length+' entry(s) re-linked ✓');
+  previewRelinkWaitingEntries();
 }
 
 function renderDeletionLog(){
@@ -8226,17 +8446,23 @@ async function runDataHealthCheck(){
   const dupLessonMap={};
   (db.lessons||[]).forEach(l=>{
     if((l.status_record||'active')==='archived' || !l.date) return;
-    const key=String(l.studentId)+'|'+l.date;
+    // Keyed on TIME as well as date. Two lessons for one student on the
+    // same day at DIFFERENT times is a legitimate double session — booked
+    // deliberately through the attendance ledger — not a duplicate. Only
+    // two records at the same date AND the same time can't both be real.
+    // Without the time, every double session was reported as a duplicate,
+    // which both cried wolf and buried the genuine ones.
+    const key=String(l.studentId)+'|'+l.date+'|'+(l.time||'');
     (dupLessonMap[key]=dupLessonMap[key]||[]).push(l);
   });
   const dupLessonItems=[];
   Object.values(dupLessonMap).forEach(list=>{
     if(list.length<2) return;
     const student=(db.students||[]).find(s=>String(s.id)===String(list[0].studentId));
-    dupLessonItems.push(`${student?student.name:('student id '+list[0].studentId)} — ${list[0].date}: ${list.length} lesson records (${list.map(l=>STATUS_LABELS[l.status]||l.status).join(', ')})`);
+    dupLessonItems.push(`${student?student.name:('student id '+list[0].studentId)} — ${list[0].date} ${list[0].time||''}: ${list.length} lesson records (${list.map(l=>STATUS_LABELS[l.status]||l.status).join(', ')})`);
   });
   if(dupLessonItems.length) issues.push({
-    title:'Duplicate lessons — the same student billed/logged twice on one date',
+    title:'Duplicate lessons — the same student billed/logged twice at the same date AND time',
     items:dupLessonItems
   });
 
