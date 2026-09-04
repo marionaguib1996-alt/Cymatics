@@ -414,7 +414,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-216</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-217</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -7490,6 +7490,16 @@ function findOrphanLogMatches(){
       const i=cands.filter(l=>norm(l.instrument)===norm(lg.instrument));
       if(i.length) cands=i;
     }
+    // A DOUBLE SESSION defeats teacher+instrument narrowing entirely —
+    // both lessons share the student, date, teacher and instrument, and
+    // differ only by time. The log records the attendance status it was
+    // created under, so when the two candidates disagree on status that
+    // pins it down (a log written for the attended session shouldn't
+    // attach to the one still marked scheduled).
+    if(cands.length>1 && lg.attendance){
+      const a=cands.filter(l=>norm(l.status)===norm(lg.attendance));
+      if(a.length===1) cands=a;
+    }
     if(cands.length===1) resolved.push({log:lg, lesson:cands[0]});
     else if(cands.length>1) ambiguous.push({log:lg, candidates:cands});
     else unmatched.push({log:lg, reason:'no lesson for that student on that date'});
@@ -7605,8 +7615,21 @@ function previewOrphanLogRepair(){
   }
   if(ambiguous.length){
     html+='<div style="background:#3a3520;border:1px solid #6a5a2a;border-radius:6px;padding:12px;margin-bottom:10px">'
-      +'<div style="font-weight:700;color:#e2c47a;margin-bottom:6px">Ambiguous ('+ambiguous.length+') — left untouched</div>'
-      +'<div style="font-size:13px;color:#c8d8e8;line-height:1.6">'+ambiguous.slice(0,25).map(fmt).join('<br>')+'</div></div>';
+      +'<div style="font-weight:700;color:#e2c47a;margin-bottom:6px">Needs your choice ('+ambiguous.length+')</div>'
+      +'<div style="font-size:13px;color:#c8d8e8;line-height:1.6;margin-bottom:8px">More than one lesson matches. This happens most often with a double session — two lessons the same day sharing student, teacher and instrument, differing only by time. Pick which one each note belongs to.</div>'
+      + ambiguous.slice(0,25).map(function(x, idx){
+          const opts=x.candidates.map(function(c){
+            return '<option value="'+escapeAttr(String(c.id))+'">'
+              +escapeHtml((c.time?formatTime12h(c.time):'no time')+' · '+(STATUS_LABELS[c.status]||c.status||'?'))
+              +'</option>';
+          }).join('');
+          return '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px">'
+            +'<span style="font-size:13px;color:#c8d8e8;min-width:190px">'+fmt(x)+'</span>'
+            +'<select id="amblog-'+idx+'" style="max-width:210px">'+opts+'</select>'
+            +'<button class="btn btn-sm btn-gold" onclick="linkAmbiguousLog(\''+escapeAttr(String(x.log.id))+'\', '+idx+')">Link</button>'
+            +'</div>';
+        }).join('')
+      +'</div>';
   }
   if(unmatched.length){
     html+='<div style="background:#3a2020;border:1px solid #6a2a2a;border-radius:6px;padding:12px">'
@@ -7614,6 +7637,28 @@ function previewOrphanLogRepair(){
       +'<div style="font-size:13px;color:#c8d8e8;line-height:1.6">'+unmatched.slice(0,25).map(fmt).join('<br>')+'</div></div>';
   }
   el.innerHTML=html;
+}
+
+// Links one ambiguous log to the lesson the admin picked. Separate from
+// the bulk re-link because the bulk path only ever touches unambiguous
+// matches — anything needing a human decision has to stay a deliberate,
+// one-at-a-time action rather than being swept up by a "fix everything"
+// button.
+function linkAmbiguousLog(logId, idx){
+  const sel=document.getElementById('amblog-'+idx);
+  if(!sel || !sel.value){ showToast('Pick a lesson first.'); return; }
+  const log=(db.lessonLogs||[]).find(l=>String(l.id)===String(logId));
+  const lesson=(db.lessons||[]).find(l=>String(l.id)===String(sel.value));
+  if(!log || !lesson){ showToast('That log or lesson is no longer there.'); return; }
+  log.lessonId=lesson.id;
+  // Keep the log's own copies in step with the lesson it now belongs to,
+  // so it doesn't immediately look orphaned again for a different reason.
+  if(lesson.teacher) log.teacherName=lesson.teacher;
+  if(lesson.instrument) log.instrument=lesson.instrument;
+  if(typeof syncLessonLogToSupabase==='function'){ try{ syncLessonLogToSupabase(log); }catch(_){} }
+  save();
+  showToast('Note linked to the '+(lesson.time?formatTime12h(lesson.time):'selected')+' session ✓');
+  previewOrphanLogRepair();
 }
 
 function applyOrphanLogRepair(){
