@@ -414,7 +414,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-212</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-213</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -4450,15 +4450,28 @@ function sendFamilyRenewalReminder(memberIdsCsv){
     const monthName=perStudent[0].details[0].monthName;
     const totalAmount=perStudent.reduce((sum,p)=>sum+p.amount, 0);
 
-    const clauseTexts=perStudent.map(p=>{
-      const inner=p.details.map(d=>
-        '('+d.lessonCount+(d.lessonCount===1?' lesson':' lessons')+' on the '+d.dateList+')'
-      ).join(' & ');
-      return p.firstName+': '+inner;
-    });
-    const clauseBlock = clauseTexts.length>1
-      ? clauseTexts.slice(0,-1).join('\n')+'\n& '+clauseTexts[clauseTexts.length-1]
-      : clauseTexts[0];
+    // Siblings very often share a schedule — dropped off together, taught
+    // back to back. When every child's dates are identical, naming them
+    // individually just repeats the same line twice, so the whole thing
+    // collapses to ONE unnamed clause. Names only earn their place when
+    // the dates actually differ and the parent needs to tell them apart.
+    const scheduleOf=p=>p.details.map(d=>d.lessonCount+'@'+d.dateList).join('|');
+    const sameSchedule=perStudent.length>1 &&
+      perStudent.every(p=>scheduleOf(p)===scheduleOf(perStudent[0]));
+
+    const bareClause=p=>p.details.map(d=>
+      '('+d.lessonCount+(d.lessonCount===1?' lesson':' lessons')+' on the '+d.dateList+')'
+    ).join(' & ');
+
+    let clauseBlock;
+    if(sameSchedule){
+      clauseBlock=bareClause(perStudent[0]);
+    } else {
+      const clauseTexts=perStudent.map(p=>p.firstName+': '+bareClause(p));
+      clauseBlock = clauseTexts.length>1
+        ? clauseTexts.slice(0,-1).join('\n')+'\n& '+clauseTexts[clauseTexts.length-1]
+        : clauseTexts[0];
+    }
 
     const absenceNotes=perStudent.map(p=>p.details.map(d=>d.absenceNote).join('')).join('');
     const deductionNotes=perStudent.map(p=>p.details.map(d=>d.deductionNoteBlock).join('')).join('');
@@ -4476,12 +4489,12 @@ function sendFamilyRenewalReminder(memberIdsCsv){
     // A parent number covering several children shouldn't be greeted by
     // one child's name.
     const ePiano=String.fromCodePoint(0x1F3B9), eMic=String.fromCodePoint(0x1F3A4), eSparkle=String.fromCodePoint(0x1F4AB);
-    const message='Hello!\n'+
+    const message='Hello dear!\n'+
       'Hope they\'re having a blast at Cymatics!\n'+
       '\n'+
       'Just a little reminder that the payment for '+monthName+' sessions:\n'+
       clauseBlock+'\nis due Today '+ePiano+eMic+'\n'+
-      'It\'s '+Math.round(totalAmount)+' EGP in total for '+perStudent.length+' students — keeping things up to date means they won\'t miss a single beat of the fun!\n'+
+      'It\'s '+Math.round(totalAmount)+' EGP in total — keeping things up to date means they won\'t miss a single beat of the fun!\n'+
       '\n'+
       'Instapay: 01277336092 -Mario Naguib\n'+
       '\n'+
