@@ -414,7 +414,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-217</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-218</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -678,6 +678,29 @@ input::placeholder{color:var(--text-dim)}
 </div>
 <!-- EXPENSES -->
 <div id="page-expenses" class="page">
+  <div class="card">
+    <div class="card-title">Products &amp; Sales</div>
+    <small style="display:block;margin-bottom:10px;color:var(--text-muted)">Picks, strings, cables — anything sold alongside lessons. Each sale records the price it was sold AT, so past months' figures never change when you update a price later.</small>
+    <div id="products-summary" class="metrics" style="margin-bottom:14px"></div>
+    <div class="form-grid">
+      <div class="form-field"><label for="pr-name">Product</label><input id="pr-name" placeholder="e.g. Guitar picks"></div>
+      <div class="form-field"><label for="pr-cost">Cost each (EGP)</label><input id="pr-cost" type="number" placeholder="0" min="0"></div>
+      <div class="form-field"><label for="pr-price">Sell for (EGP)</label><input id="pr-price" type="number" placeholder="0" min="0"></div>
+      <div class="form-field"><label for="pr-qty">Starting stock</label><input id="pr-qty" type="number" placeholder="0" min="0"></div>
+    </div>
+    <button class="btn btn-gold" onclick="addProduct()">+ Add product</button>
+    <div class="table-wrap" style="margin-top:14px"><table>
+      <thead><tr><th>Product</th><th>Cost</th><th>Price</th><th>Margin</th><th>In Stock</th><th>Sold This Month</th><th>Actions</th></tr></thead>
+      <tbody id="products-tbody"></tbody>
+    </table></div>
+  </div>
+  <div class="card">
+    <div class="card-title">Sales this month</div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Date</th><th>Product</th><th>Qty</th><th>Total</th><th>Note</th><th>Actions</th></tr></thead>
+      <tbody id="sales-tbody"></tbody>
+    </table></div>
+  </div>
   <div class="card">
     <div class="card-title">Add expense</div>
     <div class="form-grid">
@@ -4159,6 +4182,189 @@ function renderExpenses(){
   document.getElementById('expenses-total').textContent=egp(total);
 }
 
+// ── Products & Sales ─────────────────────────────────────────────────
+// Small retail alongside the teaching: picks, strings, cables. Two
+// separate concepts kept deliberately apart:
+//
+//   db.products — the CATALOGUE. What a thing is called, what it costs
+//                 to buy in, what it sells for, and how many are in stock
+//                 right now.
+//   db.sales    — the LEDGER. One row per sale, storing the prices AS
+//                 THEY WERE at the moment of sale.
+//
+// The ledger stores its own copy of both prices on purpose. Re-deriving
+// last month's revenue from today's price list is the same mistake that
+// made student revenue rewrite itself retroactively — put a pick up by
+// 5 EGP and every past month's profit would silently change. A sale is a
+// historical fact and has to stay one.
+function productSoldStats(monthKey){
+  const rows=(db.sales||[]).filter(sale=>String(sale.month||'')===String(monthKey));
+  const units=rows.reduce((n,r)=>n+(Number(r.qty)||0), 0);
+  const revenue=rows.reduce((n,r)=>n+((Number(r.qty)||0)*(Number(r.unitPrice)||0)), 0);
+  const cost=rows.reduce((n,r)=>n+((Number(r.qty)||0)*(Number(r.unitCost)||0)), 0);
+  return {units, revenue, cost, profit:revenue-cost, rows};
+}
+
+function addProduct(){
+  const name=(document.getElementById('pr-name')?.value||'').trim();
+  const cost=Number(document.getElementById('pr-cost')?.value||0);
+  const price=Number(document.getElementById('pr-price')?.value||0);
+  const qty=Number(document.getElementById('pr-qty')?.value||0);
+  if(!name){ showToast('Give the product a name.'); return; }
+  if(price<=0){ showToast('Set a selling price.'); return; }
+  db.products=db.products||[];
+  if(db.products.some(p=>String(p.name||'').toLowerCase()===name.toLowerCase())){
+    showToast('A product with that name already exists.'); return;
+  }
+  const product={id:(crypto.randomUUID?crypto.randomUUID():String(Date.now())),
+                 name, cost, price, qty, createdAt:new Date().toISOString()};
+  db.products.push(product);
+  save();
+  ['pr-name','pr-cost','pr-price','pr-qty'].forEach(id=>{ const el=document.getElementById(id); if(el) el.value=''; });
+  renderProducts();
+  showToast(name+' added');
+}
+
+function deleteProduct(id){
+  const p=(db.products||[]).find(x=>String(x.id)===String(id));
+  if(!p) return;
+  const sold=(db.sales||[]).filter(sa=>String(sa.productId)===String(id)).length;
+  if(!confirm('Remove "'+p.name+'" from the product list?'+
+    (sold?'\n\nIts '+sold+' recorded sale(s) are KEPT — past revenue must not change because a product was later removed.':''))) return;
+  if(typeof logRecordDeletion==='function') logRecordDeletion('product', p, 'removed from Products');
+  db.products=(db.products||[]).filter(x=>String(x.id)!==String(id));
+  save();
+  renderProducts();
+  showToast(p.name+' removed');
+}
+
+function openRestockProduct(id){
+  const p=(db.products||[]).find(x=>String(x.id)===String(id));
+  if(!p) return;
+  openModal('Restock — '+escapeHtml(p.name), `
+    <div style="margin-bottom:10px;color:var(--text-muted)">In stock now: <b>${p.qty||0}</b></div>
+    <div class="form-field"><label for="rs-qty">Add how many?</label><input id="rs-qty" type="number" min="1" value="1"></div>
+    <div class="form-field"><label for="rs-cost">Cost each (EGP) — leave as is to keep ${egp(p.cost||0)}</label><input id="rs-cost" type="number" min="0" value="${p.cost||0}"></div>
+    <div style="text-align:right;margin-top:12px"><button class="btn btn-gold" onclick="confirmRestockProduct('${escapeAttr(String(p.id))}')">Add to stock</button></div>
+  `);
+}
+
+function confirmRestockProduct(id){
+  const p=(db.products||[]).find(x=>String(x.id)===String(id));
+  if(!p) return;
+  const add=Number(document.getElementById('rs-qty')?.value||0);
+  const cost=Number(document.getElementById('rs-cost')?.value||p.cost||0);
+  if(add<=0){ showToast('Enter how many to add.'); return; }
+  p.qty=(Number(p.qty)||0)+add;
+  p.cost=cost; // latest buy-in price; past sales keep their own copy
+  save(); closeModal(); renderProducts();
+  showToast('Added '+add+' to '+p.name);
+}
+
+function openSellProduct(id){
+  const p=(db.products||[]).find(x=>String(x.id)===String(id));
+  if(!p) return;
+  openModal('Sell — '+escapeHtml(p.name), `
+    <div style="margin-bottom:10px;color:var(--text-muted)">In stock: <b>${p.qty||0}</b> · Price ${egp(p.price||0)} each</div>
+    <div class="form-field"><label for="sl-qty">How many?</label><input id="sl-qty" type="number" min="1" value="1"></div>
+    <div class="form-field"><label for="sl-price">Price each (EGP) — change for a one-off discount</label><input id="sl-price" type="number" min="0" value="${p.price||0}"></div>
+    <div class="form-field"><label for="sl-note">Note (optional)</label><input id="sl-note" placeholder="e.g. sold to Yassin"></div>
+    <div style="text-align:right;margin-top:12px"><button class="btn btn-gold" onclick="confirmSellProduct('${escapeAttr(String(p.id))}')">Record sale</button></div>
+  `);
+}
+
+function confirmSellProduct(id){
+  const p=(db.products||[]).find(x=>String(x.id)===String(id));
+  if(!p) return;
+  const qty=Number(document.getElementById('sl-qty')?.value||0);
+  const unitPrice=Number(document.getElementById('sl-price')?.value||p.price||0);
+  const note=(document.getElementById('sl-note')?.value||'').trim();
+  if(qty<=0){ showToast('Enter a quantity.'); return; }
+  if(qty>(Number(p.qty)||0)){
+    if(!confirm('Only '+(p.qty||0)+' in stock but selling '+qty+'.\n\nRecord it anyway? Stock will show as negative until you restock.')) return;
+  }
+  db.sales=db.sales||[];
+  db.sales.push({
+    id:(crypto.randomUUID?crypto.randomUUID():String(Date.now())),
+    productId:p.id,
+    productName:p.name,      // kept so a sale still reads correctly if the product is later removed
+    qty,
+    unitPrice,               // price AS SOLD — never re-read from the catalogue
+    unitCost:Number(p.cost)||0,
+    month:currentMonth(),
+    date:new Date().toISOString().slice(0,10),
+    note
+  });
+  p.qty=(Number(p.qty)||0)-qty;
+  save(); closeModal(); renderProducts();
+  if(typeof renderOverview==='function') renderOverview();
+  showToast('Sold '+qty+' × '+p.name+' — '+egp(qty*unitPrice));
+}
+
+function deleteSale(saleId){
+  const sale=(db.sales||[]).find(x=>String(x.id)===String(saleId));
+  if(!sale) return;
+  if(!confirm('Remove this sale of '+sale.qty+' × '+sale.productName+'?\n\nThe stock is put back.')) return;
+  if(typeof logRecordDeletion==='function') logRecordDeletion('sale', sale, 'sale removed');
+  const p=(db.products||[]).find(x=>String(x.id)===String(sale.productId));
+  if(p) p.qty=(Number(p.qty)||0)+(Number(sale.qty)||0);
+  db.sales=(db.sales||[]).filter(x=>String(x.id)!==String(saleId));
+  save(); renderProducts();
+  if(typeof renderOverview==='function') renderOverview();
+  showToast('Sale removed, stock restored');
+}
+
+function renderProducts(){
+  const month=currentMonth();
+  const stats=productSoldStats(month);
+
+  const sumEl=document.getElementById('products-summary');
+  if(sumEl){
+    sumEl.innerHTML=`
+      <div class="metric"><div class="metric-label">Units Sold</div><div class="metric-value">${stats.units}</div></div>
+      <div class="metric green"><div class="metric-label">Sales Revenue</div><div class="metric-value green">${egp(stats.revenue)}</div></div>
+      <div class="metric"><div class="metric-label">Cost of Goods</div><div class="metric-value">${egp(stats.cost)}</div></div>
+      <div class="metric ${stats.profit>=0?'green':''}"><div class="metric-label">Profit</div><div class="metric-value ${stats.profit>=0?'green':''}">${egp(stats.profit)}</div></div>`;
+  }
+
+  const listEl=document.getElementById('products-tbody');
+  if(listEl){
+    const products=db.products||[];
+    listEl.innerHTML=products.length ? products.map(p=>{
+      const soldThis=(db.sales||[]).filter(sa=>String(sa.productId)===String(p.id) && String(sa.month)===String(month));
+      const unitsThis=soldThis.reduce((n,r)=>n+(Number(r.qty)||0), 0);
+      const margin=(Number(p.price)||0)-(Number(p.cost)||0);
+      const lowStock=(Number(p.qty)||0)<=3;
+      return `<tr>
+        <td><strong>${escapeHtml(p.name)}</strong></td>
+        <td>${egp(p.cost||0)}</td>
+        <td>${egp(p.price||0)}</td>
+        <td style="color:${margin>0?'var(--success,#5cb85c)':'var(--danger,#e06c6c)'}">${egp(margin)}</td>
+        <td${lowStock?' style="color:var(--danger,#e06c6c);font-weight:600"':''}>${p.qty||0}${lowStock?' ⚠':''}</td>
+        <td>${unitsThis}</td>
+        <td>
+          <button class="btn btn-sm btn-gold" onclick="openSellProduct('${escapeAttr(String(p.id))}')">Sell</button>
+          <button class="btn btn-sm" onclick="openRestockProduct('${escapeAttr(String(p.id))}')">Restock</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteProduct('${escapeAttr(String(p.id))}')">Delete</button>
+        </td>
+      </tr>`;
+    }).join('') : '<tr><td colspan="7">No products yet — add one above.</td></tr>';
+  }
+
+  const salesEl=document.getElementById('sales-tbody');
+  if(salesEl){
+    const rows=stats.rows.slice().sort((a,b)=>String(b.date||'').localeCompare(String(a.date||'')));
+    salesEl.innerHTML=rows.length ? rows.map(sa=>`<tr>
+      <td>${escapeHtml(formatLedgerDate(sa.date))}</td>
+      <td>${escapeHtml(sa.productName||'?')}</td>
+      <td>${sa.qty}</td>
+      <td>${egp((Number(sa.qty)||0)*(Number(sa.unitPrice)||0))}</td>
+      <td style="color:var(--text-muted)">${escapeHtml(sa.note||'')}</td>
+      <td><button class="btn btn-sm btn-danger" onclick="deleteSale('${escapeAttr(String(sa.id))}')">Delete</button></td>
+    </tr>`).join('') : '<tr><td colspan="6">No sales recorded this month.</td></tr>';
+  }
+}
+
 // ── Other Revenue ────────────────────────────────────────────────────
 // One-off income outside the normal student-plan payment flow (e.g.
 // selling equipment) — the income-side counterpart to Expenses,
@@ -6992,7 +7198,9 @@ const DELETABLE_RECORD_TYPES={
   otherRevenue:     {collection:'otherRevenue',     label:'Other revenue',    describe:r=>(r.label||r.source||'?')+' — '+(r.month||'?')},
   refund:           {collection:'refunds',          label:'Refund',           describe:r=>(r.studentName||'?')+' — '+(r.month||'?')},
   teacher:          {collection:'teacherProfiles',  label:'Teacher',          describe:r=>r.name||'?'},
-  lessonLog:        {collection:'lessonLogs',       label:'Lesson log',       describe:r=>(r.studentName||'?')+' — '+(r.lessonDate||'?')}
+  lessonLog:        {collection:'lessonLogs',       label:'Lesson log',       describe:r=>(r.studentName||'?')+' — '+(r.lessonDate||'?')},
+  product:          {collection:'products',         label:'Product',          describe:r=>(r.name||'?')+' · '+(r.qty||0)+' in stock'},
+  sale:             {collection:'sales',            label:'Sale',             describe:r=>(r.qty||0)+' × '+(r.productName||'?')+' — '+(r.date||'?')}
 };
 
 // Generic counterpart to logStudentDeletion, for every OTHER record type.
@@ -9830,7 +10038,7 @@ function switchPage(page, btn){
     renderCalendarPage();
   }
   if(page==='practice' && typeof renderPracticeSessionsPage==='function')renderPracticeSessionsPage();
-  if(page==='expenses'){renderExpenses(); if(typeof renderOtherRevenue==='function') renderOtherRevenue();}
+  if(page==='expenses'){renderExpenses(); if(typeof renderOtherRevenue==='function') renderOtherRevenue(); if(typeof renderProducts==='function') renderProducts();}
   if(page==='reports')renderReports();
   if(page==='profiles'){refreshInstrumentSelectors(); renderProfiles(); renderInstrumentPage(); if(typeof renderAddProfileTimeSlots==='function') renderAddProfileTimeSlots(); if(typeof renderUpcomingAbsences==='function') renderUpcomingAbsences();}
   if(page==='renewals' && typeof renderRenewalsDue==='function') renderRenewalsDue();
@@ -14731,7 +14939,14 @@ function scheduleWeeklyLessonsFrom(student, firstDate, count, teacherForAbsenceC
     // Skip a date the teacher is already marked absent for — they won't
     // be there, so scheduling a lesson on it would just need undoing
     // (and doesn't match the count Renewals Due already deducted for).
-    if(teacherForAbsenceCheck && typeof isTeacherAbsentOnDate==='function' && isTeacherAbsentOnDate(teacherForAbsenceCheck, date, checkTime)) continue;
+    // Uses checkTeacher, NOT the raw parameter. checkTeacher exists a few
+    // lines above precisely to fall back to the student's own teacher when
+    // no override is passed — but this guard was testing the parameter
+    // itself, so the whole absence check silently did nothing on every
+    // path that doesn't pass one. Adding a new student is exactly such a
+    // path, which is why a new student could be given a lesson on a date
+    // their teacher was already marked absent for.
+    if(checkTeacher && typeof isTeacherAbsentOnDate==='function' && isTeacherAbsentOnDate(checkTeacher, date, checkTime)) continue;
     // Skip a date where the room is already at the 3-slot limit — checked
     // PER CANDIDATE DATE, not once against some unrelated reference date.
     // A room being full today has no bearing on whether week 3 of this
@@ -19931,7 +20146,7 @@ async function syncPracticeSessionUpdateToSupabase(session){
       }
       if(expenseRows||instrumentRows){
         save();
-        if(document.getElementById('page-expenses')?.classList.contains('active')){ if(typeof renderExpenses==='function') renderExpenses(); if(typeof renderOtherRevenue==='function') renderOtherRevenue(); }
+        if(document.getElementById('page-expenses')?.classList.contains('active')){ if(typeof renderExpenses==='function') renderExpenses(); if(typeof renderOtherRevenue==='function') renderOtherRevenue(); if(typeof renderProducts==='function') renderProducts(); }
         if(typeof refreshInstrumentSelectors==='function') refreshInstrumentSelectors();
       }
     }catch(err){ console.warn('Expenses/instruments load failed:', err.message); }
