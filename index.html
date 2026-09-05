@@ -414,7 +414,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-218</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-219</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -879,7 +879,8 @@ input::placeholder{color:var(--text-dim)}
     </div>
     <select id="ps-instrument" onchange="updatePracticeSlotOptions()"><option value="">Select Instrument</option></select>
     <div style="display:flex;gap:4px"><input id="ps-date" type="text" placeholder="dd/mm/yyyy" maxlength="10" oninput="maskDateInput(this)" onchange="updatePracticeSlotOptions()"><button type="button" class="btn btn-sm" onclick="openDatePicker('ps-date')">📅</button></div>
-    <select id="ps-time"><option value="">Pick a date first</option></select>
+    <select id="ps-time" onchange="onPracticeTimeSelectChange()"><option value="">Pick a date first</option></select>
+    <input id="ps-time-custom" type="time" style="display:none;margin-top:6px">
     <input id="ps-fee" type="number" value="150" placeholder="Fee (EGP)">
   </div>
   <button class="btn btn-gold" style="margin-top:6px" onclick="bookPracticeSession()">+ Book Practice Session</button>
@@ -3724,8 +3725,6 @@ function editStudent(id){
  const currentProfile=teacherOptions.find(p=>p.name===s.teacher);
  const instrumentChoices=currentProfile?.instruments||(s.instrument?[s.instrument]:[]);
  const dayChoices=currentProfile?.days||(s.lesson_day?[s.lesson_day]:[]);
- const timeChoices=getAvailableTimeSlots(s.teacher, s.lesson_day, s.id);
- const timeChoicesWithCurrent=(s.lessonTime && !timeChoices.includes(s.lessonTime)) ? [s.lessonTime,...timeChoices] : timeChoices;
  openModal('Edit Student - '+(s.name||''), `
    <div class="teacher-log-grid">
      <div class="form-field"><label for="es-first">First Name</label><input id="es-first" value="${escapeAttr(s.first_name)}"></div>
@@ -3741,7 +3740,7 @@ function editStudent(id){
        ${dayChoices.map(d=>`<option value="${escapeAttr(d)}" ${d===s.lesson_day?'selected':''}>${escapeHtml(d)}</option>`).join('')}
      </select></div>
      <div class="form-field"><label for="es-time">Time Slot</label><select id="es-time">
-       ${timeChoicesWithCurrent.length ? timeChoicesWithCurrent.map(t=>`<option value="${escapeAttr(t)}" ${t===s.lessonTime?'selected':''}>${escapeHtml(formatTime12h(t))}</option>`).join('') : '<option value="">No available slots</option>'}
+       ${slotOptionsHtml(s.teacher, s.lesson_day, s.id, isGroupPlan(s.plan), s.lessonTime)}
      </select></div>
      <div class="form-field"><label for="es-plan">Payment Plan</label><select id="es-plan" onchange="onEditStudentDayChange(${s.id})">
        ${planOptionsHtml(s.plan)}
@@ -3784,10 +3783,9 @@ function onEditStudentDayChange(studentId){
  const dayName=document.getElementById('es-day')?.value||'';
  const timeSel=document.getElementById('es-time');
  if(!timeSel) return;
- const times=getAvailableTimeSlots(teacherName, dayName, studentId);
- timeSel.innerHTML=times.length
-   ? times.map(t=>`<option value="${escapeAttr(t)}">${escapeHtml(formatTime12h(t))}</option>`).join('')
-   : '<option value="">No available slots</option>';
+ const plan=document.getElementById('es-plan')?.value||'';
+ const cur=document.getElementById('es-time')?.value||'';
+ timeSel.innerHTML=slotOptionsHtml(teacherName, dayName, studentId, isGroupPlan(plan), cur);
 }
 
 function saveEditStudent(id){
@@ -4025,8 +4023,6 @@ function convertTrial(id){
  const currentProfile=teacherOptions.find(p=>p.name===student.teacher);
  const instrumentChoices=currentProfile?.instruments||(student.instrument?[student.instrument]:[]);
  const dayChoices=currentProfile?.days||(student.lesson_day?[student.lesson_day]:[]);
- const timeChoices=getAvailableTimeSlots(student.teacher, student.lesson_day, student.id);
- const timeChoicesWithCurrent=(student.lessonTime && !timeChoices.includes(student.lessonTime)) ? [student.lessonTime,...timeChoices] : timeChoices;
 
  openModal('Convert Trial — '+(student.name||''), `
    <p style="color:var(--text-muted);margin-bottom:14px">Review or change the schedule before converting. Leave anything unchanged to keep it as-is.</p>
@@ -4041,7 +4037,7 @@ function convertTrial(id){
        ${dayChoices.map(d=>`<option value="${escapeAttr(d)}" ${d===student.lesson_day?'selected':''}>${escapeHtml(d)}</option>`).join('')}
      </select></div>
      <div class="form-field"><label for="rn-time">Time Slot</label><select id="rn-time">
-       ${timeChoicesWithCurrent.length ? timeChoicesWithCurrent.map(t=>`<option value="${escapeAttr(t)}" ${t===student.lessonTime?'selected':''}>${escapeHtml(formatTime12h(t))}</option>`).join('') : '<option value="">No available slots</option>'}
+       ${slotOptionsHtml(student.teacher, student.lesson_day, student.id, isGroupPlan(student.plan), student.lessonTime)}
      </select></div>
      <div class="form-field"><label for="rn-plan">Convert To</label><select id="rn-plan" onchange="onRenewPlanChange(${id})">
        ${planOptionsHtml('monthly')}
@@ -15057,8 +15053,6 @@ function renewStudentSubscription(id, preCheckIdsCsv){
   const currentProfile=teacherOptions.find(p=>p.name===student.teacher);
   const instrumentChoices=currentProfile?.instruments||(student.instrument?[student.instrument]:[]);
   const dayChoices=currentProfile?.days||(student.lesson_day?[student.lesson_day]:[]);
-  const timeChoices=getAvailableTimeSlots(student.teacher, student.lesson_day, student.id);
-  const timeChoicesWithCurrent=(student.lessonTime && !timeChoices.includes(student.lessonTime)) ? [student.lessonTime,...timeChoices] : timeChoices;
 
   // Other courses this same person is enrolled in (via "+ Course"). Full
   // customization only makes sense for ONE course at a time — juggling a
@@ -15093,7 +15087,7 @@ function renewStudentSubscription(id, preCheckIdsCsv){
         ${dayChoices.map(d=>`<option value="${escapeAttr(d)}" ${d===student.lesson_day?'selected':''}>${escapeHtml(d)}</option>`).join('')}
       </select></div>
       <div class="form-field"><label for="rn-time">Time Slot</label><select id="rn-time">
-        ${timeChoicesWithCurrent.length ? timeChoicesWithCurrent.map(t=>`<option value="${escapeAttr(t)}" ${t===student.lessonTime?'selected':''}>${escapeHtml(formatTime12h(t))}</option>`).join('') : '<option value="">No available slots</option>'}
+        ${slotOptionsHtml(student.teacher, student.lesson_day, student.id, isGroupPlan(student.plan), student.lessonTime)}
       </select></div>
     </div>
     <div class="form-field wide" style="margin-top:10px">
@@ -15360,12 +15354,11 @@ function onRenewTeacherChange(id){
 function onRenewDayChange(id){
   const teacherName=document.getElementById('rn-teacher')?.value||'';
   const dayName=document.getElementById('rn-day')?.value||'';
-  const slots=getAvailableTimeSlots(teacherName, dayName, id);
   const timeSel=document.getElementById('rn-time');
   if(timeSel){
-    timeSel.innerHTML=slots.length
-      ? slots.map(t=>`<option value="${escapeAttr(t)}">${escapeHtml(formatTime12h(t))}</option>`).join('')
-      : '<option value="">No available slots</option>';
+    const plan=document.getElementById('rn-plan')?.value||'';
+    const cur=timeSel.value||'';
+    timeSel.innerHTML=slotOptionsHtml(teacherName, dayName, id, isGroupPlan(plan), cur);
   }
   refreshRenewStartDateOptions(id);
 }
@@ -16139,6 +16132,42 @@ renderAddProfileTimeSlots();
 
 <script>
 // Phase 22 — Reserved Slots + 72-Hour Auto-Archive
+
+// Renders a COMPLETE set of <option>s for a teacher/day, with every slot
+// present and the unavailable ones labelled and disabled rather than
+// hidden.
+//
+// getAvailableTimeSlots (below) drops occupied slots entirely, which
+// makes a busy time look like it was never on offer at all — a slot
+// simply missing from the list is indistinguishable from one the teacher
+// doesn't work, so there's no way to tell "taken" from "doesn't exist"
+// and no way to see WHO has it. Showing every slot with a reason is both
+// more honest and more useful.
+//
+// currentTime is always included even if it's now unavailable, so opening
+// a student's record never silently loses the time they're already on.
+function slotOptionsHtml(teacherName, dayName, excludeStudentId, isGroup, currentTime){
+  const slots=(typeof getAvailableSlotsWithCapacity==='function')
+    ? getAvailableSlotsWithCapacity(teacherName, dayName, excludeStudentId, !!isGroup)
+    : [];
+  let html=slots.map(function(sl){
+    const bookValue=sl.full ? '' : (sl.actualStart||sl.time);
+    let label=formatTime12h(sl.actualStart||sl.time);
+    if(sl.actualStart && sl.actualStart!==sl.time) label+=' (room frees then)';
+    else if(sl.shortWindow) label+=' (45 min)';
+    if(sl.busyWith) label+=' (Teacher Busy — with '+sl.busyWith+')';
+    else if(sl.full) label+=' (Rooms Full)';
+    const isCurrent=currentTime && (sl.actualStart||sl.time)===currentTime;
+    return '<option value="'+escapeAttr(bookValue)+'"'+(sl.full?' disabled':'')+(isCurrent?' selected':'')+'>'+escapeHtml(label)+'</option>';
+  }).join('');
+  // Their existing time, if the teacher's slot list no longer contains it
+  // (day changed, schedule edited) — keeping it avoids a save silently
+  // moving the student somewhere they weren't.
+  if(currentTime && !slots.some(sl=>(sl.actualStart||sl.time)===currentTime)){
+    html='<option value="'+escapeAttr(currentTime)+'" selected>'+escapeHtml(formatTime12h(currentTime))+' (current)</option>'+html;
+  }
+  return html || '<option value="">No slots configured for this day</option>';
+}
 
 function getAvailableTimeSlots(teacherName, dayName, excludeStudentId){
   return getEffectiveTeacherDaySlots(teacherName, dayName, excludeStudentId)
@@ -19924,6 +19953,23 @@ function getEffectivePracticeSlotsForInstrument(date, instrument){
   return result.sort((a,b)=>timeToMinutes(a)-timeToMinutes(b));
 }
 
+function onPracticeTimeSelectChange(){
+  const sel=document.getElementById('ps-time');
+  const custom=document.getElementById('ps-time-custom');
+  if(!sel || !custom) return;
+  custom.style.display = (sel.value==='__custom__') ? 'block' : 'none';
+}
+
+// The time actually being booked — the dropdown value, unless "Custom
+// time…" is selected, in which case the free-form input wins.
+function practiceChosenTime(){
+  const sel=document.getElementById('ps-time');
+  if(sel && sel.value==='__custom__'){
+    return (document.getElementById('ps-time-custom')?.value||'').trim();
+  }
+  return sel?.value||'';
+}
+
 function updatePracticeSlotOptions(){
   const instrument=document.getElementById('ps-instrument')?.value||'';
   const date=dmyToIso(document.getElementById('ps-date')?.value||'');
@@ -19949,7 +19995,7 @@ function updatePracticeSlotOptions(){
   const slots=getEffectivePracticeSlotsForInstrument(date, instrument);
 
   if(!slots.length){
-    timeSel.innerHTML='<option value="">No working hours on this day</option>';
+    timeSel.innerHTML='<option value="">No standard slots this day</option><option value="__custom__">Custom time…</option>';
     if(noteEl) noteEl.textContent='The academy has no working hours on '+dayName+'.';
     return;
   }
@@ -19969,7 +20015,12 @@ function updatePracticeSlotOptions(){
     const blocked=roomFull;
     const reason=roomFull?' (Rooms Full)':'';
     return `<option value="${t}" ${blocked?'disabled':''}>${formatTime12h(t)}${reason}</option>`;
-  }).join('');
+  }).join('')
+  // Practice sessions aren't taught, so they aren't bound to a teacher's
+  // configured slot grid the way lessons are — someone can come in to
+  // practise at any hour the academy is open. The same escape hatch the
+  // lesson editor already offers, for the same reason.
+  + '<option value="__custom__">Custom time…</option>';
 
   if(noteEl){
     const blockedCount=slots.filter(t=>isRoomFullDuringRange(date,t,PRACTICE_SESSION_DURATION_MINUTES,null)).length;
@@ -19981,7 +20032,7 @@ function bookPracticeSession(){
   const studentId=document.getElementById('ps-student')?.value||'';
   const instrument=document.getElementById('ps-instrument')?.value||'';
   const date=dmyToIso(document.getElementById('ps-date')?.value||'');
-  const time=document.getElementById('ps-time')?.value||'';
+  const time=(typeof practiceChosenTime==='function') ? practiceChosenTime() : (document.getElementById('ps-time')?.value||'');
   const fee=Number(document.getElementById('ps-fee')?.value)||PRACTICE_SESSION_FEE;
 
   if(!studentId||!instrument||!date||!time){ showToast('Please fill in student, instrument, date, and time'); return; }
