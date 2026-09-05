@@ -414,7 +414,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-223</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-224</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -4123,7 +4123,7 @@ function renderTeachers(){
      ? ` <span class="badge badge-purple" style="cursor:help" title="Includes ${archivedCount} session(s) from students who were later archived — the Ledger's default view hides these, but the teacher still earned this pay. Switch the Ledger's Archive filter to 'Archived' to see them.">ℹ️ +${archivedCount} archived</span>`
      : '';
 
-   const total=calculatePayrollAmount(eligibleLessons, p.rate);
+   const total=calculatePayrollAmount(eligibleLessons, p.rate, p);
    const overriddenCount=eligibleLessons.filter(l=>l.customPayrollAmount!=null && l.customPayrollAmount!=='' && (l.status==='attended'||l.status==='absent_paid')).length;
    const overrideNote=overriddenCount>0
      ? ` <span class="badge badge-purple" style="cursor:help" title="${overriddenCount} session(s) this month have a custom payroll amount set (via Edit Lesson) overriding the standard rate.">✎ ${overriddenCount} custom</span>`
@@ -4135,7 +4135,8 @@ function renderTeachers(){
    return `<tr>
       <td>${escapeHtml(p.name)}</td>
       <td>${escapeHtml((Array.isArray(p.instruments)?p.instruments:(p.instruments?[p.instruments]:[])).join(', '))}</td>
-      <td>${egp(Number(p.rate)||0)}</td>
+      <td>${egp(Number(p.rate)||0)}${(Array.isArray(p.rateHistory)&&p.rateHistory.length>1)?` <span class="badge badge-blue" style="font-size:10px;cursor:help" title="${escapeAttr(p.rateHistory.slice().sort((a,b)=>String(a.from).localeCompare(String(b.from))).map(e=>(e.from==='1900-01-01'?'originally':'from '+e.from)+': '+(Number(e.rate)||0)+' EGP').join('\n'))}">↗ changed</span>`:''}
+        <button class="btn btn-sm" style="margin-left:6px;padding:1px 6px;font-size:11px" onclick="openEditTeacherRate('${jsString(p.name)}')" title="Change this teacher's per-session rate from a chosen date onward. Past lessons keep the rate they were earned at.">✎</button></td>
       <td>${payable}${archivedNote}</td>
       <td>${egp(total)}${overrideNote}</td>
       <td><span class="badge ${paid?'badge-green':'badge-amber'}">${paid?'Paid':'Pending'}</span></td>
@@ -4145,6 +4146,54 @@ function renderTeachers(){
 
  document.getElementById('teacher-total').textContent=egp(pending);
 }
+// Changing a teacher's per-session rate FROM a chosen date. Everything
+// they already earned keeps the rate it was earned at — a raise must
+// never restate a payslip that has already been handed over, or a past
+// month's profit.
+function openEditTeacherRate(name){
+  const p=(db.teacherProfiles||[]).find(t=>t.name===name);
+  if(!p) return;
+  const todayKey=new Date().toISOString().slice(0,10);
+  const hist=(Array.isArray(p.rateHistory)?p.rateHistory:[]).slice()
+    .sort((a,b)=>String(a.from||'').localeCompare(String(b.from||'')));
+  const histHtml=hist.length
+    ? '<div style="background:var(--bg-alt,#1a1a1a);border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:12px">'
+      +'<div style="font-size:12px;color:var(--text-muted);margin-bottom:6px">Rate history</div>'
+      + hist.map(e=>'<div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0">'
+          +'<span>'+(e.from==='1900-01-01'?'Originally':'From '+escapeHtml(formatDateDMY(e.from)))+'</span>'
+          +'<span style="font-weight:600">'+egp(Number(e.rate)||0)+'</span></div>').join('')
+      +'</div>'
+    : '';
+  openModal('Pay Rate — '+escapeHtml(p.name), `
+    <div style="margin-bottom:12px;color:var(--text-muted)">Current rate: <b style="color:var(--gold)">${egp(Number(p.rate)||0)}</b> per session</div>
+    ${histHtml}
+    <div class="form-field"><label for="tr-rate">New rate per session (EGP)</label><input id="tr-rate" type="number" min="0" value="${Number(p.rate)||0}"></div>
+    <div class="form-field"><label for="tr-from">Effective from</label><div style="display:flex;gap:4px"><input id="tr-from" type="text" placeholder="dd/mm/yyyy" maxlength="10" oninput="maskDateInput(this)" value="${escapeAttr(isoToDmy(todayKey))}"><button type="button" class="btn btn-sm" onclick="openDatePicker('tr-from')">📅</button></div></div>
+    <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px">Lessons before this date keep the old rate. Group sessions still pay 1.5× whichever rate applied then.</div>
+    <div style="text-align:right"><button class="btn btn-gold" onclick="confirmEditTeacherRate('${jsString(p.name)}')">Save rate</button></div>
+  `);
+}
+
+function confirmEditTeacherRate(name){
+  const p=(db.teacherProfiles||[]).find(t=>t.name===name);
+  if(!p) return;
+  const newRate=Number(document.getElementById('tr-rate')?.value||0);
+  const from=dmyToIso(document.getElementById('tr-from')?.value||'');
+  if(!(newRate>0)){ showToast('Enter a rate above zero.'); return; }
+  if(!from){ showToast('Pick the date this rate starts from.'); return; }
+  const oldRate=Number(p.rate)||0;
+  if(newRate===oldRate && (Array.isArray(p.rateHistory)&&p.rateHistory.length)){
+    showToast('That is already the current rate.'); return;
+  }
+  if(!confirm('Set '+p.name+'\'s rate to '+newRate+' EGP from '+formatDateDMY(from)+'?\n\nLessons before that date stay at '+oldRate+' EGP — payslips already issued do not change.')) return;
+  setTeacherRateFrom(p, newRate, from);
+  save(); closeModal();
+  if(typeof renderTeachers==='function') renderTeachers();
+  if(typeof renderOverview==='function') renderOverview();
+  if(typeof syncTeacherUpdateToSupabase==='function'){ try{ syncTeacherUpdateToSupabase(p); }catch(_){} }
+  showToast(p.name+' now on '+egp(newRate)+' from '+formatDateDMY(from));
+}
+
 function togglePayrollPaid(name){
  const month=currentMonth();
  const key=name+'_'+month;
@@ -4490,11 +4539,11 @@ function renderOverview(){
   const teacherMonth=(db.teacherProfiles||[]).filter(p=>(p.status||'active')!=='archived');
   const totalTeacher=teacherMonth.reduce((a,t)=>{
       const eligible=db.lessons.filter(l=>isLessonInPayrollPeriod(l, month) && (l.teacher||'').toLowerCase()===(t.name||'').toLowerCase() && isPayrollEligibleLesson(l));
-      return a + calculatePayrollAmount(eligible, t.rate);
+      return a + calculatePayrollAmount(eligible, t.rate, t);
     },0);
   const pendingTeacher=teacherMonth.filter(t=>!db.payrollPaid[t.name+'_'+month]).reduce((a,t)=>{
       const eligible=db.lessons.filter(l=>isLessonInPayrollPeriod(l, month) && (l.teacher||'').toLowerCase()===(t.name||'').toLowerCase() && isPayrollEligibleLesson(l));
-      return a + calculatePayrollAmount(eligible, t.rate);
+      return a + calculatePayrollAmount(eligible, t.rate, t);
     },0);
   const monthExp=db.expenses.filter(e=>e.month===month && (e.status_record||'active')!=='archived');
   const totalExp=monthExp.reduce((a,e)=>a+e.amount,0);
@@ -6725,7 +6774,7 @@ function exportPayrollCSV(){
  (db.teacherProfiles||[]).filter(p=>(p.status||'active')!=='archived').forEach(p=>{
    const eligible=db.lessons.filter(l=>isLessonInPayrollPeriod(l, month) && (l.teacher||'').toLowerCase()===(p.name||'').toLowerCase() && isPayrollEligibleLesson(l));
    const payable=payableSessionCount(eligible);
-   rows.push([p.name,month,payable,calculatePayrollAmount(eligible, p.rate)]);
+   rows.push([p.name,month,payable,calculatePayrollAmount(eligible, p.rate, p)]);
  });
  downloadCSV('payroll.csv',rows);
 }
@@ -8900,7 +8949,7 @@ async function runDataHealthCheck(){
     );
     const doubleSessions=eligible.filter(l=>l.isDoubleSession && (l.status==='attended'||l.status==='absent_paid') && (l.customPayrollAmount==null||l.customPayrollAmount===''));
     if(!doubleSessions.length) return;
-    const correctTotal=calculatePayrollAmount(eligible, profile.rate);
+    const correctTotal=calculatePayrollAmount(eligible, profile.rate, profile);
     // Reconstruct what the OLD (1.5x-on-double-sessions) formula would have
     // paid, to show exactly what's at stake if that's the total already used.
     const oldTotal=eligible.reduce((sum,l)=>{
@@ -10284,15 +10333,64 @@ function isPayrollGroupSession(l){
 // exactly the recorded 2000 total).
 const PAYROLL_GROUP_RATE_MULTIPLIER=1.5;
 
-function calculatePayrollAmount(lessons, rate){
+// A teacher's pay rate changes over time, and a change must NOT rewrite
+// what they already earned. rateHistory is an ordered list of
+// {rate, from} — the rate that applies from that date onward — so a
+// lesson is always paid at whatever the rate was ON THE DAY IT HAPPENED.
+//
+// Without this, raising a rate would silently restate every past payslip
+// (and every past month's profit), which is the same class of mistake
+// that once let student revenue rewrite itself.
+//
+// When the first change is made, the previous rate is written in as a
+// baseline entry dated far in the past, so lessons before the change
+// still resolve to the old rate rather than falling through to whatever
+// `rate` currently holds.
+function teacherRateOnDate(profile, dateKey){
+  if(!profile) return 0;
+  const hist=Array.isArray(profile.rateHistory) ? profile.rateHistory : [];
+  if(!hist.length || !dateKey) return Number(profile.rate)||0;
+  let applicable=null;
+  hist.slice()
+    .sort((a,b)=>String(a.from||'').localeCompare(String(b.from||'')))
+    .forEach(entry=>{ if(String(entry.from||'')<=String(dateKey)) applicable=entry; });
+  return applicable ? (Number(applicable.rate)||0) : (Number(profile.rate)||0);
+}
+
+// Records a rate change effective from a date, preserving the rate that
+// came before it.
+function setTeacherRateFrom(profile, newRate, fromDate){
+  if(!profile) return;
+  profile.rateHistory=Array.isArray(profile.rateHistory) ? profile.rateHistory : [];
+  if(!profile.rateHistory.length){
+    // Baseline: everything before the first change keeps the old rate.
+    profile.rateHistory.push({rate:Number(profile.rate)||0, from:'1900-01-01'});
+  }
+  // A second change on the SAME date replaces the first rather than
+  // stacking two entries that disagree.
+  profile.rateHistory=profile.rateHistory.filter(e=>String(e.from)!==String(fromDate));
+  profile.rateHistory.push({rate:Number(newRate)||0, from:fromDate});
+  profile.rateHistory.sort((a,b)=>String(a.from||'').localeCompare(String(b.from||'')));
+  // `rate` stays the CURRENT rate, so anything asking "what do they earn
+  // now" (and any code not yet date-aware) still gets a sensible answer.
+  const todayKey=new Date().toISOString().slice(0,10);
+  profile.rate=teacherRateOnDate(profile, todayKey>=fromDate ? todayKey : fromDate);
+}
+
+function calculatePayrollAmount(lessons, rate, profile){
   const r=Number(rate)||0;
+  const hasHistory=profile && Array.isArray(profile.rateHistory) && profile.rateHistory.length;
   return lessons.reduce((sum,l)=>{
     if(l.status!=='attended' && l.status!=='absent_paid') return sum;
     if(l.customPayrollAmount!=null && l.customPayrollAmount!==''){
       const n=Number(l.customPayrollAmount);
       if(!Number.isNaN(n)) return sum+n;
     }
-    const perSession = r * (isPayrollGroupSession(l) ? PAYROLL_GROUP_RATE_MULTIPLIER : 1);
+    // The rate as it was on the day of THIS lesson — so a later raise
+    // never restates an earlier payslip. The 1.5x group multiplier
+    // applies to whichever rate was in force then.
+    const rateThen = hasHistory ? teacherRateOnDate(profile, l.date) : r;
+    const perSession = rateThen * (isPayrollGroupSession(l) ? PAYROLL_GROUP_RATE_MULTIPLIER : 1);
     // Round each session to whole EGP AS IT IS EARNED, not just when
     // displayed. The 1.5x group multiplier produces a half-unit on any
     // ODD rate (175 -> 262.5), and every display path rounds that to 263
@@ -11881,6 +11979,12 @@ async function syncTeacherToSupabase(profile){
       email: profile.email || '',
       title: profile.title || 'Mr',
       rate: Number(profile.rate || 0),
+      // The rate HISTORY, not just the current rate. Without it in the
+      // cloud a reload would leave the teacher with only their latest
+      // rate and no record of when it changed — so every past lesson
+      // would silently be repriced at the new rate, restating payslips
+      // that have already been handed over.
+      rate_history: Array.isArray(profile.rateHistory) ? profile.rateHistory : [],
       instruments: profile.instruments || [],
       available_days: profile.days || profile.available_days || [],
       time_slots: profile.timeSlots || {}
@@ -11983,6 +12087,9 @@ window.downloadCloud = async function(){
         email: t.email || '',
         title: t.title || 'Mr',
         rate: t.rate || 0,
+        // Read the rate history back, falling back to whatever this device
+        // already had so a cloud row predating the column doesn't wipe it.
+        rateHistory: Array.isArray(t.rate_history) ? t.rate_history : (existing?.rateHistory||[]),
         instruments: t.instruments || [],
         days: t.available_days || [],
         timeSlots: (t.time_slots && Object.keys(t.time_slots).length) ? t.time_slots : (existing?.timeSlots||{}),
@@ -12015,6 +12122,12 @@ async function syncTeacherUpdateToSupabase(profile){
       email: profile.email || '',
       title: profile.title || 'Mr',
       rate: Number(profile.rate || 0),
+      // The rate HISTORY, not just the current rate. Without it in the
+      // cloud a reload would leave the teacher with only their latest
+      // rate and no record of when it changed — so every past lesson
+      // would silently be repriced at the new rate, restating payslips
+      // that have already been handed over.
+      rate_history: Array.isArray(profile.rateHistory) ? profile.rateHistory : [],
       instruments: profile.instruments || [],
       available_days: profile.days || [],
       time_slots: profile.timeSlots || {}
@@ -12824,7 +12937,7 @@ window.addEventListener('load', function(){
             isLessonInPayrollPeriod(l, month) &&
             isPayrollEligibleLesson(l)
          );
-         totalPayroll += calculatePayrollAmount(eligible, t.rate);
+         totalPayroll += calculatePayrollAmount(eligible, t.rate, t);
       });
 
    let payrollDue=0;
@@ -12838,7 +12951,7 @@ window.addEventListener('load', function(){
                isLessonInPayrollPeriod(l, month) &&
                isPayrollEligibleLesson(l)
             );
-            payrollDue += calculatePayrollAmount(eligible, t.rate);
+            payrollDue += calculatePayrollAmount(eligible, t.rate, t);
          }
       });
 
@@ -12953,7 +13066,7 @@ window.addEventListener('load', function(){
    (db.teacherProfiles||[]).forEach(t=>{
      if((t.status||'active')==='archived' || db.payrollPaid[t.name+'_'+month]) return;
      const eligible=(db.lessons||[]).filter(l=>isLessonInPayrollPeriod(l, month) && (l.teacher||'').toLowerCase()===(t.name||'').toLowerCase() && isPayrollEligibleLesson(l));
-     payrollDue += calculatePayrollAmount(eligible, t.rate);
+     payrollDue += calculatePayrollAmount(eligible, t.rate, t);
    });
 
    const academy=document.getElementById('academy-kpis');
@@ -13064,7 +13177,7 @@ window.addEventListener('load', function(){
       if(lessons>topCount){ topCount=lessons; topTeacher=t.name||'—'; }
 
       if(db.payrollPaid[t.name+'_'+month]){
-         payrollPaid += calculatePayrollAmount(eligible, t.rate);
+         payrollPaid += calculatePayrollAmount(eligible, t.rate, t);
       }
    });
 
@@ -21011,6 +21124,9 @@ function printTeacherPayrollLessons(teacherName){
   dateEntries.sort((a,b)=>a.dateKey.localeCompare(b.dateKey));
 
   let regularTotal=0, grpTotal=0, prevDateKey=null;
+  // Each rate change is announced once, before the first session it
+  // affects — not repeated on every subsequent line.
+  const announcedRateChanges=new Set();
   const lines=dateEntries.map(({dateKey,dayName})=>{
     const dayLessons=(db.lessons||[]).filter(l=>
       l.date===dateKey &&
@@ -21044,8 +21160,25 @@ function printTeacherPayrollLessons(teacherName){
       const gapDays=Math.round((new Date(dateKey+'T00:00:00Z')-new Date(prevDateKey+'T00:00:00Z'))/86400000);
       if(gapDays>=3) blankBefore=true;
     }
+    // A rate change that takes effect on or before this date, and hasn't
+    // been announced yet, is called out in bold immediately BEFORE the
+    // first session it applies to — so the teacher can see exactly where
+    // the new rate starts rather than having to reconcile a total that
+    // quietly changed partway through the month.
+    let rateNote=null;
+    const hist=(Array.isArray(profile.rateHistory)?profile.rateHistory:[])
+      .filter(e=>e.from && e.from!=='1900-01-01')
+      .sort((a,b)=>String(a.from).localeCompare(String(b.from)));
+    hist.forEach(e=>{
+      if(announcedRateChanges.has(e.from)) return;
+      if(String(e.from)>String(dateKey)) return;   // not in effect yet
+      if(String(e.from)<String(startKey)) return;  // predates this payslip entirely
+      announcedRateChanges.add(e.from);
+      rateNote='Rate changed to '+(Number(e.rate)||0)+' EGP / session from '+formatDateDMY(e.from);
+    });
+
     prevDateKey=dateKey;
-    return {text:dayName.slice(0,3)+' '+dateLabel+' : '+summary, blankBefore};
+    return {text:dayName.slice(0,3)+' '+dateLabel+' : '+summary, blankBefore, rateNote};
   });
 
   // TOTAL / Payment — the SAME calculation the Payroll tab itself uses,
@@ -21055,7 +21188,7 @@ function printTeacherPayrollLessons(teacherName){
     (l.teacher||'').toLowerCase()===teacherName.toLowerCase() &&
     isPayrollEligibleLesson(l)
   );
-  const paymentTotal=calculatePayrollAmount(eligibleLessons, profile.rate);
+  const paymentTotal=calculatePayrollAmount(eligibleLessons, profile.rate, profile);
 
   // Draw as a plain white canvas document, matching the reference layout.
   const width=520;
@@ -21065,7 +21198,7 @@ function printTeacherPayrollLessons(teacherName){
   const nameHeight=34;
   const footerHeight=70;
   const padding=24;
-  const bodyHeight=lines.reduce((h,l)=>h+(l.blankBefore?blankHeight:0)+lineHeight, 0);
+  const bodyHeight=lines.reduce((h,l)=>h+(l.blankBefore?blankHeight:0)+(l.rateNote?lineHeight:0)+lineHeight, 0);
   const height=headerHeight+nameHeight+bodyHeight+footerHeight+padding;
 
   const canvas=document.createElement('canvas');
@@ -21090,6 +21223,15 @@ function printTeacherPayrollLessons(teacherName){
   ctx.font='13px Arial, sans-serif';
   lines.forEach(l=>{
     if(l.blankBefore) cursorY+=blankHeight;
+    // The rate-change note sits in BOLD directly above the first session
+    // it applies to, so the point where the new rate begins is visible on
+    // the page rather than having to be inferred from the total.
+    if(l.rateNote){
+      ctx.font='bold 13px Arial, sans-serif';
+      ctx.fillText(l.rateNote, padding, cursorY+13);
+      cursorY+=lineHeight;
+      ctx.font='13px Arial, sans-serif';
+    }
     ctx.fillText(l.text, padding, cursorY+13);
     cursorY+=lineHeight;
   });
