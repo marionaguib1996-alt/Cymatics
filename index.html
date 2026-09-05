@@ -414,7 +414,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-220</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-221</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -3985,6 +3985,8 @@ function saveEditStudent(id){
      });
      if(targetCount>0){
        const firstDate=nextWeekdayOnOrAfter(todayKey, s.lesson_day);
+       // Freshly created lessons carry no override — the flag described a
+       // specific old lesson that no longer exists.
        rescheduledCount=scheduleWeeklyLessonsFrom(s, firstDate, targetCount);
      }
      if(planChanged && targetCount!==existingCount){
@@ -5997,7 +5999,15 @@ function saveEditLesson(id){
  const notes=document.getElementById('el-notes')?.value||'';
  const notesShowToTeacher=!!document.getElementById('el-notes-show-teacher')?.checked;
 
+ // Editing this ONE lesson's time by hand is a deliberate one-off — a
+ // student asking to come later just that week. Recorded as intent so the
+ // "left at an old time slot" repair can tell it apart from a lesson a
+ // failed reschedule stranded there; in the data alone the two look
+ // identical, and without this the repair would helpfully undo exactly
+ // the change that was just made on purpose.
+ const timeWasChangedByHand = (l.time !== tm);
  l.date=d; l.time=tm; l.teacher=t; l.instrument=i; l.status=s; l.customPayrollAmount=customPayrollAmount; l.notes=notes; l.notesShowToTeacher=notesShowToTeacher;
+ if(timeWasChangedByHand) l.timeOverridden=true;
  l.month=String(d||'').slice(0,7) || l.month;
  // Newly marking this lesson attended (and not manually flagged unpaid):
  // default the unpaid flag from the month's payment status, so an
@@ -7572,6 +7582,7 @@ function findScheduleMismatches(){
     );
     own.forEach(l=>{
       if(l.makeupForLessonId) return;                       // make-ups move on purpose
+      if(l.timeOverridden) return;                          // moved by hand on purpose
       if(!l.time || l.time===s.lessonTime) return;
       if(!dateMatchesWeekday(l.date, s.lesson_day)) return; // off-day lesson is deliberate
       if(own.filter(x=>x.date===l.date).length>1) return;   // double session that day
@@ -7597,7 +7608,26 @@ function previewFixScheduleMismatches(){
     + rows.map(r=>escapeHtml(r.student.name||'?')+' — '+escapeHtml(formatLedgerDate(r.lesson.date))
         +': <b>'+escapeHtml(formatTime12h(r.lesson.time))+'</b> → '+escapeHtml(formatTime12h(r.student.lessonTime))).join('<br>')
     +'</div></div>'
-    +'<button class="btn btn-gold" style="margin-top:12px" onclick="applyFixScheduleMismatches()">Move these '+rows.length+' to the current time</button>';
+    +'<button class="btn btn-gold" style="margin-top:12px" onclick="applyFixScheduleMismatches()">Move these '+rows.length+' to the current time</button>'
+    +'<button class="btn" style="margin-top:12px;margin-left:8px" onclick="markScheduleMismatchesIntentional()">These are deliberate — leave them alone</button>'
+    +'<div style="font-size:12px;color:var(--text-muted);margin-top:6px">A lesson moved by hand from now on is remembered automatically and won\'t appear here. Use this for ones changed before that was tracked.</div>';
+}
+
+// Marks the currently-listed lessons as deliberate, so they stop being
+// offered for "correction". Needed because a lesson moved by hand BEFORE
+// the app started recording that intent is indistinguishable from a
+// stranded one — this is the user supplying the missing information.
+function markScheduleMismatchesIntentional(){
+  const rows=findScheduleMismatches();
+  if(!rows.length){ showToast('Nothing listed.'); return; }
+  if(!confirm('Mark '+rows.length+' lesson(s) as deliberately scheduled at their current time?\n\nThey stay exactly where they are and stop being reported here.')) return;
+  rows.forEach(function(r){
+    r.lesson.timeOverridden=true;
+    if(typeof syncLessonUpdateToSupabase==='function'){ try{ syncLessonUpdateToSupabase(r.lesson); }catch(_){} }
+  });
+  save();
+  showToast(rows.length+' lesson(s) marked as intentional ✓');
+  previewFixScheduleMismatches();
 }
 
 function applyFixScheduleMismatches(){
@@ -17473,6 +17503,7 @@ function calendarRescheduleLesson(lessonId, teacherName, targetDate, targetTime)
   }
   const oldTime=l.time;
   l.time=targetTime;
+  l.timeOverridden=true; // moved by hand on the calendar — see saveEditLesson
   save();
   renderCalendarPage();
   if(typeof syncLessonUpdateToSupabase==='function') syncLessonUpdateToSupabase(l);
