@@ -414,7 +414,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-221</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-222</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -16272,7 +16272,12 @@ function slotOptionsHtml(teacherName, dayName, excludeStudentId, isGroup, curren
     let label=formatTime12h(sl.actualStart||sl.time);
     if(sl.actualStart && sl.actualStart!==sl.time) label+=' (room frees then)';
     else if(sl.shortWindow) label+=' (45 min)';
-    if(sl.busyWith) label+=' (Teacher Busy — with '+sl.busyWith+')';
+    // A renewal HOLD is not the same as a booked lesson, and showing both
+    // as "Teacher Busy" made a soft, self-expiring reservation look like a
+    // hard conflict — with no hint that it frees itself after that date,
+    // or that renewing (or archiving) that student releases it at once.
+    if(sl.busyWith && sl.heldForRenewal) label+=' (Held for '+sl.busyWith+' — awaiting renewal)';
+    else if(sl.busyWith) label+=' (Teacher Busy — with '+sl.busyWith+')';
     else if(sl.full) label+=' (Rooms Full)';
     const isCurrent=currentTime && (sl.actualStart||sl.time)===currentTime;
     return '<option value="'+escapeAttr(bookValue)+'"'+(sl.full?' disabled':'')+(isCurrent?' selected':'')+'>'+escapeHtml(label)+'</option>';
@@ -16381,7 +16386,7 @@ function getAvailableSlotsWithCapacity(teacherName, dayName, excludeStudentId, f
     // unavailable time just vanish with no explanation — looked like a
     // bug rather than "teacher's still with another student." Show it
     // as a disabled option with a reason instead, same as Rooms Full.
-    if(slot.occupiedBy){ results.push({time:slot.time, full:true, busyWith:slot.occupiedBy}); return; }
+    if(slot.occupiedBy){ results.push({time:slot.time, full:true, busyWith:slot.occupiedBy, heldForRenewal:!!slot.heldForRenewal}); return; }
     const nominal=slot.time;
 
     // 1) Full preferred duration fits at the nominal start — the normal,
