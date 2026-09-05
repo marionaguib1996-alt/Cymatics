@@ -414,7 +414,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-222</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-223</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -2139,14 +2139,37 @@ function resumeStudent(id){
   const s=(db.students||[]).find(x=>x.id===id);
   if(!s) return;
   if(!confirm('Resume '+s.name+'\'s enrollment? Their regular time slot will be reserved for them again.')) return;
-  s.frozen=false;
-  s.frozenSince='';
-  s.frozenReason='';
 
+  // Everything that can ABORT the resume must happen before the frozen
+  // state is cleared, or cancelling the prompt below would leave the
+  // student un-frozen with no lessons — the worst of both outcomes.
   // Recreate whatever sessions were paused at freeze time — starting from
   // the next occurrence of their lesson day on/after TODAY (the resume
   // date), not the old dates, since those already passed while frozen.
-  const owed=s.frozenLessonsRemaining||0;
+  let owed=s.frozenLessonsRemaining||0;
+  // A frozen student with a count of zero is almost always a LOST count,
+  // not a student who genuinely had nothing paused — freezing someone with
+  // no upcoming lessons is rare, and the count used to be dropped by any
+  // cloud reload. Rather than silently restoring nothing (which looks
+  // exactly like the resume having failed), ask, offering their plan's
+  // normal session count as the sensible default.
+  if(owed===0 && s.lesson_day && s.lessonTime){
+    const suggested=(typeof getPlanSessionCount==='function') ? (getPlanSessionCount(s.plan)||0) : 0;
+    if(suggested>0){
+      const answer=prompt(
+        'No paused-lesson count is recorded for '+(s.name||'this student')+
+        ' — this can happen if they were frozen on another device or before an update.\n\n'+
+        'How many sessions should be scheduled from today? (0 to skip)',
+        String(suggested));
+      if(answer===null){ return; } // cancelled — still frozen, nothing changed
+      owed=Math.max(0, Number(answer)||0);
+    }
+  }
+
+  // Past the last point that can abort — safe to clear the frozen state.
+  s.frozen=false;
+  s.frozenSince='';
+  s.frozenReason='';
   const makeupRefs=Array.isArray(s.frozenMakeupRefs) ? s.frozenMakeupRefs.slice() : [];
   s.frozenLessonsRemaining=0;
   s.frozenMakeupRefs=[];
@@ -10512,6 +10535,11 @@ async function _autoLoadFromCloudImpl(){
        linkedPersonId: s.linked_person_id||'',
        discountPercent: (s.discount_percent!=null) ? s.discount_percent : null,
        frozen: !!s.frozen,
+       // Read the paused-lesson count BACK from the cloud. Without this the
+       // freeze state synced but the count didn't, so a reload left a
+       // frozen student with nothing to restore and Resume gave back zero.
+       frozenLessonsRemaining: Number(s.frozen_lessons_remaining)||0,
+       frozenMakeupRefs: Array.isArray(s.frozen_makeup_refs) ? s.frozen_makeup_refs : [],
        frozenSince: s.frozen_since||'',
        frozenReason: s.frozen_reason||'',
        isOnline: !!s.is_online
@@ -11497,6 +11525,14 @@ async function _addStudentToSupabaseImpl(student){
       linked_person_id: student.linkedPersonId ? String(student.linkedPersonId) : null,
       discount_percent: (student.discountPercent!=null && student.discountPercent!=='') ? Number(student.discountPercent) : null,
       frozen: !!student.frozen,
+      // The COUNT of sessions paused by the freeze, and which of them were
+      // make-ups. Without these in the cloud the freeze state itself synced
+      // (the student showed as frozen everywhere) but the count did not —
+      // so any cloud reload replaced the student record with a copy that
+      // had no count, and Resume then restored zero lessons. The freeze
+      // looked like it worked and the resume silently gave nothing back.
+      frozen_lessons_remaining: Number(student.frozenLessonsRemaining)||0,
+      frozen_makeup_refs: Array.isArray(student.frozenMakeupRefs) ? student.frozenMakeupRefs : [],
       frozen_since: student.frozenSince || null,
       frozen_reason: student.frozenReason || '',
       is_online: !!student.isOnline
@@ -11718,6 +11754,14 @@ async function syncStudentUpdateToSupabase(student){
       linked_person_id: student.linkedPersonId ? String(student.linkedPersonId) : null,
       discount_percent: (student.discountPercent!=null && student.discountPercent!=='') ? Number(student.discountPercent) : null,
       frozen: !!student.frozen,
+      // The COUNT of sessions paused by the freeze, and which of them were
+      // make-ups. Without these in the cloud the freeze state itself synced
+      // (the student showed as frozen everywhere) but the count did not —
+      // so any cloud reload replaced the student record with a copy that
+      // had no count, and Resume then restored zero lessons. The freeze
+      // looked like it worked and the resume silently gave nothing back.
+      frozen_lessons_remaining: Number(student.frozenLessonsRemaining)||0,
+      frozen_makeup_refs: Array.isArray(student.frozenMakeupRefs) ? student.frozenMakeupRefs : [],
       frozen_since: student.frozenSince || null,
       frozen_reason: student.frozenReason || '',
       is_online: !!student.isOnline
