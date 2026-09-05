@@ -414,7 +414,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-219</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-220</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1319,7 +1319,12 @@ input::placeholder{color:var(--text-dim)}
     <div class="card-title" style="margin-bottom:6px;font-size:14px">5 · Update Lesson Names Left Over From a Rename</div>
     <small style="display:block;margin-bottom:8px;color:var(--text-muted)">Renaming a student now updates their lessons automatically, but any rename done before that left its lessons carrying the old name. This splits them in two: near-identical names (a spelling fix) can be updated in bulk, while names too different to be the same person are listed for you to check by hand — those may be genuinely misassigned lessons, and relabelling them would hide a real problem.</small>
     <button class="btn" onclick="previewFixStaleLessonNames()">🔍 Preview (changes nothing)</button>
-    <div id="stale-names-results" style="margin-top:12px"></div>
+    <div id="stale-names-results" style="margin-top:12px;margin-bottom:18px"></div>
+
+    <div class="card-title" style="margin-bottom:6px;font-size:14px">6 · Move Lessons Left at an Old Time Slot</div>
+    <small style="display:block;margin-bottom:8px;color:var(--text-muted)">Changing a student's time moves their upcoming lessons automatically, but one the reschedule couldn't see stays behind at the old time — so the same student appears at two different times on different weeks. Make-ups, double sessions and off-day lessons are excluded, since those differ deliberately. Room and teacher availability are checked before each move.</small>
+    <button class="btn" onclick="previewFixScheduleMismatches()">🔍 Preview (changes nothing)</button>
+    <div id="schedule-mismatch-results" style="margin-top:12px"></div>
   </div>
 </div>
 
@@ -7537,6 +7542,88 @@ function applyFixStaleLessonNames(){
   if(typeof renderLessons==='function') renderLessons();
   showToast(safe.length+' lesson name(s) updated ✓');
   previewFixStaleLessonNames();
+}
+
+// Future scheduled lessons sitting at a DIFFERENT time than the student's
+// current slot. Changing a student's time reschedules their upcoming
+// lessons automatically, but a lesson the reschedule couldn't see — one
+// whose studentId went stale during the reset, say — is left behind at
+// the old time, so the ledger shows the same student split across two
+// slots on different weeks.
+//
+// Deliberately narrow, because plenty of differences are legitimate:
+//   - make-ups are booked at whatever time was free, by design
+//   - a double session is a second lesson that day at another time
+//   - past lessons record where the session ACTUALLY happened
+// So this only looks at FUTURE scheduled lessons, on the student's own
+// regular weekday, that aren't make-ups, and where that date has no
+// second lesson for them.
+function findScheduleMismatches(){
+  const todayKey=new Date().toISOString().slice(0,10);
+  const out=[];
+  (db.students||[]).forEach(s=>{
+    if((s.status||'active')==='archived' || s.frozen) return;
+    if(!s.lesson_day || !s.lessonTime) return;
+    const own=(db.lessons||[]).filter(l=>
+      lessonBelongsToStudent(l, s) &&
+      (l.status_record||'active')!=='archived' &&
+      l.status==='scheduled' &&
+      l.date && l.date>=todayKey
+    );
+    own.forEach(l=>{
+      if(l.makeupForLessonId) return;                       // make-ups move on purpose
+      if(!l.time || l.time===s.lessonTime) return;
+      if(!dateMatchesWeekday(l.date, s.lesson_day)) return; // off-day lesson is deliberate
+      if(own.filter(x=>x.date===l.date).length>1) return;   // double session that day
+      out.push({lesson:l, student:s});
+    });
+  });
+  return out.sort((a,b)=>String(a.lesson.date).localeCompare(String(b.lesson.date)));
+}
+
+function previewFixScheduleMismatches(){
+  const el=document.getElementById('schedule-mismatch-results');
+  if(!el) return;
+  const rows=findScheduleMismatches();
+  if(!rows.length){
+    el.innerHTML='<div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px;color:#a8e8a8">✅ Every upcoming lesson sits at its student\'s current time.</div>';
+    return;
+  }
+  el.innerHTML='<div style="background:#3a3520;border:1px solid #6a5a2a;border-radius:6px;padding:12px;margin-bottom:10px">'
+    +'<div style="font-weight:700;color:#e2c47a;margin-bottom:6px">'+rows.length+' upcoming lesson(s) at the wrong time</div>'
+    +'<div style="font-size:13px;color:#c8d8e8;line-height:1.6">Each is on the student\'s regular day but at a different time than their current slot — the symptom of a time change that missed some lessons. Make-ups, double sessions and off-day lessons are excluded, since those differ on purpose. Moving one checks the room and the teacher first, and any that can\'t move are reported rather than forced.</div></div>'
+    +'<div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px;max-height:280px;overflow-y:auto">'
+    +'<div style="font-size:13px;color:#c8d8e8;line-height:1.8">'
+    + rows.map(r=>escapeHtml(r.student.name||'?')+' — '+escapeHtml(formatLedgerDate(r.lesson.date))
+        +': <b>'+escapeHtml(formatTime12h(r.lesson.time))+'</b> → '+escapeHtml(formatTime12h(r.student.lessonTime))).join('<br>')
+    +'</div></div>'
+    +'<button class="btn btn-gold" style="margin-top:12px" onclick="applyFixScheduleMismatches()">Move these '+rows.length+' to the current time</button>';
+}
+
+function applyFixScheduleMismatches(){
+  const rows=findScheduleMismatches();
+  if(!rows.length){ showToast('Nothing to move.'); return; }
+  if(!confirm('Move '+rows.length+' upcoming lesson(s) to their student\'s current time?\n\nAny that would collide with a full room or a busy teacher are left where they are and reported.')) return;
+  let moved=0; const blocked=[];
+  rows.forEach(function(r){
+    const t=r.student.lessonTime;
+    const dur=(typeof isGroupPlan==='function' && isGroupPlan(r.student.plan)) ? GROUP_SESSION_DURATION_MINUTES : SESSION_DURATION_MINUTES;
+    if(typeof isRoomFullDuringRange==='function' && isRoomFullDuringRange(r.lesson.date, t, dur, r.lesson.id)){
+      blocked.push((r.student.name||'?')+' — '+r.lesson.date+' (rooms full at '+formatTime12h(t)+')'); return;
+    }
+    if(typeof isTeacherAbsentOnDate==='function' && isTeacherAbsentOnDate(r.student.teacher, r.lesson.date, t)){
+      blocked.push((r.student.name||'?')+' — '+r.lesson.date+' (teacher absent)'); return;
+    }
+    r.lesson.time=t;
+    if(typeof syncLessonUpdateToSupabase==='function'){ try{ syncLessonUpdateToSupabase(r.lesson); }catch(_){} }
+    moved++;
+  });
+  save();
+  if(typeof renderLessons==='function') renderLessons();
+  if(typeof renderCalendarPage==='function') renderCalendarPage();
+  showToast(moved+' lesson(s) moved'+(blocked.length?' · '+blocked.length+' could not move':'')+' ✓');
+  if(blocked.length) console.warn('Could not move:\n'+blocked.join('\n'));
+  previewFixScheduleMismatches();
 }
 
 function renderDeletionLog(){
