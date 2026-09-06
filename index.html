@@ -414,7 +414,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-224</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-226</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -687,6 +687,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="form-field"><label for="pr-cost">Cost each (EGP)</label><input id="pr-cost" type="number" placeholder="0" min="0"></div>
       <div class="form-field"><label for="pr-price">Sell for (EGP)</label><input id="pr-price" type="number" placeholder="0" min="0"></div>
       <div class="form-field"><label for="pr-qty">Starting stock</label><input id="pr-qty" type="number" placeholder="0" min="0"></div>
+      <div class="form-field"><label for="pr-lowat">Warn me at</label><input id="pr-lowat" type="number" placeholder="3" min="0" title="Show the low-stock warning when stock falls to this or below. Set 0 to be warned only when it runs out. Leave blank for 3."></div>
     </div>
     <button class="btn btn-gold" onclick="addProduct()">+ Add product</button>
     <div class="table-wrap" style="margin-top:14px"><table>
@@ -4291,11 +4292,16 @@ function addProduct(){
   if(db.products.some(p=>String(p.name||'').toLowerCase()===name.toLowerCase())){
     showToast('A product with that name already exists.'); return;
   }
+  // Blank means "use the default of 3"; an explicit 0 means "only warn me
+  // when it's gone" and must survive as a real 0.
+  const lowRaw=(document.getElementById('pr-lowat')?.value||'').trim();
+  const lowStockAt = lowRaw==='' ? 3 : Math.max(0, Number(lowRaw)||0);
   const product={id:(crypto.randomUUID?crypto.randomUUID():String(Date.now())),
-                 name, cost, price, qty, createdAt:new Date().toISOString()};
+                 name, cost, price, qty, lowStockAt, createdAt:new Date().toISOString()};
   db.products.push(product);
   save();
-  ['pr-name','pr-cost','pr-price','pr-qty'].forEach(id=>{ const el=document.getElementById(id); if(el) el.value=''; });
+  if(typeof syncProductToSupabase==='function'){ try{ syncProductToSupabase(product); }catch(_){} }
+  ['pr-name','pr-cost','pr-price','pr-qty','pr-lowat'].forEach(id=>{ const el=document.getElementById(id); if(el) el.value=''; });
   renderProducts();
   showToast(name+' added');
 }
@@ -4309,6 +4315,7 @@ function deleteProduct(id){
   if(typeof logRecordDeletion==='function') logRecordDeletion('product', p, 'removed from Products');
   db.products=(db.products||[]).filter(x=>String(x.id)!==String(id));
   save();
+  if(typeof deleteProductFromSupabase==='function'){ try{ deleteProductFromSupabase(id); }catch(_){} }
   renderProducts();
   showToast(p.name+' removed');
 }
@@ -4320,7 +4327,9 @@ function openRestockProduct(id){
     <div style="margin-bottom:10px;color:var(--text-muted)">In stock now: <b>${p.qty||0}</b></div>
     <div class="form-field"><label for="rs-qty">Add how many?</label><input id="rs-qty" type="number" min="1" value="1"></div>
     <div class="form-field"><label for="rs-cost">Cost each (EGP) — leave as is to keep ${egp(p.cost||0)}</label><input id="rs-cost" type="number" min="0" value="${p.cost||0}"></div>
-    <div style="text-align:right;margin-top:12px"><button class="btn btn-gold" onclick="confirmRestockProduct('${escapeAttr(String(p.id))}')">Add to stock</button></div>
+    <div class="form-field"><label for="rs-lowat">Warn me at this stock level or below</label><input id="rs-lowat" type="number" min="0" value="${(p.lowStockAt==null||p.lowStockAt==='')?3:Number(p.lowStockAt)}"></div>
+    <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px">Set 0 to be warned only when it runs out completely.</div>
+    <div style="text-align:right;margin-top:12px"><button class="btn btn-gold" onclick="confirmRestockProduct('${escapeAttr(String(p.id))}')">Save</button></div>
   `);
 }
 
@@ -4329,11 +4338,17 @@ function confirmRestockProduct(id){
   if(!p) return;
   const add=Number(document.getElementById('rs-qty')?.value||0);
   const cost=Number(document.getElementById('rs-cost')?.value||p.cost||0);
-  if(add<=0){ showToast('Enter how many to add.'); return; }
+  // 0 is allowed here so the warning level can be changed on its own,
+  // without pretending to receive stock that didn't arrive.
+  if(add<0){ showToast('Quantity cannot be negative.'); return; }
   p.qty=(Number(p.qty)||0)+add;
   p.cost=cost; // latest buy-in price; past sales keep their own copy
-  save(); closeModal(); renderProducts();
-  showToast('Added '+add+' to '+p.name);
+  const lowRaw=(document.getElementById('rs-lowat')?.value||'').trim();
+  if(lowRaw!=='') p.lowStockAt=Math.max(0, Number(lowRaw)||0);
+  save();
+  if(typeof syncProductToSupabase==='function'){ try{ syncProductToSupabase(p); }catch(_){} }
+  closeModal(); renderProducts();
+  showToast(add>0 ? ('Added '+add+' to '+p.name) : (p.name+' updated'));
 }
 
 function openSellProduct(id){
@@ -4371,7 +4386,10 @@ function confirmSellProduct(id){
     note
   });
   p.qty=(Number(p.qty)||0)-qty;
-  save(); closeModal(); renderProducts();
+  save();
+  if(typeof syncSaleToSupabase==='function'){ try{ syncSaleToSupabase(db.sales[db.sales.length-1]); }catch(_){} }
+  if(typeof syncProductToSupabase==='function'){ try{ syncProductToSupabase(p); }catch(_){} }
+  closeModal(); renderProducts();
   if(typeof renderOverview==='function') renderOverview();
   showToast('Sold '+qty+' × '+p.name+' — '+egp(qty*unitPrice));
 }
@@ -4384,7 +4402,10 @@ function deleteSale(saleId){
   const p=(db.products||[]).find(x=>String(x.id)===String(sale.productId));
   if(p) p.qty=(Number(p.qty)||0)+(Number(sale.qty)||0);
   db.sales=(db.sales||[]).filter(x=>String(x.id)!==String(saleId));
-  save(); renderProducts();
+  save();
+  if(typeof deleteSaleFromSupabase==='function'){ try{ deleteSaleFromSupabase(saleId); }catch(_){} }
+  if(p && typeof syncProductToSupabase==='function'){ try{ syncProductToSupabase(p); }catch(_){} }
+  renderProducts();
   if(typeof renderOverview==='function') renderOverview();
   showToast('Sale removed, stock restored');
 }
@@ -4409,13 +4430,19 @@ function renderProducts(){
       const soldThis=(db.sales||[]).filter(sa=>String(sa.productId)===String(p.id) && String(sa.month)===String(month));
       const unitsThis=soldThis.reduce((n,r)=>n+(Number(r.qty)||0), 0);
       const margin=(Number(p.price)||0)-(Number(p.cost)||0);
-      const lowStock=(Number(p.qty)||0)<=3;
+      // Per-product threshold. A hardcoded 3 suits picks but is useless
+      // for something bought one at a time — and 0 is a legitimate
+      // setting, meaning "only warn me when it's actually gone", so the
+      // check has to distinguish a real 0 from a missing value rather
+      // than treating both as "use the default".
+      const lowAt=(p.lowStockAt==null || p.lowStockAt==='') ? 3 : (Number(p.lowStockAt)||0);
+      const lowStock=(Number(p.qty)||0)<=lowAt;
       return `<tr>
         <td><strong>${escapeHtml(p.name)}</strong></td>
         <td>${egp(p.cost||0)}</td>
         <td>${egp(p.price||0)}</td>
         <td style="color:${margin>0?'var(--success,#5cb85c)':'var(--danger,#e06c6c)'}">${egp(margin)}</td>
-        <td${lowStock?' style="color:var(--danger,#e06c6c);font-weight:600"':''}>${p.qty||0}${lowStock?' ⚠':''}</td>
+        <td${lowStock?' style="color:var(--danger,#e06c6c);font-weight:600"':''} title="${escapeAttr(lowAt===0?'Warns only when this runs out':'Warns at '+lowAt+' or fewer')}">${p.qty||0}${lowStock?' ⚠':''}</td>
         <td>${unitsThis}</td>
         <td>
           <button class="btn btn-sm btn-gold" onclick="openSellProduct('${escapeAttr(String(p.id))}')">Sell</button>
@@ -4549,7 +4576,16 @@ function renderOverview(){
   const totalExp=monthExp.reduce((a,e)=>a+e.amount,0);
   const totalRefunds=(db.refunds||[]).filter(r=>r.month===month).reduce((a,r)=>a+Number(r.amount||0),0);
   const totalOtherRevenue=(db.otherRevenue||[]).filter(r=>r.month===month && (r.status_record||'active')!=='archived').reduce((a,r)=>a+Number(r.amount||0),0);
-  const netProfit=collected+totalOtherRevenue-totalTeacher-totalExp-totalRefunds;
+  // Product sales are revenue and their cost of goods is an expense, both
+  // taken from the SALE's own recorded prices rather than the current
+  // price list — so a later price change never restates a past month.
+  // Only goods actually SOLD are counted as cost: stock still on the
+  // shelf is inventory, not a loss, and treating a restock as an expense
+  // would show a loss every time the shelf was filled.
+  const productStats=(typeof productSoldStats==='function') ? productSoldStats(month) : {revenue:0, cost:0};
+  const totalProductRevenue=productStats.revenue||0;
+  const totalProductCost=productStats.cost||0;
+  const netProfit=collected+totalOtherRevenue+totalProductRevenue-totalTeacher-totalExp-totalProductCost-totalRefunds;
   const totalLiabilities=pendingTeacher+totalExp+outstanding;
 
   // Profit banner
@@ -11072,6 +11108,39 @@ async function _autoLoadFromCloudImpl(){
      }
    }catch(remErr){ /* silent — non-critical */ }
 
+   // Products and sales — wholesale replace, since both are simple owned
+   // lists with no local-only state to preserve. The sales ledger is a
+   // financial record, so it has to reach every device; keeping it local
+   // meant a browser clear lost real revenue history outright.
+   try{
+     const {data:prodRows,error:eProd}=await client.from('products').select('*');
+     if(eProd){ /* table may not exist yet — silent */ }
+     else if(prodRows){
+       db.products=prodRows.map(r=>({
+         id:r.id, name:r.name||'', cost:Number(r.cost)||0,
+         price:Number(r.price)||0, qty:Number(r.qty)||0,
+         lowStockAt:(r.low_stock_at==null) ? 3 : Number(r.low_stock_at)||0,
+         createdAt:r.created_at||''
+       }));
+       save();
+     }
+   }catch(prodErr){ /* silent — non-critical */ }
+
+   try{
+     const {data:saleRows,error:eSale}=await client.from('sales').select('*');
+     if(eSale){ /* table may not exist yet — silent */ }
+     else if(saleRows){
+       db.sales=saleRows.map(r=>({
+         id:r.id, productId:r.product_id, productName:r.product_name||'',
+         qty:Number(r.qty)||0, unitPrice:Number(r.unit_price)||0,
+         unitCost:Number(r.unit_cost)||0, month:r.month||'',
+         date:r.sale_date||'', note:r.note||''
+       }));
+       save();
+       if(document.getElementById('page-expenses')?.classList.contains('active') && typeof renderProducts==='function') renderProducts();
+     }
+   }catch(saleErr){ /* silent — non-critical */ }
+
    // Deletion log — merged, never replaced. Each device may hold entries
    // the cloud hasn't seen yet (a deletion made while offline), and the
    // cloud holds entries from other devices. Losing either direction
@@ -12513,6 +12582,66 @@ function restoreLesson(id){
 
 <script>
 // Phase 8.1.1 Expense Sync Fix
+// ── Products & Sales sync ────────────────────────────────────────────
+// Both were local-only when first built, which meant a browser clear or a
+// second device saw no stock and no sales at all — and the sales ledger
+// is a financial record, so losing it loses real revenue history.
+//
+// Upserted by their own client-generated id so re-syncing the same record
+// updates its row instead of creating a duplicate.
+async function syncProductToSupabase(product){
+  try{
+    if(!window.supabaseClientV1 || !product) return;
+    const {error}=await window.supabaseClientV1.from('products').upsert({
+      id: String(product.id),
+      name: product.name||'',
+      cost: Number(product.cost)||0,
+      price: Number(product.price)||0,
+      qty: Number(product.qty)||0,
+      low_stock_at: (product.lowStockAt==null || product.lowStockAt==='') ? 3 : Number(product.lowStockAt)||0,
+      created_at: product.createdAt||new Date().toISOString()
+    }, {onConflict:'id'});
+    if(error) console.warn('Product sync failed:', error.message);
+  }catch(err){ console.warn('Product sync failed:', err.message); }
+}
+
+async function deleteProductFromSupabase(productId){
+  try{
+    if(!window.supabaseClientV1 || productId==null) return;
+    const {error}=await window.supabaseClientV1.from('products').delete().eq('id', String(productId));
+    if(error) console.warn('Product delete failed:', error.message);
+  }catch(err){ console.warn('Product delete failed:', err.message); }
+}
+
+async function syncSaleToSupabase(sale){
+  try{
+    if(!window.supabaseClientV1 || !sale) return;
+    const {error}=await window.supabaseClientV1.from('sales').upsert({
+      id: String(sale.id),
+      product_id: sale.productId!=null ? String(sale.productId) : null,
+      product_name: sale.productName||'',
+      qty: Number(sale.qty)||0,
+      // The prices AS SOLD travel with the row — never re-read from the
+      // product list, or last month's revenue would move whenever a price
+      // is updated.
+      unit_price: Number(sale.unitPrice)||0,
+      unit_cost: Number(sale.unitCost)||0,
+      month: sale.month||'',
+      sale_date: sale.date||null,
+      note: sale.note||''
+    }, {onConflict:'id'});
+    if(error) console.warn('Sale sync failed:', error.message);
+  }catch(err){ console.warn('Sale sync failed:', err.message); }
+}
+
+async function deleteSaleFromSupabase(saleId){
+  try{
+    if(!window.supabaseClientV1 || saleId==null) return;
+    const {error}=await window.supabaseClientV1.from('sales').delete().eq('id', String(saleId));
+    if(error) console.warn('Sale delete failed:', error.message);
+  }catch(err){ console.warn('Sale delete failed:', err.message); }
+}
+
 async function syncExpenseToSupabase(expense){
   try{
     if(!window.supabaseClientV1) return;
@@ -13069,6 +13198,11 @@ window.addEventListener('load', function(){
      payrollDue += calculatePayrollAmount(eligible, t.rate, t);
    });
 
+   // Shown as their own tiles rather than folded into Other Revenue and
+   // Expenses, so the retail side stays traceable — an unexplained jump in
+   // "expenses" that turns out to be stock is worse than no figure at all.
+   const prodStats=(typeof productSoldStats==='function') ? productSoldStats(month) : {revenue:0, cost:0};
+
    const academy=document.getElementById('academy-kpis');
    if(academy) academy.innerHTML=`
    <div class="metric"><div class="metric-label">Total Students</div><div class="metric-value">${totalStudents}</div></div>
@@ -13081,6 +13215,9 @@ window.addEventListener('load', function(){
    if(metrics) metrics.innerHTML=`
    <div class="metric green"><div class="metric-label">Revenue Collected</div><div class="metric-value green">${egp(collected)}</div></div>
    <div class="metric green"><div class="metric-label">Other Revenue</div><div class="metric-value green">${egp(totalOtherRevenue)}</div></div>
+   ${prodStats.revenue||prodStats.cost ? `
+   <div class="metric green"><div class="metric-label">Product Sales</div><div class="metric-value green">${egp(prodStats.revenue||0)}</div></div>
+   <div class="metric red"><div class="metric-label">Cost of Goods</div><div class="metric-value red">${egp(prodStats.cost||0)}</div></div>` : ''}
    <div class="metric amber"><div class="metric-label">Outstanding Fees</div><div class="metric-value amber">${egp(outstanding)}</div></div>
    <div class="metric red"><div class="metric-label">Payroll Due</div><div class="metric-value red">${egp(payrollDue)}</div></div>
    <div class="metric red"><div class="metric-label">Total Expenses</div><div class="metric-value red">${egp(totalExpenses)}</div></div>`;
