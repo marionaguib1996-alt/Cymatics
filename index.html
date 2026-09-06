@@ -414,7 +414,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-227</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-228</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -3515,6 +3515,33 @@ function linkedCourseMarkerFor(lesson){
   return '<span class="badge badge-blue" style="font-size:10px;margin-left:6px" title="'+
     escapeAttr(s.name||'')+' takes '+total+' courses — this row is the '+escapeAttr(inst)+' one">🔗 '+
     escapeHtml(inst||('1 of '+total))+'</span>';
+}
+
+// A LAPSED TRIAL: someone still on a trial plan whose trial session has
+// already been attended and is more than a day old. Converting a trial
+// changes the plan to a real one, so anyone left on a trial plan after
+// their session didn't continue.
+//
+// The one-day grace matters — a student who trialled today or yesterday
+// hasn't decided yet, and flagging them immediately would turn a normal
+// gap into a false alarm.
+//
+// Shared by the Overview tile and the Reports table so the two can never
+// disagree: a headline number that doesn't match the list behind it is
+// worse than not showing the number at all.
+function findLapsedTrials(){
+  const yesterday=new Date(); yesterday.setDate(yesterday.getDate()-1);
+  const cutoffKey=yesterday.toISOString().slice(0,10);
+  return (db.students||[]).filter(s=>{
+    if((s.status||'active')==='archived') return false;
+    if(s.plan!=='trial' && s.plan!=='group-trial') return false;
+    return (db.lessons||[]).some(l=>
+      lessonBelongsToStudent(l, s) &&
+      (l.status_record||'active')!=='archived' &&
+      l.status==='attended' &&
+      (l.date||'')<cutoffKey
+    );
+  });
 }
 
 function getLinkedCourses(student){
@@ -6730,20 +6757,9 @@ function renderReports(){
    // Grace window: a trial only counts as lapsed once the attended session
    // is more than a day old, so a student who trialed today or yesterday
    // still has a fair chance to pay/convert before being flagged.
-   const yesterday=new Date(); yesterday.setDate(yesterday.getDate()-1);
-   const cutoffKey=yesterday.toISOString().slice(0,10); // trial date must be < this
-   const lapsed=(db.students||[]).filter(s=>{
-     if((s.status||'active')==='archived') return false;
-     if(s.plan!=='trial' && s.plan!=='group-trial') return false;
-     // Their trial session must have been ATTENDED and be more than a day old.
-     const attendedTrials=(db.lessons||[]).filter(l=>
-       lessonBelongsToStudent(l, s) &&
-       (l.status_record||'active')!=='archived' &&
-       l.status==='attended' &&
-       (l.date||'')<cutoffKey
-     );
-     return attendedTrials.length>0;
-   }).map(s=>{
+   // Same helper the Overview tile uses, so the headline count and this
+   // list are always the same set of people.
+   const lapsed=findLapsedTrials().map(s=>{
      const trialLessons=(db.lessons||[]).filter(l=>
        lessonBelongsToStudent(l, s) &&
        (l.status_record||'active')!=='archived' &&
@@ -12927,6 +12943,9 @@ function restoreOtherRevenue(id){
    const trialStudents=countUniquePeople(
      notArchivedOrFrozen.filter(s=>s.plan==='trial' || s.plan==='group-trial')
    );
+   // Shown only when there ARE some: a permanent "0" for an action item is
+   // clutter, and its absence already says everything converted.
+   const lapsedTrialCount=(typeof findLapsedTrials==='function') ? countUniquePeople(findLapsedTrials()) : 0;
    const frozenStudents=countUniquePeople((db.students||[]).filter(s=>(s.status||'active')!=='archived' && s.frozen));
    const inactiveStudents=countUniquePeople((db.students||[]).filter(s=>s.status==='archived'));
    const activeTeachers=(db.teacherProfiles||[]).filter(t=>(t.status||'active')!=='archived').length;
@@ -12939,6 +12958,7 @@ function restoreOtherRevenue(id){
    <div class="metric" title="Everyone on record, including frozen and archived. Counted per person, so two courses count once."><div class="metric-label">Total Students</div><div class="metric-value">${totalStudents}</div></div>
    <div class="metric green" title="Enrolled on a monthly or weekly plan. Excludes trials, frozen and archived — the same figure as the Students tab."><div class="metric-label">Active Students</div><div class="metric-value green">${activeStudents}</div></div>
    ${trialStudents ? `<div class="metric" title="On a trial lesson — not enrolled yet, so not counted as Active"><div class="metric-label">Trials</div><div class="metric-value">${trialStudents}</div></div>` : ''}
+   ${lapsedTrialCount ? `<div class="metric red" title="Trialled more than a day ago and still not on a plan — they need following up. The full list with phone numbers is in Reports."><div class="metric-label">Lapsed Trials</div><div class="metric-value red">${lapsedTrialCount}</div></div>` : ''}
    <div class="metric amber"><div class="metric-label">Frozen</div><div class="metric-value amber">${frozenStudents}</div></div>
    <div class="metric red"><div class="metric-label">Inactive Students</div><div class="metric-value red">${inactiveStudents}</div></div>
    <div class="metric amber"><div class="metric-label">Active Teachers</div><div class="metric-value amber">${activeTeachers}</div></div>
@@ -13167,6 +13187,9 @@ window.addEventListener('load', function(){
    const trialStudents=countUniquePeople(
      notArchivedOrFrozen.filter(s=>s.plan==='trial' || s.plan==='group-trial')
    );
+   // Shown only when there ARE some: a permanent "0" for an action item is
+   // clutter, and its absence already says everything converted.
+   const lapsedTrialCount=(typeof findLapsedTrials==='function') ? countUniquePeople(findLapsedTrials()) : 0;
    const frozenStudents=countUniquePeople((db.students||[]).filter(s=>(s.status||'active')!=='archived' && s.frozen));
    const inactiveStudents=countUniquePeople((db.students||[]).filter(s=>(s.status||'active')==='archived'));
    const lessonsLogged=(db.lessons||[]).filter(l=>l.month===month && (l.status_record||'active')!=='archived').length;
@@ -13233,6 +13256,7 @@ window.addEventListener('load', function(){
    <div class="metric" title="Everyone on record, including frozen and archived. Counted per person, so two courses count once."><div class="metric-label">Total Students</div><div class="metric-value">${totalStudents}</div></div>
    <div class="metric green" title="Enrolled on a monthly or weekly plan. Excludes trials, frozen and archived — the same figure as the Students tab."><div class="metric-label">Active Students</div><div class="metric-value green">${activeStudents}</div></div>
    ${trialStudents ? `<div class="metric" title="On a trial lesson — not enrolled yet, so not counted as Active"><div class="metric-label">Trials</div><div class="metric-value">${trialStudents}</div></div>` : ''}
+   ${lapsedTrialCount ? `<div class="metric red" title="Trialled more than a day ago and still not on a plan — they need following up. The full list with phone numbers is in Reports."><div class="metric-label">Lapsed Trials</div><div class="metric-value red">${lapsedTrialCount}</div></div>` : ''}
    <div class="metric amber"><div class="metric-label">Frozen</div><div class="metric-value amber">${frozenStudents}</div></div>
    <div class="metric red"><div class="metric-label">Inactive Students</div><div class="metric-value red">${inactiveStudents}</div></div>
    <div class="metric"><div class="metric-label">Lessons This Month</div><div class="metric-value">${lessonsLogged}</div></div>`;
