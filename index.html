@@ -414,7 +414,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-226</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-227</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -12914,7 +12914,19 @@ function restoreOtherRevenue(id){
    oldRenderOverview();
 
    const totalStudents=countUniquePeople(db.students||[]);
-   const activeStudents=countUniquePeople((db.students||[]).filter(s=>(s.status||'active')!=='archived' && !s.frozen));
+   // Active EXCLUDES trials, matching how the Students tab has always
+   // counted. Including them here meant the two tabs quietly disagreed by
+   // however many trials were running — the same word, "Students",
+   // meaning two different things with nothing on screen to say so.
+   // Trials get their own tile rather than being hidden.
+   const notArchivedOrFrozen=(db.students||[]).filter(s=>(s.status||'active')!=='archived' && !s.frozen);
+   const activeStudents=countUniquePeople(
+     notArchivedOrFrozen.filter(s=>(typeof isMonthlyPlan==='function' && isMonthlyPlan(s.plan)) ||
+                                   (typeof isWeeklyPlan==='function' && isWeeklyPlan(s.plan)))
+   );
+   const trialStudents=countUniquePeople(
+     notArchivedOrFrozen.filter(s=>s.plan==='trial' || s.plan==='group-trial')
+   );
    const frozenStudents=countUniquePeople((db.students||[]).filter(s=>(s.status||'active')!=='archived' && s.frozen));
    const inactiveStudents=countUniquePeople((db.students||[]).filter(s=>s.status==='archived'));
    const activeTeachers=(db.teacherProfiles||[]).filter(t=>(t.status||'active')!=='archived').length;
@@ -12924,8 +12936,9 @@ function restoreOtherRevenue(id){
    if(!el) return;
 
    el.innerHTML=`
-   <div class="metric"><div class="metric-label">Total Students</div><div class="metric-value">${totalStudents}</div></div>
-   <div class="metric green"><div class="metric-label">Active Students</div><div class="metric-value green">${activeStudents}</div></div>
+   <div class="metric" title="Everyone on record, including frozen and archived. Counted per person, so two courses count once."><div class="metric-label">Total Students</div><div class="metric-value">${totalStudents}</div></div>
+   <div class="metric green" title="Enrolled on a monthly or weekly plan. Excludes trials, frozen and archived — the same figure as the Students tab."><div class="metric-label">Active Students</div><div class="metric-value green">${activeStudents}</div></div>
+   ${trialStudents ? `<div class="metric" title="On a trial lesson — not enrolled yet, so not counted as Active"><div class="metric-label">Trials</div><div class="metric-value">${trialStudents}</div></div>` : ''}
    <div class="metric amber"><div class="metric-label">Frozen</div><div class="metric-value amber">${frozenStudents}</div></div>
    <div class="metric red"><div class="metric-label">Inactive Students</div><div class="metric-value red">${inactiveStudents}</div></div>
    <div class="metric amber"><div class="metric-label">Active Teachers</div><div class="metric-value amber">${activeTeachers}</div></div>
@@ -13141,7 +13154,19 @@ window.addEventListener('load', function(){
 
    const month=currentMonth();
    const totalStudents=countUniquePeople(db.students||[]);
-   const activeStudents=countUniquePeople((db.students||[]).filter(s=>(s.status||'active')!=='archived' && !s.frozen));
+   // Active EXCLUDES trials, matching how the Students tab has always
+   // counted. Including them here meant the two tabs quietly disagreed by
+   // however many trials were running — the same word, "Students",
+   // meaning two different things with nothing on screen to say so.
+   // Trials get their own tile rather than being hidden.
+   const notArchivedOrFrozen=(db.students||[]).filter(s=>(s.status||'active')!=='archived' && !s.frozen);
+   const activeStudents=countUniquePeople(
+     notArchivedOrFrozen.filter(s=>(typeof isMonthlyPlan==='function' && isMonthlyPlan(s.plan)) ||
+                                   (typeof isWeeklyPlan==='function' && isWeeklyPlan(s.plan)))
+   );
+   const trialStudents=countUniquePeople(
+     notArchivedOrFrozen.filter(s=>s.plan==='trial' || s.plan==='group-trial')
+   );
    const frozenStudents=countUniquePeople((db.students||[]).filter(s=>(s.status||'active')!=='archived' && s.frozen));
    const inactiveStudents=countUniquePeople((db.students||[]).filter(s=>(s.status||'active')==='archived'));
    const lessonsLogged=(db.lessons||[]).filter(l=>l.month===month && (l.status_record||'active')!=='archived').length;
@@ -13205,8 +13230,9 @@ window.addEventListener('load', function(){
 
    const academy=document.getElementById('academy-kpis');
    if(academy) academy.innerHTML=`
-   <div class="metric"><div class="metric-label">Total Students</div><div class="metric-value">${totalStudents}</div></div>
-   <div class="metric green"><div class="metric-label">Active Students</div><div class="metric-value green">${activeStudents}</div></div>
+   <div class="metric" title="Everyone on record, including frozen and archived. Counted per person, so two courses count once."><div class="metric-label">Total Students</div><div class="metric-value">${totalStudents}</div></div>
+   <div class="metric green" title="Enrolled on a monthly or weekly plan. Excludes trials, frozen and archived — the same figure as the Students tab."><div class="metric-label">Active Students</div><div class="metric-value green">${activeStudents}</div></div>
+   ${trialStudents ? `<div class="metric" title="On a trial lesson — not enrolled yet, so not counted as Active"><div class="metric-label">Trials</div><div class="metric-value">${trialStudents}</div></div>` : ''}
    <div class="metric amber"><div class="metric-label">Frozen</div><div class="metric-value amber">${frozenStudents}</div></div>
    <div class="metric red"><div class="metric-label">Inactive Students</div><div class="metric-value red">${inactiveStudents}</div></div>
    <div class="metric"><div class="metric-label">Lessons This Month</div><div class="metric-value">${lessonsLogged}</div></div>`;
