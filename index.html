@@ -414,7 +414,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-229</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-230</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -3251,7 +3251,12 @@ function togglePayment(id){
     db.payments[key]=false;
     db.paymentMethods=db.paymentMethods||{};
     delete db.paymentMethods[key];
-    save(); renderStudents(); renderOverview();
+    // Their attended sessions this month go back to reading unpaid, so
+    // un-marking a payment made in error fully reverses it rather than
+    // leaving the lessons looking settled.
+    if(typeof recordPaymentSnapshot==='function') recordPaymentSnapshot(id, month, false);
+    if(typeof syncLessonPaidFlags==='function') syncLessonPaidFlags(id, month, false);
+    save(); renderStudents(); renderOverview(); renderLessons();
     syncPaymentToggleToSupabase(id, month, false, null);
     return;
   }
@@ -3325,6 +3330,7 @@ function confirmMarkPaidMulti(idsCsv, method){
     db.paymentMethods=db.paymentMethods||{};
     db.paymentMethods[key]=method;
     if(typeof recordPaymentSnapshot==='function') recordPaymentSnapshot(sid, month, true);
+    if(typeof syncLessonPaidFlags==='function') syncLessonPaidFlags(sid, month, true);
     if(typeof syncPaymentToggleToSupabase==='function'){ try{ syncPaymentToggleToSupabase(sid, month, true, method); }catch(_){} }
     count++;
   });
@@ -3352,6 +3358,37 @@ function markPaidSingleCourseOnly(id){
 // than something re-derived later from a student's current plan — which
 // silently rewrote past months whenever a plan or discount changed, and
 // erased the money entirely if the student was ever deleted.
+// Brings a student's ATTENDED lessons into line with their payment state
+// for that month.
+//
+// l.unpaid is a STORED flag, written once when a lesson is marked
+// attended. That's deliberate — it records whether the session was
+// delivered before the money arrived — but it meant paying afterwards
+// left every one of those lessons still reading "unpaid", so a student
+// who settled in cash looked permanently in arrears on the ledger.
+//
+// Weekly students are skipped: they're billed per session and never
+// carry the flag, so touching it would invent a state that doesn't apply.
+function syncLessonPaidFlags(studentId, monthKey, isPaid){
+  const student=(db.students||[]).find(s=>String(s.id)===String(studentId));
+  if(!student) return 0;
+  if(typeof isWeeklyPlan==='function' && isWeeklyPlan(student.plan)) return 0;
+  const want=!isPaid;
+  let changed=0;
+  (db.lessons||[]).forEach(l=>{
+    if(l.status!=='attended') return;
+    if((l.status_record||'active')==='archived') return;
+    if(!lessonBelongsToStudent(l, student)) return;
+    const lessonMonth=String(l.month || l.date || '').slice(0,7);
+    if(lessonMonth!==String(monthKey)) return;
+    if(!!l.unpaid===want) return;
+    l.unpaid=want;
+    changed++;
+    if(typeof syncLessonUpdateToSupabase==='function'){ try{ syncLessonUpdateToSupabase(l); }catch(_){} }
+  });
+  return changed;
+}
+
 function recordPaymentSnapshot(studentId, monthKey, isPaid){
   const key=studentId+'_'+monthKey;
   db.paymentAmounts=db.paymentAmounts||{};
@@ -3387,7 +3424,9 @@ function confirmMarkPaid(id, method){
   // fact; it must not move because something about the student changed
   // afterward.
   recordPaymentSnapshot(id, month, true);
-  save(); closeModal(); renderStudents(); renderOverview();
+  // Their already-attended sessions this month stop reading as unpaid.
+  if(typeof syncLessonPaidFlags==='function') syncLessonPaidFlags(id, month, true);
+  save(); closeModal(); renderStudents(); renderOverview(); renderLessons();
   syncPaymentToggleToSupabase(id, month, true, method);
 }
 
@@ -16038,6 +16077,8 @@ function confirmRenewal(id){
       if(markPaid) db.paymentMethods[key]=paymentMethod;
       else delete db.paymentMethods[key];
       if(typeof recordPaymentSnapshot==='function') recordPaymentSnapshot(student.id, m, markPaid);
+    if(typeof syncLessonPaidFlags==='function') syncLessonPaidFlags(student.id, m, markPaid);
+      if(typeof syncLessonPaidFlags==='function') syncLessonPaidFlags(student.id, m, markPaid);
       if(typeof syncPaymentToggleToSupabase==='function') syncPaymentToggleToSupabase(student.id, m, markPaid, markPaid?paymentMethod:null);
     });
     // Custom Pay is a one-time override for THIS renewal only — clear it
@@ -16239,6 +16280,7 @@ function confirmRenewalCustomDates(id, student){
     if(markPaid) db.paymentMethods[key]=paymentMethod;
     else delete db.paymentMethods[key];
     if(typeof recordPaymentSnapshot==='function') recordPaymentSnapshot(student.id, m, markPaid);
+    if(typeof syncLessonPaidFlags==='function') syncLessonPaidFlags(student.id, m, markPaid);
     if(typeof syncPaymentToggleToSupabase==='function') syncPaymentToggleToSupabase(student.id, m, markPaid, markPaid?paymentMethod:null);
   });
   if(student.customPay!=null) student.customPay=null;
@@ -21250,15 +21292,16 @@ function generateTeacherSchedulePhoto(teacherName, dayName, silent){
     ctx.fillText(formatTime12h(row.time).replace(' ','')+'-'+formatTime12h(row.timeEnd).replace(' ',''), 8, y+rowHeight/2);
 
     // Student cell (right) — green for Trial and genuinely free gap slots,
-    // amber ONLY for an unpaid WEEKLY student, white for everyone else.
+    // amber for WEEKLY students, white for everyone else.
     //
-    // This sheet goes to the teacher, and a monthly student sitting
-    // "unpaid" mid-cycle is completely normal — the fee simply isn't due
-    // yet. Colouring them amber flagged ordinary students as a problem in
-    // front of the teacher and made the sheet mostly yellow for the first
-    // half of every month. A WEEKLY student pays per session, so unpaid
-    // there is genuinely worth seeing at a glance.
-    const showUnpaidWarning = row.occupied && !row.paid && !row.isTrial && row.isWeekly;
+    // Amber marks the plan, not the payment state. A weekly student pays
+    // per session, so the teacher needs to collect from them every time —
+    // that's true whether or not this week happens to be settled already,
+    // and it's the thing worth spotting at a glance on the sheet. Tying
+    // it to unpaid instead meant the colour flickered week to week and,
+    // when it covered monthly students too, turned half of every month
+    // yellow for fees that simply weren't due yet.
+    const showUnpaidWarning = row.occupied && !row.isTrial && row.isWeekly;
     if(row.occupied && !showUnpaidWarning && !row.isTrial){
       ctx.fillStyle='#ffffff';
       ctx.fillRect(timeColWidth,y,cellColWidth,rowHeight);
