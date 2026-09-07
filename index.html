@@ -414,7 +414,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-228</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-229</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -633,6 +633,14 @@ input::placeholder{color:var(--text-dim)}
         <button type="button" class="btn btn-sm" onclick="setWaitingDayPreset('none')">Clear</button>
       </div>
       <div id="wl-days" style="display:flex;gap:10px;flex-wrap:wrap"></div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
+        <span style="font-size:13px;color:var(--text-muted)">Only between</span>
+        <input id="wl-from" type="time" style="max-width:130px">
+        <span style="font-size:13px;color:var(--text-muted)">and</span>
+        <input id="wl-to" type="time" style="max-width:130px">
+        <button type="button" class="btn btn-sm" onclick="document.getElementById('wl-from').value='';document.getElementById('wl-to').value='';">Any time</button>
+      </div>
+      <small style="display:block;margin-top:4px;color:var(--text-muted)">Leave blank for any time. A slot must START within this window to be offered — so someone free 12:15–1:45 is never sent a 2:00 PM slot.</small>
     </div>
     <div class="form-field wide"><label for="wl-notes">Notes (optional)</label><input id="wl-notes" placeholder="e.g. prefers evenings, can start immediately"></div>
     <button class="btn btn-gold" style="margin-top:10px" onclick="addToWaitingList()">+ Add to waiting list</button>
@@ -11082,6 +11090,8 @@ async function _autoLoadFromCloudImpl(){
          instrument: r.instrument||'',
          days: Array.isArray(r.days) ? r.days : [],
          dayGroup: r.day_group||null,
+         fromTime: r.from_time||'',
+         toTime: r.to_time||'',
          notes: r.notes||'',
          addedAt: r.added_at||'',
          status: r.status||'waiting'
@@ -17435,6 +17445,11 @@ function addToWaitingList(){
     studentId: existingId || null,   // set = existing student wanting a change
     instrument,
     days,
+    // Optional preferred window. Stored as plain "HH:MM" strings, blank
+    // meaning no restriction, so an entry saved before this existed keeps
+    // matching every slot rather than suddenly matching none.
+    fromTime: (document.getElementById('wl-from')?.value||'').trim(),
+    toTime: (document.getElementById('wl-to')?.value||'').trim(),
     dayGroup: days.length===WEEKDAY_NAMES.length ? 'any' : null,
     notes,
     addedAt:new Date().toISOString(),
@@ -17443,7 +17458,7 @@ function addToWaitingList(){
   db.waitingList.push(wlEntry);
   save();
   if(typeof syncWaitingEntryToSupabase==='function') syncWaitingEntryToSupabase(wlEntry);
-  ['wl-name','wl-phone','wl-notes'].forEach(id=>{ const e=document.getElementById(id); if(e) e.value=''; });
+  ['wl-name','wl-phone','wl-notes','wl-from','wl-to'].forEach(id=>{ const e=document.getElementById(id); if(e) e.value=''; });
   const ex=document.getElementById('wl-existing'); if(ex) ex.value='';
   setWaitingDayPreset('none');
   renderWaitingList();
@@ -17502,6 +17517,11 @@ function waitingMatchesFor(entry){
         // out to have nowhere to actually happen. Room capacity is a
         // shared, academy-wide constraint, not a per-teacher one.
         if(typeof isRoomFullDuringRange==='function' && isRoomFullDuringRange(dateThisWeek, s.time, 45)) return;
+        // Preferred window, if they gave one. Compared as "HH:MM"
+        // strings, which sort correctly for a 24-hour clock, and skipped
+        // entirely when blank so older entries are unaffected.
+        if(entry.fromTime && String(s.time)<String(entry.fromTime)) return;
+        if(entry.toTime && String(s.time)>String(entry.toTime)) return;
         out.push({teacher:t.name, day:dayName, time:s.time});
       });
     });
@@ -17532,8 +17552,14 @@ function renderWaitingList(){
   }
   host.innerHTML=waitingSyncBannerHtml()+list.map(e=>{
     const matches=waitingMatchesFor(e);
-    const dayLabel=(e.dayGroup==='any' || waitingDaysFor(e).length===WEEKDAY_NAMES.length)
-      ? 'Any day' : waitingDaysFor(e).join(', ');
+    // Their preferred window shown alongside the days, so it's obvious why
+    // an entry with plenty of free slots still isn't matching anything.
+    const windowLabel = (e.fromTime || e.toTime)
+      ? ' · ' + (e.fromTime ? formatTime12h(e.fromTime) : 'any')
+              + '–' + (e.toTime ? formatTime12h(e.toTime) : 'any')
+      : '';
+    const dayLabel=((e.dayGroup==='any' || waitingDaysFor(e).length===WEEKDAY_NAMES.length)
+      ? 'Any day' : waitingDaysFor(e).join(', ')) + windowLabel;
     const isStudent=!!e.studentId;
     const phone=(e.phone||'').trim();
     const waitingSince=(typeof timeAgoLabel==='function' && e.addedAt) ? timeAgoLabel(e.addedAt) : '';
@@ -19809,6 +19835,11 @@ async function syncWaitingEntryToSupabase(entry){
       instrument: entry.instrument||'',
       days: Array.isArray(entry.days) ? entry.days : [],
       day_group: entry.dayGroup||null,
+      // The preferred time window. Without these in the payload the
+      // window would live only on the device that typed it, and any
+      // other device would go on offering slots outside it.
+      from_time: entry.fromTime||null,
+      to_time: entry.toTime||null,
       notes: entry.notes||'',
       added_at: entry.addedAt||new Date().toISOString(),
       status: entry.status||'waiting'
@@ -21115,6 +21146,7 @@ function generateTeacherSchedulePhoto(teacherName, dayName, silent){
       studentName:shown?shown.student:(slot.occupiedBy||null),
       instrument:shown ? (shown.instrument||matchedStudent?.instrument||'') : '',
       paid:shown ? paidSet.has(String(matchedStudent?matchedStudent.id:shown.studentId)) : false,
+      isWeekly:!!(matchedStudent && typeof isWeeklyPlan==='function' && isWeeklyPlan(matchedStudent.plan)),
       isTrial:!!(matchedStudent && matchedStudent.plan==='trial'),
       isGroup:!!(matchedStudent && isGroupPlan(matchedStudent.plan)),
       isMakeup:!!(shown && shown.makeupForLessonId),
@@ -21160,6 +21192,7 @@ function generateTeacherSchedulePhoto(teacherName, dayName, silent){
       studentName:l.student,
       instrument:l.instrument||matchedStudent?.instrument||'',
       paid:paidSet.has(String(matchedStudent?matchedStudent.id:l.studentId)),
+      isWeekly:!!(matchedStudent && typeof isWeeklyPlan==='function' && isWeeklyPlan(matchedStudent.plan)),
       isTrial:!!(matchedStudent && matchedStudent.plan==='trial'),
       isGroup:!!(l.isExtendedDuration || (matchedStudent && isGroupPlan(matchedStudent.plan))),
       isMakeup:!!l.makeupForLessonId,
@@ -21217,8 +21250,16 @@ function generateTeacherSchedulePhoto(teacherName, dayName, silent){
     ctx.fillText(formatTime12h(row.time).replace(' ','')+'-'+formatTime12h(row.timeEnd).replace(' ',''), 8, y+rowHeight/2);
 
     // Student cell (right) — green for Trial and genuinely free gap slots,
-    // amber for unpaid, white for paid — matching the Calendar's colour rule.
-    if(row.occupied && row.paid && !row.isTrial){
+    // amber ONLY for an unpaid WEEKLY student, white for everyone else.
+    //
+    // This sheet goes to the teacher, and a monthly student sitting
+    // "unpaid" mid-cycle is completely normal — the fee simply isn't due
+    // yet. Colouring them amber flagged ordinary students as a problem in
+    // front of the teacher and made the sheet mostly yellow for the first
+    // half of every month. A WEEKLY student pays per session, so unpaid
+    // there is genuinely worth seeing at a glance.
+    const showUnpaidWarning = row.occupied && !row.paid && !row.isTrial && row.isWeekly;
+    if(row.occupied && !showUnpaidWarning && !row.isTrial){
       ctx.fillStyle='#ffffff';
       ctx.fillRect(timeColWidth,y,cellColWidth,rowHeight);
       ctx.strokeStyle='#000000';
