@@ -385,6 +385,7 @@ input::placeholder{color:var(--text-dim)}
   <span id="sync-indicator-text">Syncing with cloud...</span>
 </div>
 <style>@keyframes sync-spin{to{transform:rotate(360deg)}}</style>
+<div id="stale-device-banner" style="padding:0 16px"></div>
 
 <div id="login-screen" style="position:fixed;inset:0;background:#0f0e0c;display:flex;align-items:center;justify-content:center;z-index:9999;padding:16px;">
   <div style="width:min(380px,100%);background:#1a1916;padding:30px;border:1px solid #2e2c28;border-radius:10px;">
@@ -414,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-231</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-235</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1338,7 +1339,12 @@ input::placeholder{color:var(--text-dim)}
     <div class="card-title" style="margin-bottom:6px;font-size:14px">6 · Move Lessons Left at an Old Time Slot</div>
     <small style="display:block;margin-bottom:8px;color:var(--text-muted)">Changing a student's time moves their upcoming lessons automatically, but one the reschedule couldn't see stays behind at the old time — so the same student appears at two different times on different weeks. Make-ups, double sessions and off-day lessons are excluded, since those differ deliberately. Room and teacher availability are checked before each move.</small>
     <button class="btn" onclick="previewFixScheduleMismatches()">🔍 Preview (changes nothing)</button>
-    <div id="schedule-mismatch-results" style="margin-top:12px"></div>
+    <div id="schedule-mismatch-results" style="margin-top:12px;margin-bottom:18px"></div>
+
+    <div class="card-title" style="margin-bottom:6px;font-size:14px">7 · Re-apply Freeze for Students Still on the Calendar</div>
+    <small style="display:block;margin-bottom:8px;color:var(--text-muted)">Freezing removes a student's upcoming lessons and remembers how many were paused. Restoring a backup taken <b>before</b> a freeze brings those lessons back while the student stays frozen — so the teacher sees sessions for someone who isn't coming, the slot stays blocked, and payroll counts lessons that won't happen. This pauses them properly. If someone has actually returned, use <b>Resume</b> on their card instead.</small>
+    <button class="btn" onclick="previewFixFrozenWithLessons()">🔍 Preview (changes nothing)</button>
+    <div id="frozen-lessons-results" style="margin-top:12px"></div>
   </div>
 </div>
 
@@ -2430,9 +2436,41 @@ function save(){try{localStorage.setItem('musicacademy_db',JSON.stringify(db));}
 // the first time" even as edits were being pushed up all day. Now it's
 // called on successful writes too, so it reflects genuine sync activity
 // in both directions.
+// How long a device may be away before its local copy is treated as
+// untrustworthy. A device used daily is never affected; a phone opened
+// after a week is exactly the case this exists for.
+const STALE_DEVICE_DAYS = 3;
+
+// True when this browser's copy is too old to be allowed to write to the
+// cloud. The danger isn't reading stale data — that's harmless and gets
+// overwritten by the download. It's WRITING it: an old copy pushed up
+// resurrects deleted students, restores pre-fix lesson names, and revives
+// records that were cleaned up weeks ago, and it does so silently because
+// every one of those looks like an ordinary edit.
+function deviceIsStale(){
+  const last = Number(db._lastCloudSyncAt || 0);
+  if(!last) return false; // never synced — a genuinely new device, not a stale one
+  return (Date.now() - last) > STALE_DEVICE_DAYS*24*60*60*1000;
+}
+
+// When this device's own data was last changed by a person — shown in the
+// fork dialog so "this device's copy" has a meaningful date next to it,
+// rather than asking someone to choose blind.
+function stampLocalEdit(){
+  db._lastLocalEditAt=Date.now();
+}
+window.stampLocalEdit=stampLocalEdit;
+
 function stampLastSync(label){
+  // Clears the banner the moment a download succeeds — the block lifts by
+  // itself, with nothing for the user to dismiss.
+  setTimeout(()=>{ if(typeof renderStaleDeviceBanner==='function') renderStaleDeviceBanner(); }, 0);
   const el=document.getElementById('last-sync');
   if(el) el.textContent='Last Sync: '+new Date().toLocaleString()+(label?' ('+label+')':'');
+  // Persisted, not just displayed: the age of this device's copy is what
+  // decides whether it may write to the cloud at all.
+  db._lastCloudSyncAt = Date.now();
+  try{ save(); }catch(_){}
 }
 window.stampLastSync=stampLastSync;
 function normalizeLessonLog(log,lesson){
@@ -4842,6 +4880,12 @@ function dismissFromRenewalsDue(idsCsv){
       ? id+'_bundle'
       : id+'_'+((typeof studentNextBillingMonth==='function') ? studentNextBillingMonth(s) : '');
     db.renewalsDismissed[key]=new Date().toISOString();
+    // Synced, so hiding a renewal on one device hides it everywhere.
+    // Otherwise the same row keeps reappearing for whoever opens the app
+    // next, and gets dismissed again — or worse, chased again.
+    if(typeof syncRenewalDismissalToSupabase==='function'){
+      try{ syncRenewalDismissalToSupabase(key, db.renewalsDismissed[key]); }catch(_){}
+    }
   });
   save();
   renderRenewalsDue();
@@ -7873,6 +7917,80 @@ async function useCloudDataOnly(){
   }
 }
 
+// Frozen students who still have upcoming lessons. Freezing removes those
+// lessons and remembers how many were paused; a student showing as frozen
+// while still occupying calendar slots means the two halves have come
+// apart — most often after restoring a backup taken BEFORE the freeze,
+// which brings the lessons back while the student record stays frozen.
+//
+// Left alone, the teacher sees sessions for someone who isn't coming, the
+// slot stays blocked against other students, and payroll counts lessons
+// that won't happen.
+function findFrozenWithLessons(){
+  const todayKey=new Date().toISOString().slice(0,10);
+  return (db.students||[]).filter(s=>s.frozen && (s.status||'active')!=='archived').map(s=>{
+    const upcoming=(db.lessons||[]).filter(l=>
+      lessonBelongsToStudent(l, s) &&
+      l.status==='scheduled' &&
+      (l.status_record||'active')!=='archived' &&
+      l.date && l.date>=todayKey
+    ).sort((a,b)=>String(a.date).localeCompare(String(b.date)));
+    return upcoming.length ? {student:s, upcoming} : null;
+  }).filter(Boolean);
+}
+
+function previewFixFrozenWithLessons(){
+  const el=document.getElementById('frozen-lessons-results');
+  if(!el) return;
+  const rows=findFrozenWithLessons();
+  if(!rows.length){
+    el.innerHTML='<div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px;color:#a8e8a8">✅ No frozen student has lessons still on the calendar.</div>';
+    return;
+  }
+  el.innerHTML='<div style="background:#3a3520;border:1px solid #6a5a2a;border-radius:6px;padding:12px;margin-bottom:10px">'
+    +'<div style="font-weight:700;color:#e2c47a;margin-bottom:6px">'+rows.length+' frozen student(s) still on the calendar</div>'
+    +'<div style="font-size:13px;color:#c8d8e8;line-height:1.6">Re-applying the freeze removes those upcoming sessions and records how many were paused, so Resume puts back exactly that many. Nothing already attended is touched. If someone here has actually come back, use <b>Resume</b> on their student card instead.</div></div>'
+    +'<div style="background:#1b3a1b;border:1px solid #2c5a2c;border-radius:6px;padding:12px;max-height:260px;overflow-y:auto">'
+    +'<div style="font-size:13px;color:#c8d8e8;line-height:1.8">'
+    + rows.map(r=>escapeHtml(r.student.name||'?')+' — '+r.upcoming.length+' upcoming: '
+        +r.upcoming.slice(0,4).map(l=>escapeHtml(formatLedgerDate(l.date))).join(', ')
+        +(r.upcoming.length>4?' …':'')).join('<br>')
+    +'</div></div>'
+    +'<button class="btn btn-gold" style="margin-top:12px" onclick="applyFixFrozenWithLessons()">Re-apply the freeze for these '+rows.length+'</button>';
+}
+
+function applyFixFrozenWithLessons(){
+  const rows=findFrozenWithLessons();
+  if(!rows.length){ showToast('Nothing to fix.'); return; }
+  const totalLessons=rows.reduce((n,r)=>n+r.upcoming.length, 0);
+  if(!confirm('Re-apply the freeze for '+rows.length+' student(s)?\n\n'+
+              totalLessons+' upcoming session(s) are removed from the calendar and remembered, so Resume restores exactly that many.\n\n'+
+              'Attended lessons are not touched.')) return;
+  rows.forEach(function(r){
+    const s=r.student;
+    // Same bookkeeping the freeze itself does, so Resume behaves
+    // identically whether the freeze was applied here or on the card.
+    s.frozenLessonsRemaining=(Number(s.frozenLessonsRemaining)||0) + r.upcoming.length;
+    s.frozenMakeupRefs=(Array.isArray(s.frozenMakeupRefs)?s.frozenMakeupRefs:[])
+      .concat(r.upcoming.filter(l=>l.makeupForLessonId!=null).map(l=>l.makeupForLessonId));
+    const ids=new Set(r.upcoming.map(l=>String(l.id)));
+    r.upcoming.forEach(function(l){
+      if(typeof logRecordDeletion==='function') logRecordDeletion('lesson', l, 'paused by re-applied freeze');
+      if(typeof deleteLessonFromSupabase==='function'){ try{ deleteLessonFromSupabase(l.id); }catch(_){} }
+    });
+    db.lessons=(db.lessons||[]).filter(l=>!ids.has(String(l.id)));
+    s._localModifiedAt=Date.now();
+    if(typeof syncStudentUpdateToSupabase==='function'){ try{ syncStudentUpdateToSupabase(s); }catch(_){} }
+  });
+  save();
+  if(typeof renderStudents==='function') renderStudents();
+  if(typeof renderLessons==='function') renderLessons();
+  if(typeof renderCalendarPage==='function') renderCalendarPage();
+  if(typeof renderOverview==='function') renderOverview();
+  showToast(totalLessons+' session(s) paused across '+rows.length+' frozen student(s) ✓');
+  previewFixFrozenWithLessons();
+}
+
 function renderDeletionLog(){
   const el=document.getElementById('deletion-log-results');
   if(!el) return;
@@ -9689,6 +9807,32 @@ async function upsertToCloud(table, matchColumn, matchValue, payload){
 
 async function pushAllDataToCloud(){
   if(!window.supabaseClientV1){ alert('Supabase not connected.'); return; }
+
+  // The most destructive button in the app: it writes everything in THIS
+  // browser over the cloud. That's exactly right after restoring a backup
+  // on the main machine, and exactly wrong on a device whose copy is old —
+  // there it resurrects deleted students, restores pre-fix lesson names,
+  // and revives records cleaned up weeks ago, all in one click and all
+  // looking like ordinary edits.
+  //
+  // A stale device must therefore DOWNLOAD before it may upload. That
+  // isn't a warning to be clicked past: the person holding the phone has
+  // no way to judge which of forty students are real, so the safe order is
+  // simply enforced.
+  if(typeof deviceIsStale==='function' && deviceIsStale()){
+    const days=Math.floor((Date.now()-Number(db._lastCloudSyncAt||0))/86400000);
+    alert("This device hasn't synced for "+days+" day(s), so its copy may be out of date.\n\n"+
+          'Pushing now would overwrite the cloud with old data — recreating deleted students and '+
+          'undoing recent fixes.\n\n'+
+          'Refresh the page to download the current data first. If this device genuinely holds the only '+
+          'good copy (you just restored a backup here), use Database → Use Cloud Data Only on the OTHER '+
+          'devices instead.');
+    return;
+  }
+
+  if(!confirm('Push everything in THIS browser up to the cloud?\n\n'+
+              'Use this after restoring a backup on your main machine. Do NOT use it on a device that '+
+              'is showing old or unexpected data — it would overwrite the good cloud copy with this one.')) return;
   const summary={students:0,teachers:0,lessons:0,lessonLogs:0,payments:0,payroll:0,expenses:0,instruments:0,practiceSessions:0,failed:0};
   const statusEl=document.getElementById('cloud-status');
   const setStatus=(msg)=>{ if(statusEl) statusEl.textContent=msg; };
@@ -10912,28 +11056,38 @@ async function _autoLoadFromCloudImpl(){
            }catch(e){}
          });
        };
-       if(pendingReupload.length < STALE_DEVICE_THRESHOLD){
+       const discardLocal=()=>{
+         // Drop them from the merged roster too, so the screen matches the
+         // cloud rather than showing students that were just refused.
+         const refused=new Set(pendingReupload.map(x=>keyOf(x)));
+         for(let i=merged.length-1;i>=0;i--){ if(refused.has(keyOf(merged[i]))) merged.splice(i,1); }
+         console.warn('Using the cloud copy: discarded '+pendingReupload.length+' local-only students.');
+         if(typeof showToast==='function') showToast('Using the cloud roster — '+pendingReupload.length+' out-of-date local students discarded');
+       };
+
+       const fork=(typeof assessDataFork==='function') ? assessDataFork(cloudStudents) : null;
+
+       if(session.role!=='admin'){
+         // Teachers are never asked. Choosing "this device" would replace
+         // the whole academy's records, they have no way to judge that,
+         // and it isn't their decision to make.
+         if(pendingReupload.length < STALE_DEVICE_THRESHOLD) doUpload();
+         else discardLocal();
+       } else if(pendingReupload.length < STALE_DEVICE_THRESHOLD){
+         // Ordinary drift — a couple of students added here that haven't
+         // uploaded yet. Nothing worth interrupting anyone for.
          doUpload();
+       } else if(fork){
+         // A genuine fork, and an admin is present: let them choose, since
+         // they know whether they just restored a backup here or are
+         // opening a device that has sat unused.
+         askWhichCopyToKeep(fork).then(choice=>{
+           if(choice==='local'){ doUpload(); }
+           else { discardLocal(); if(typeof renderStudents==='function') renderStudents(); }
+           save();
+         });
        } else {
-         const names=pendingReupload.slice(0,8).map(s=>s.name||'?').join(', ')
-                   + (pendingReupload.length>8 ? ` …and ${pendingReupload.length-8} more` : '');
-         const useLocal=confirm(
-           'This device has '+pendingReupload.length+' students that are NOT in the cloud:\n\n'+names+
-           '\n\nThat usually means this device is out of date — its copy is from before a reset or cleanup, '+
-           'and uploading would recreate everyone as duplicates.\n\n'+
-           'OK  = Upload them (only if you genuinely added these here and they are missing from the cloud)\n'+
-           'Cancel = Discard this device\'s extra students and use the cloud copy (recommended)'
-         );
-         if(useLocal){
-           doUpload();
-         } else {
-           // Drop them from the merged roster too, so the screen matches
-           // the cloud instead of showing students that were just refused.
-           const refused=new Set(pendingReupload.map(x=>keyOf(x)));
-           for(let i=merged.length-1;i>=0;i--){ if(refused.has(keyOf(merged[i]))) merged.splice(i,1); }
-           console.warn('Stale-device guard: discarded '+pendingReupload.length+' local-only students in favour of the cloud copy.');
-           if(typeof showToast==='function') showToast('Using the cloud roster — '+pendingReupload.length+' out-of-date local students discarded');
-         }
+         discardLocal();
        }
      }
    }
@@ -11260,6 +11414,18 @@ async function _autoLoadFromCloudImpl(){
      }
    }catch(remErr){ /* silent — non-critical */ }
 
+   // Dismissed renewals — merged, never replaced, so a dismissal made on
+   // another device arrives without discarding one made here offline.
+   try{
+     const {data:disRows,error:eDis}=await client.from('renewals_dismissed').select('*');
+     if(eDis){ /* table may not exist yet — silent */ }
+     else if(disRows){
+       db.renewalsDismissed=db.renewalsDismissed||{};
+       disRows.forEach(r=>{ if(r.dismissal_key) db.renewalsDismissed[r.dismissal_key]=r.dismissed_at; });
+       save();
+     }
+   }catch(disErr){ /* silent — non-critical */ }
+
    // Products and sales — wholesale replace, since both are simple owned
    // lists with no local-only state to preserve. The sales ledger is a
    // financial record, so it has to reach every device; keeping it local
@@ -11461,6 +11627,43 @@ try{
  // already handled by the calling code's own error checking. Flagging
  // those here would just be false alarms.
  window.syncFailures=window.syncFailures||[];
+
+ // ── READ-ONLY MODE FOR A STALE DEVICE ────────────────────────────────
+ // A device that hasn't synced in days may READ its local copy freely —
+ // that's harmless, and the next download corrects it. What it must not
+ // do is WRITE, because every stale record it sends looks like an
+ // ordinary edit: deleted students come back, corrected names revert,
+ // and weeks of cleanup are undone silently.
+ //
+ // Enforced here rather than at each call site because every cloud write
+ // funnels through this one interceptor. Patching individual functions
+ // would leave whichever path I failed to think of still open — and the
+ // path that caused the damage is precisely the one nobody thought of.
+ //
+ // GET is always allowed: downloading is how the device stops being
+ // stale. The block lifts by itself the moment a load completes.
+ window.isCloudWrite = (url, options) => {
+   const method=String((options&&options.method)||'GET').toUpperCase();
+   if(method==='GET' || method==='HEAD') return false;
+   return /\/rest\/v1\//.test(String(url));
+ };
+ let staleWriteNotified=false;
+ // On window deliberately. This guard sits on the path that already caused
+ // real data loss once, so it has to be reachable and testable from
+ // outside — a protection that can't be verified is a protection nobody
+ // should rely on.
+ window.blockedByStaleDevice = (url, options) => {
+   if(typeof deviceIsStale!=='function' || !deviceIsStale()) return false;
+   if(!window.isCloudWrite(url, options)) return false;
+   if(!staleWriteNotified){
+     staleWriteNotified=true;
+     console.warn('Stale device: cloud writes are paused until this device downloads current data. Refresh the page.');
+     if(typeof showToast==='function'){
+       showToast('This device is out of date — your changes are saved here and will upload after you refresh.');
+     }
+   }
+   return true;
+ };
  // Writes that are genuinely OPTIONAL — their failure changes nothing the
  // user would notice, and the calling code already treats it as fine.
  // app_meta holds a "latest build seen" marker used only to nudge a stale
@@ -11547,6 +11750,12 @@ try{
    if(flushingOutbox) return;
    if(!window.supabaseClientV1) return;
    if(typeof navigator!=='undefined' && navigator.onLine===false) return;
+   // Hold the queue while this device is still out of date. Attempting a
+   // flush now would have every item blocked and re-queued, growing the
+   // queue on each pass without ever delivering anything. Waiting is also
+   // correct on its own terms: these writes should land on CURRENT data,
+   // not on the stale picture this device is still holding.
+   if(typeof deviceIsStale==='function' && deviceIsStale()) return;
    let items=loadOutbox();
    if(!items.length) return;
    flushingOutbox=true;
@@ -11654,6 +11863,7 @@ function syncHealthClick(){
   }).finally(updateSyncHealthBadge);
   else if(typeof autoLoadFromCloud==='function') Promise.resolve(autoLoadFromCloud()).finally(updateSyncHealthBadge);
   updateSyncHealthBadge();
+  if(typeof renderStaleDeviceBanner==='function') renderStaleDeviceBanner();
 }
 
  const keepaliveFetch=async(...args)=>{
@@ -11661,6 +11871,25 @@ function syncHealthClick(){
    const isAuthRequest=String(url).includes('/auth/v1/');
    const method=(options&&options.method||'GET').toUpperCase();
    const isTableWrite=/\/rest\/v1\//.test(String(url)) && (method==='POST'||method==='PATCH'||method==='PUT'||method==='DELETE');
+   // Every cloud write in the app funnels through here, which is why the
+   // stale-device block lives at this one point rather than at each call
+   // site — the path that caused the damage was precisely the one nobody
+   // thought to guard. Reads still go through, since downloading is how a
+   // device stops being stale.
+   if(typeof window.blockedByStaleDevice==='function' && window.blockedByStaleDevice(url, options)){
+     // QUEUE, don't discard. A teacher logging attendance on a phone that
+     // happens to be out of date is doing real work, and losing it would
+     // trade one silent data-loss bug for another — the whole point of
+     // blocking stale writes is to protect data, not to destroy fresh
+     // input. The write is held in the same outbox used for offline
+     // edits and replays automatically once the device downloads current
+     // data, so the work lands correctly rather than on top of a stale
+     // picture.
+     if(isTableWrite) enqueueOutboxWrite(url, options);
+     return new Response(JSON.stringify({error:'stale-device-write-queued'}), {
+       status:503, headers:{'Content-Type':'application/json'}
+     });
+   }
    try{
      const response=await fetch(url, {...options, keepalive:true});
      if(!isAuthRequest && response.status>=400 && response.status!==406){
@@ -17661,6 +17890,99 @@ function waitingMatchesFor(entry){
 // A visible notice when the waiting list is NOT syncing to the cloud, so a
 // silent failure (offline, not signed in, or the table never created) can't
 // pass unnoticed — changes made in that state live only on this device.
+// Shown at the top of the app whenever writes are paused. A device that
+// silently stops saving is far worse than one that says so: the work still
+// looks like it's being recorded, and only turns out not to have been much
+// later, once it matters.
+// Asks which copy to keep when this device and the cloud disagree.
+//
+// Better than the age heuristic it replaces, because the person answering
+// knows things the app cannot: whether they just restored a backup here,
+// or are opening a phone that has sat unused. But it needs two limits, or
+// it becomes the very bug it exists to prevent:
+//
+//   ADMIN ONLY. A teacher choosing "this device" would overwrite the whole
+//   academy's records. They have no way to judge that, and it isn't their
+//   decision — teachers always get the cloud copy, silently.
+//
+//   ONLY WHEN IT MATTERS. Asked on every trivial difference, the dialog
+//   becomes something to click through without reading, and then it
+//   protects nothing. One or two records is ordinary drift; a large gap is
+//   a genuine fork.
+const FORK_SIGNIFICANCE = 5;
+
+function describeDataAge(ms){
+  if(!ms) return 'unknown';
+  const mins=Math.floor((Date.now()-ms)/60000);
+  if(mins<1) return 'just now';
+  if(mins<60) return mins+' min ago';
+  const hrs=Math.floor(mins/60);
+  if(hrs<24) return hrs+' hour'+(hrs===1?'':'s')+' ago';
+  const days=Math.floor(hrs/24);
+  return days+' day'+(days===1?'':'s')+' ago';
+}
+
+// Returns null when there's nothing worth asking about.
+function assessDataFork(cloudStudents){
+  if(session.role!=='admin') return null;
+  const localCount=(db.students||[]).length;
+  const cloudCount=(cloudStudents||[]).length;
+  const localKeys=new Set((db.students||[]).map(s=>String(s.student_code||s.id)));
+  const cloudKeys=new Set((cloudStudents||[]).map(s=>String(s.student_code||s.id)));
+  let onlyLocal=0, onlyCloud=0;
+  localKeys.forEach(k=>{ if(!cloudKeys.has(k)) onlyLocal++; });
+  cloudKeys.forEach(k=>{ if(!localKeys.has(k)) onlyCloud++; });
+  if(onlyLocal < FORK_SIGNIFICANCE) return null; // ordinary drift, not a fork
+  return {onlyLocal, onlyCloud, localCount, cloudCount,
+          localAge:Number(db._lastLocalEditAt||db._lastCloudSyncAt||0),
+          cloudAge:Date.now()};
+}
+
+// Resolves to 'cloud' or 'local'.
+function askWhichCopyToKeep(fork){
+  return new Promise(resolve=>{
+    openModal('This device and the cloud don\'t match', `
+      <div style="margin-bottom:14px;color:var(--text-muted)">
+        Which copy should be kept? The other is replaced.
+      </div>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <button class="btn btn-gold" style="text-align:left;padding:12px" onclick="window.__forkChoice('cloud')">
+          <div style="font-weight:700">☁️ Use the cloud copy &nbsp;<span style="font-size:11px;background:rgba(255,255,255,0.15);padding:1px 6px;border-radius:4px">RECOMMENDED</span></div>
+          <div style="font-size:12px;opacity:0.85;margin-top:4px">${fork.cloudCount} students · what every other device sees</div>
+          <div style="font-size:12px;opacity:0.7;margin-top:2px">This device's ${fork.onlyLocal} extra student(s) are discarded.</div>
+        </button>
+        <button class="btn" style="text-align:left;padding:12px" onclick="window.__forkChoice('local')">
+          <div style="font-weight:700">📱 Use this device's copy</div>
+          <div style="font-size:12px;opacity:0.85;margin-top:4px">${fork.localCount} students · last edited here ${escapeHtml(describeDataAge(fork.localAge))}</div>
+          <div style="font-size:12px;opacity:0.7;margin-top:2px">Uploads to the cloud and replaces it for everyone.</div>
+        </button>
+      </div>
+      <div style="margin-top:14px;font-size:12px;color:var(--text-muted);line-height:1.6">
+        Choose <b>this device</b> only if you just restored a backup here. If you're opening a phone or
+        laptop that hasn't been used in a while, its copy is the old one — choose the cloud.
+      </div>
+    `);
+    window.__forkChoice=(choice)=>{ closeModal(); resolve(choice); };
+  });
+}
+
+function staleDeviceBannerHtml(){
+  if(typeof deviceIsStale!=='function' || !deviceIsStale()) return '';
+  const days=Math.floor((Date.now()-Number(db._lastCloudSyncAt||0))/86400000);
+  return '<div id="stale-device-warning" style="margin:0 0 12px;padding:12px 14px;background:rgba(224,108,108,0.14);'
+       + 'border:1px solid rgba(224,108,108,0.45);border-radius:8px;font-size:13px;color:#f0a0a0">'
+       + '⚠ <strong>This device is out of date</strong> — last synced '+days+' day(s) ago. '
+       + 'Anything you enter is <strong>saved and held here</strong>, not sent to the cloud yet, so an old copy '
+       + 'can\'t overwrite good data. <strong>Refresh the page</strong> to download the current data — '
+       + 'everything you entered is then uploaded automatically.'
+       + '</div>';
+}
+
+function renderStaleDeviceBanner(){
+  const host=document.getElementById('stale-device-banner');
+  if(host) host.innerHTML=staleDeviceBannerHtml();
+}
+
 function waitingSyncBannerHtml(){
   const syncing = !!window.supabaseClientV1 && window._waitingListSyncState!=='error';
   if(syncing) return '';
@@ -19911,6 +20233,16 @@ async function syncPaymentAmountToSupabase(paymentKey, amount, studentName){
               {onConflict:'payment_key'});
     if(error) console.warn('Payment-amount sync failed:', error.message);
   }catch(err){ console.warn('Payment-amount sync failed:', err.message); }
+}
+
+async function syncRenewalDismissalToSupabase(key, atIso){
+  try{
+    if(!window.supabaseClientV1 || !key) return;
+    const {error}=await window.supabaseClientV1.from('renewals_dismissed')
+      .upsert({dismissal_key:String(key), dismissed_at:atIso||new Date().toISOString()},
+              {onConflict:'dismissal_key'});
+    if(error) console.warn('Renewal dismissal sync failed:', error.message);
+  }catch(err){ console.warn('Renewal dismissal sync failed:', err.message); }
 }
 
 async function syncReminderSentToSupabase(reminderKey, sentAtIso){
