@@ -414,7 +414,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-230</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-231</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1300,6 +1300,11 @@ input::placeholder{color:var(--text-dim)}
     <small style="display:block;margin-bottom:8px;color:var(--text-muted)">Finds same-name students taking genuinely different courses who aren't connected — so they count as two people in your student total and don't show the "Course 1 of 2" badge. Only the connection changes; lessons, payments and payroll are untouched.</small>
     <button class="btn" onclick="previewLinkUnlinkedCourses()">🔍 Preview (changes nothing)</button>
     <div id="unlinked-courses-results" style="margin-top:14px"></div>
+
+    <div style="border-top:1px solid var(--border);margin:20px 0 16px;"></div>
+    <div class="card-title" style="margin-bottom:10px">Use Cloud Data Only (fix an out-of-date device)</div>
+    <small style="display:block;margin-bottom:8px;color:var(--text-muted)">Replaces <b>this device's</b> data with the cloud copy. Use it on a phone or laptop that opens showing old students. <b>Do this instead of clearing site data</b> — clearing also wipes the record of what this device knows, so the next sync treats its leftovers as new students and uploads them, recreating the old roster as duplicates. Nothing in the cloud changes and other devices are unaffected.</small>
+    <button class="btn" onclick="useCloudDataOnly()">☁️ Replace this device's data with the cloud</button>
 
     <div style="border-top:2px solid var(--gold);margin:24px 0 16px;"></div>
     <div class="card-title" style="margin-bottom:4px">Post-Reset Cleanup</div>
@@ -7827,6 +7832,47 @@ function applyFixScheduleMismatches(){
   previewFixScheduleMismatches();
 }
 
+// Discards this device's local copy and reloads everything from the
+// cloud. The safe way to bring a stale device back in line: clearing
+// browser data instead ALSO wipes the record of what this device knows,
+// so the next sync treats its leftovers as brand-new students and uploads
+// them — which is how a phone holding pre-reset data recreated the whole
+// old roster as duplicates.
+//
+// Deliberately does not touch the cloud, so running it on the wrong
+// device costs nothing but a re-download.
+async function useCloudDataOnly(){
+  if(!window.supabaseClientV1){
+    showToast('Not connected to the cloud — connect first, or this would leave you with nothing.');
+    return;
+  }
+  if(!confirm('Replace THIS DEVICE\'s data with the cloud copy?\n\n'+
+              'Anything here that has not reached the cloud is lost. Nothing in the cloud is changed, '+
+              'and other devices are unaffected.\n\nUse this on a phone or laptop showing old students.')) return;
+  try{
+    // Clear the local store WITHOUT clearing the sync bookkeeping, then
+    // pull fresh. Order matters: wipe first so the merge has nothing local
+    // to "preserve" and re-upload.
+    ['students','lessons','lessonLogs','waitingList','practiceSessions','notes','resources',
+     'expenses','otherRevenue','refunds','teacherAbsences','products','sales']
+      .forEach(k=>{ db[k]=[]; });
+    ['payments','paymentMethods','paymentAmounts','paymentStudentNames','payrollPaid',
+     'remindersSent','renewalsDismissed','wishlists'].forEach(k=>{ db[k]={}; });
+    save();
+    showToast('Local data cleared — downloading the cloud copy…');
+    if(typeof autoLoadFromCloud==='function') await autoLoadFromCloud();
+    save();
+    ['renderStudents','renderLessons','renderOverview','renderTeachers','renderWaitingList',
+     'renderProducts','renderExpenses','renderNotesPage'].forEach(fn=>{
+      if(typeof window[fn]==='function'){ try{ window[fn](); }catch(_){} }
+    });
+    showToast('This device now matches the cloud ✓');
+  }catch(err){
+    console.error('Use-cloud-only failed:', err);
+    showToast('Could not refresh from the cloud — check the connection and try again.');
+  }
+}
+
 function renderDeletionLog(){
   const el=document.getElementById('deletion-log-results');
   if(!el) return;
@@ -10841,13 +10887,54 @@ async function _autoLoadFromCloudImpl(){
          }
        }
      });
+     // ── STALE-DEVICE GUARD ────────────────────────────────────────────
+     // Re-uploading local-only students is right for the case it was
+     // written for: one or two people added on this device that haven't
+     // reached the cloud yet. It is catastrophically wrong for a device
+     // that has been offline across a database reset — there, EVERY
+     // pre-reset student looks "local-only", and the re-upload silently
+     // resurrects the entire old roster under fresh ids, duplicating
+     // everyone. That is exactly what happened when the app was opened on
+     // a phone still holding pre-reset data.
+     //
+     // The two cases are indistinguishable from the records alone, but
+     // they differ enormously in SIZE. A handful is ordinary offline work;
+     // dozens at once means this device's copy is stale. So a small batch
+     // uploads silently as before, and a large one stops and asks, because
+     // guessing wrong in either direction is worse than a question.
+     const STALE_DEVICE_THRESHOLD = 5;
      if(pendingReupload.length){
-       pendingReupload.forEach(s=>{
-         try{
-           if((s.id!=null || s.student_code) && typeof syncStudentUpdateToSupabase==='function') syncStudentUpdateToSupabase(s);
-           else if(typeof addStudentToSupabase==='function') addStudentToSupabase(s);
-         }catch(e){}
-       });
+       const doUpload=()=>{
+         pendingReupload.forEach(s=>{
+           try{
+             if((s.id!=null || s.student_code) && typeof syncStudentUpdateToSupabase==='function') syncStudentUpdateToSupabase(s);
+             else if(typeof addStudentToSupabase==='function') addStudentToSupabase(s);
+           }catch(e){}
+         });
+       };
+       if(pendingReupload.length < STALE_DEVICE_THRESHOLD){
+         doUpload();
+       } else {
+         const names=pendingReupload.slice(0,8).map(s=>s.name||'?').join(', ')
+                   + (pendingReupload.length>8 ? ` …and ${pendingReupload.length-8} more` : '');
+         const useLocal=confirm(
+           'This device has '+pendingReupload.length+' students that are NOT in the cloud:\n\n'+names+
+           '\n\nThat usually means this device is out of date — its copy is from before a reset or cleanup, '+
+           'and uploading would recreate everyone as duplicates.\n\n'+
+           'OK  = Upload them (only if you genuinely added these here and they are missing from the cloud)\n'+
+           'Cancel = Discard this device\'s extra students and use the cloud copy (recommended)'
+         );
+         if(useLocal){
+           doUpload();
+         } else {
+           // Drop them from the merged roster too, so the screen matches
+           // the cloud instead of showing students that were just refused.
+           const refused=new Set(pendingReupload.map(x=>keyOf(x)));
+           for(let i=merged.length-1;i>=0;i--){ if(refused.has(keyOf(merged[i]))) merged.splice(i,1); }
+           console.warn('Stale-device guard: discarded '+pendingReupload.length+' local-only students in favour of the cloud copy.');
+           if(typeof showToast==='function') showToast('Using the cloud roster — '+pendingReupload.length+' out-of-date local students discarded');
+         }
+       }
      }
    }
 
