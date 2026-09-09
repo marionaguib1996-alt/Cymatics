@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-235</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-237</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -2436,21 +2436,20 @@ function save(){try{localStorage.setItem('musicacademy_db',JSON.stringify(db));}
 // the first time" even as edits were being pushed up all day. Now it's
 // called on successful writes too, so it reflects genuine sync activity
 // in both directions.
-// How long a device may be away before its local copy is treated as
-// untrustworthy. A device used daily is never affected; a phone opened
-// after a week is exactly the case this exists for.
-const STALE_DEVICE_DAYS = 3;
-
-// True when this browser's copy is too old to be allowed to write to the
-// cloud. The danger isn't reading stale data — that's harmless and gets
-// overwritten by the download. It's WRITING it: an old copy pushed up
-// resurrects deleted students, restores pre-fix lesson names, and revives
-// records that were cleaned up weeks ago, and it does so silently because
-// every one of those looks like an ordinary edit.
-function deviceIsStale(){
-  const last = Number(db._lastCloudSyncAt || 0);
-  if(!last) return false; // never synced — a genuinely new device, not a stale one
-  return (Date.now() - last) > STALE_DEVICE_DAYS*24*60*60*1000;
+// Has this session actually downloaded from the cloud yet?
+//
+// This replaced a "device hasn't synced in 3 days" rule. That was a guess
+// dressed as a policy: it punished a normal long weekend with a read-only
+// session, while a device edited an hour before a reset still counted as
+// fresh. Elapsed time simply isn't what makes a copy safe to push.
+//
+// What matters is a fact, not a duration: has this browser seen the
+// current cloud state during this session? If it has, whatever it holds
+// is informed and safe to send. If it hasn't, it's about to overwrite
+// data it has never looked at — and that is true after three days or
+// three minutes.
+function hasLoadedFromCloudThisSession(){
+  return !!window.__loadedFromCloudThisSession;
 }
 
 // When this device's own data was last changed by a person — shown in the
@@ -9819,14 +9818,12 @@ async function pushAllDataToCloud(){
   // isn't a warning to be clicked past: the person holding the phone has
   // no way to judge which of forty students are real, so the safe order is
   // simply enforced.
-  if(typeof deviceIsStale==='function' && deviceIsStale()){
-    const days=Math.floor((Date.now()-Number(db._lastCloudSyncAt||0))/86400000);
-    alert("This device hasn't synced for "+days+" day(s), so its copy may be out of date.\n\n"+
-          'Pushing now would overwrite the cloud with old data — recreating deleted students and '+
-          'undoing recent fixes.\n\n'+
-          'Refresh the page to download the current data first. If this device genuinely holds the only '+
-          'good copy (you just restored a backup here), use Database → Use Cloud Data Only on the OTHER '+
-          'devices instead.');
+  if(typeof hasLoadedFromCloudThisSession==='function' && !hasLoadedFromCloudThisSession()){
+    alert('This device has not downloaded from the cloud yet in this session.\n\n'+
+          'Pushing now would overwrite the cloud with data this device has never compared against — '+
+          'recreating deleted students and undoing recent fixes.\n\n'+
+          'Refresh the page first. If a difference is found you will be asked which copy to keep, '+
+          'and after that this push is safe.');
     return;
   }
 
@@ -11543,6 +11540,7 @@ async function _autoLoadFromCloudImpl(){
      (teachers?.length||0)+' teachers · '+
      (lessons?.length||0)+' lessons · '+
      (payments?.length||0)+' payments';
+   window.__loadedFromCloudThisSession=true;
    if(typeof stampLastSync==='function') stampLastSync('loaded from cloud');
    hideSyncIndicator();
  }catch(e){
@@ -11628,42 +11626,10 @@ try{
  // those here would just be false alarms.
  window.syncFailures=window.syncFailures||[];
 
- // ── READ-ONLY MODE FOR A STALE DEVICE ────────────────────────────────
- // A device that hasn't synced in days may READ its local copy freely —
- // that's harmless, and the next download corrects it. What it must not
- // do is WRITE, because every stale record it sends looks like an
- // ordinary edit: deleted students come back, corrected names revert,
- // and weeks of cleanup are undone silently.
- //
- // Enforced here rather than at each call site because every cloud write
- // funnels through this one interceptor. Patching individual functions
- // would leave whichever path I failed to think of still open — and the
- // path that caused the damage is precisely the one nobody thought of.
- //
- // GET is always allowed: downloading is how the device stops being
- // stale. The block lifts by itself the moment a load completes.
- window.isCloudWrite = (url, options) => {
-   const method=String((options&&options.method)||'GET').toUpperCase();
-   if(method==='GET' || method==='HEAD') return false;
-   return /\/rest\/v1\//.test(String(url));
- };
- let staleWriteNotified=false;
- // On window deliberately. This guard sits on the path that already caused
- // real data loss once, so it has to be reachable and testable from
- // outside — a protection that can't be verified is a protection nobody
- // should rely on.
- window.blockedByStaleDevice = (url, options) => {
-   if(typeof deviceIsStale!=='function' || !deviceIsStale()) return false;
-   if(!window.isCloudWrite(url, options)) return false;
-   if(!staleWriteNotified){
-     staleWriteNotified=true;
-     console.warn('Stale device: cloud writes are paused until this device downloads current data. Refresh the page.');
-     if(typeof showToast==='function'){
-       showToast('This device is out of date — your changes are saved here and will upload after you refresh.');
-     }
-   }
-   return true;
- };
+ // Ordinary editing is never blocked. Whether this device's picture is
+ // current is settled ONCE, at load, by the local-vs-cloud dialog — after
+ // which the device is by definition in step and free to write.
+ // Blocking individual writes on a timer only ever punished normal use.
  // Writes that are genuinely OPTIONAL — their failure changes nothing the
  // user would notice, and the calling code already treats it as fine.
  // app_meta holds a "latest build seen" marker used only to nudge a stale
@@ -11750,12 +11716,6 @@ try{
    if(flushingOutbox) return;
    if(!window.supabaseClientV1) return;
    if(typeof navigator!=='undefined' && navigator.onLine===false) return;
-   // Hold the queue while this device is still out of date. Attempting a
-   // flush now would have every item blocked and re-queued, growing the
-   // queue on each pass without ever delivering anything. Waiting is also
-   // correct on its own terms: these writes should land on CURRENT data,
-   // not on the stale picture this device is still holding.
-   if(typeof deviceIsStale==='function' && deviceIsStale()) return;
    let items=loadOutbox();
    if(!items.length) return;
    flushingOutbox=true;
@@ -11876,20 +11836,6 @@ function syncHealthClick(){
    // site — the path that caused the damage was precisely the one nobody
    // thought to guard. Reads still go through, since downloading is how a
    // device stops being stale.
-   if(typeof window.blockedByStaleDevice==='function' && window.blockedByStaleDevice(url, options)){
-     // QUEUE, don't discard. A teacher logging attendance on a phone that
-     // happens to be out of date is doing real work, and losing it would
-     // trade one silent data-loss bug for another — the whole point of
-     // blocking stale writes is to protect data, not to destroy fresh
-     // input. The write is held in the same outbox used for offline
-     // edits and replays automatically once the device downloads current
-     // data, so the work lands correctly rather than on top of a stale
-     // picture.
-     if(isTableWrite) enqueueOutboxWrite(url, options);
-     return new Response(JSON.stringify({error:'stale-device-write-queued'}), {
-       status:503, headers:{'Content-Type':'application/json'}
-     });
-   }
    try{
      const response=await fetch(url, {...options, keepalive:true});
      if(!isAuthRequest && response.status>=400 && response.status!==406){
@@ -17966,22 +17912,7 @@ function askWhichCopyToKeep(fork){
   });
 }
 
-function staleDeviceBannerHtml(){
-  if(typeof deviceIsStale!=='function' || !deviceIsStale()) return '';
-  const days=Math.floor((Date.now()-Number(db._lastCloudSyncAt||0))/86400000);
-  return '<div id="stale-device-warning" style="margin:0 0 12px;padding:12px 14px;background:rgba(224,108,108,0.14);'
-       + 'border:1px solid rgba(224,108,108,0.45);border-radius:8px;font-size:13px;color:#f0a0a0">'
-       + '⚠ <strong>This device is out of date</strong> — last synced '+days+' day(s) ago. '
-       + 'Anything you enter is <strong>saved and held here</strong>, not sent to the cloud yet, so an old copy '
-       + 'can\'t overwrite good data. <strong>Refresh the page</strong> to download the current data — '
-       + 'everything you entered is then uploaded automatically.'
-       + '</div>';
-}
-
-function renderStaleDeviceBanner(){
-  const host=document.getElementById('stale-device-banner');
-  if(host) host.innerHTML=staleDeviceBannerHtml();
-}
+function renderStaleDeviceBanner(){ /* removed with the time-based staleness rule */ }
 
 function waitingSyncBannerHtml(){
   const syncing = !!window.supabaseClientV1 && window._waitingListSyncState!=='error';
