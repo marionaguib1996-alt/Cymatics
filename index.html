@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-237</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-239</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -11054,12 +11054,39 @@ async function _autoLoadFromCloudImpl(){
          });
        };
        const discardLocal=()=>{
-         // Drop them from the merged roster too, so the screen matches the
-         // cloud rather than showing students that were just refused.
+         // ARCHIVED, not deleted. These students are almost always stale
+         // leftovers — but "almost always" isn't good enough to throw
+         // someone away on. Archiving takes them out of the active roster
+         // (so the screen matches the cloud, which is the point) while
+         // leaving them listed under Archived Students in the Database
+         // tab, where they can be read and restored.
+         //
+         // UPLOADED as archived, so every device agrees. Keeping them local
+         // would leave each device with its own private pile of ghosts —
+         // invisible to everyone else, and impossible to clear once and be
+         // done with. Uploading means they appear under Archived Students
+         // everywhere, and deleting one there removes it everywhere.
+         //
+         // Safe to upload because archived students are excluded from the
+         // roster, the counts, scheduling and payroll — they're a record,
+         // not a participant.
          const refused=new Set(pendingReupload.map(x=>keyOf(x)));
-         for(let i=merged.length-1;i>=0;i--){ if(refused.has(keyOf(merged[i]))) merged.splice(i,1); }
-         console.warn('Using the cloud copy: discarded '+pendingReupload.length+' local-only students.');
-         if(typeof showToast==='function') showToast('Using the cloud roster — '+pendingReupload.length+' out-of-date local students discarded');
+         let archived=0;
+         merged.forEach(m=>{
+           if(!refused.has(keyOf(m))) return;
+           m.status='archived';
+           m.archivedByStaleSync=new Date().toISOString();
+           m._localModifiedAt=Date.now();
+           archived++;
+           try{
+             if((m.id!=null || m.student_code) && typeof syncStudentUpdateToSupabase==='function') syncStudentUpdateToSupabase(m);
+             else if(typeof addStudentToSupabase==='function') addStudentToSupabase(m);
+           }catch(_){}
+         });
+         console.warn('Using the cloud copy: archived '+archived+' local-only students (Database → Archived Students).');
+         if(typeof showToast==='function'){
+           showToast(archived+' out-of-date local student(s) archived — see Database → Archived Students');
+         }
        };
 
        const fork=(typeof assessDataFork==='function') ? assessDataFork(cloudStudents) : null;
@@ -17895,7 +17922,7 @@ function askWhichCopyToKeep(fork){
         <button class="btn btn-gold" style="text-align:left;padding:12px" onclick="window.__forkChoice('cloud')">
           <div style="font-weight:700">☁️ Use the cloud copy &nbsp;<span style="font-size:11px;background:rgba(255,255,255,0.15);padding:1px 6px;border-radius:4px">RECOMMENDED</span></div>
           <div style="font-size:12px;opacity:0.85;margin-top:4px">${fork.cloudCount} students · what every other device sees</div>
-          <div style="font-size:12px;opacity:0.7;margin-top:2px">This device's ${fork.onlyLocal} extra student(s) are discarded.</div>
+          <div style="font-size:12px;opacity:0.7;margin-top:2px">This device's ${fork.onlyLocal} extra student(s) are archived, not deleted — they appear under Database → Archived Students on every device, where they can be restored or removed for good.</div>
         </button>
         <button class="btn" style="text-align:left;padding:12px" onclick="window.__forkChoice('local')">
           <div style="font-weight:700">📱 Use this device's copy</div>
