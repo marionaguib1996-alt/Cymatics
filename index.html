@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-242</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-243</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -17601,9 +17601,18 @@ function getEffectiveTeacherDaySlots(teacherName, dayName, excludeStudentId, tar
 // scans every day the teacher actually works, across the next two weeks,
 // so the makeup dropdown genuinely reflects everything available rather
 // than whatever today's weekday happened to line up with.
-function findTeacherDoubleSessionWindows(teacherName, excludeLessonId){
+// forStudent: the student this makeup belongs to. Their OWN lessons must
+// not count as blockers — a double session exists precisely to absorb one
+// of their sessions into the missed one. Treating their 5:30 lesson as a
+// conflict when booking 4:45–6:15 rejects the exact arrangement the
+// feature is for, and reports it as "busy — <their own name>".
+function findTeacherDoubleSessionWindows(teacherName, excludeLessonId, forStudent){
   const prof=(db.teacherProfiles||[]).find(p=>p.name===teacherName);
   if(!prof) return [];
+  const isOwn=(label)=>{
+    if(!forStudent || !label) return false;
+    return normalizeStudentNameForMatch(label)===normalizeStudentNameForMatch(forStudent.name||'');
+  };
   const windows=[];
   const now=new Date();
   const todayKey=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');
@@ -17624,16 +17633,26 @@ function findTeacherDoubleSessionWindows(teacherName, excludeLessonId){
       // blocker is often the next slot, which is why it isn't obvious from
       // looking at the calendar.
       const note=(why)=>windows.push({date:targetDate, time:slot.time, dayName, unavailable:why});
-      if(slot.occupiedBy){ note(slot.heldForRenewal ? ('held for '+slot.occupiedBy) : ('busy — '+slot.occupiedBy)); return; }
+      const thisBusy = slot.occupiedBy && !isOwn(slot.occupiedBy);
+      if(thisBusy){ note(slot.heldForRenewal ? ('held for '+slot.occupiedBy) : ('busy — '+slot.occupiedBy)); return; }
       const next=effSlots[i+1];
       if(!next){ note('no slot after it for the 2nd half'); return; }
-      if(next.occupiedBy){ note('2nd half '+formatTime12h(next.time)+' busy — '+next.occupiedBy); return; }
+      const nextBusy = next.occupiedBy && !isOwn(next.occupiedBy);
+      if(nextBusy){ note('2nd half '+formatTime12h(next.time)+' busy — '+next.occupiedBy); return; }
+      // Their own lesson sitting in the window is the POINT, not a clash —
+      // flag it so the option can say what it will absorb.
+      const absorbs = isOwn(slot.occupiedBy) ? slot.occupiedBy : (isOwn(next.occupiedBy) ? next.occupiedBy : null);
       // Range checks over the FULL 90 minutes — the grid checks above
       // catch grid-aligned bookings, but staggered/off-grid ones (a
       // lesson at 5:45 inside a 5:30–7:00 window) only show up with a
       // proper interval-overlap check. Room capacity likewise can fill
       // partway through the window, not just at its slot boundaries.
-      if(isTeacherBusyDuringRange(teacherName, targetDate, slot.time, 90, excludeLessonId)){ note('teacher busy during the 90 min'); return; }
+      // Their own lessons in this window are excluded from the busy check
+      // for the same reason — they're being merged in, not collided with.
+      const ownIdsHere=(db.lessons||[]).filter(l=>
+        forStudent && lessonBelongsToStudent(l, forStudent) && l.date===targetDate
+      ).map(l=>l.id);
+      if(isTeacherBusyDuringRange(teacherName, targetDate, slot.time, 90, excludeLessonId, ownIdsHere)){ note('teacher busy during the 90 min'); return; }
       if(isRoomFullDuringRange(targetDate, slot.time, 90, excludeLessonId)){
         // A room may free partway through this slot (e.g. a practice
         // session ending mid-slot) — a shifted 90-minute window starting
@@ -17643,7 +17662,7 @@ function findTeacherDoubleSessionWindows(teacherName, excludeLessonId){
         else note('rooms full during the 90 min');
         return;
       }
-      windows.push({date:targetDate, time:slot.time, dayName});
+      windows.push({date:targetDate, time:slot.time, dayName, absorbs});
     });
   }
   return windows.sort((a,b)=> a.date===b.date ? a.time.localeCompare(b.time) : a.date.localeCompare(b.date));
@@ -19326,11 +19345,17 @@ function isRoomFullDuringRange(date, startTime, durationMinutes, excludeLessonId
 // Teacher counterpart: true if the teacher has any lesson overlapping
 // any part of [startTime, startTime+durationMinutes) — an instant check
 // at the range's start misses a lesson of theirs starting partway in.
-function isTeacherBusyDuringRange(teacherName, date, startTime, durationMinutes, excludeLessonId){
+// alsoExcludeIds: additional lessons to ignore. Used when a double session
+// is being booked over the student's OWN lesson — that lesson is being
+// merged into the 90 minutes, so counting it as a clash rejects the very
+// arrangement being made.
+function isTeacherBusyDuringRange(teacherName, date, startTime, durationMinutes, excludeLessonId, alsoExcludeIds){
   if(!teacherName || !date || !startTime) return false;
   const rangeStart=timeToMinutes(startTime);
   const rangeEnd=rangeStart+durationMinutes;
+  const extra=new Set((alsoExcludeIds||[]).map(String));
   return (db.lessons||[]).some(l=>{
+    if(extra.has(String(l.id))) return false;
     if(l.date!==date || !l.time || (l.status_record||'active')==='archived') return false;
     if(l.status==='absent_excused' || l.status==='teacher_absent' || l.status==='absent_paid') return false;
     if(lessonBelongsToFrozenStudent(l)) return false; // paused student
@@ -19552,7 +19577,7 @@ function openScheduleMakeup(missedLessonId){
   // windows — since a student's own regular time might never have a free
   // follow-up slot at all, this is what actually gives the admin a way
   // forward instead of a dead end.
-  const otherWindows=missed.teacher ? findTeacherDoubleSessionWindows(missed.teacher, missedLessonId) : [];
+  const otherWindows=missed.teacher ? findTeacherDoubleSessionWindows(missed.teacher, missedLessonId, student) : [];
   const hasAnyOption=upcomingCandidates.length || otherWindows.some(w=>!w.unavailable);
 
   openModal('Schedule Makeup — '+escapeHtml(missed.student||''), `
@@ -19571,7 +19596,7 @@ function openScheduleMakeup(missedLessonId){
           ${upcomingCandidates.map(l=>`<option value="existing:${l.id}">${escapeHtml(formatLedgerDate(l.date))} at ${escapeHtml(formatTime12h(l.time))} — ${escapeHtml(student?.name||missed.student||'')}'s regular lesson</option>`).join('')}
           ${otherWindows.map(w=>w.unavailable
             ? `<option value="" disabled>${escapeHtml(formatLedgerDate(w.date))} at ${escapeHtml(formatTime12h(w.time))} — ${escapeHtml(w.unavailable)}</option>`
-            : `<option value="new:${w.date}:${w.time}">${escapeHtml(formatLedgerDate(w.date))} at ${escapeHtml(formatTime12h(w.time))} — new time with ${escapeHtml(missed.teacher||'')}</option>`).join('')}
+            : `<option value="new:${w.date}:${w.time}">${escapeHtml(formatLedgerDate(w.date))} at ${escapeHtml(formatTime12h(w.time))} — ${w.absorbs?'combines with their own lesson':'new time with '+escapeHtml(missed.teacher||'')}</option>`).join('')}
           <option value="custom">Custom day &amp; start time…</option>
         </select>
       </div>
