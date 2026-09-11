@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-240</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-241</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -19658,7 +19658,28 @@ function updateMakeupPreview(missedLessonId){
     }
     if(!date || !time){ el.textContent='Pick a time to see what this will use.'; return; }
     const cost=doubleSessionCreditCost(student, date);
-    el.innerHTML=`<strong>${escapeHtml(formatLedgerDate(date))} at ${escapeHtml(formatTime12h(time))}</strong> with ${escapeHtml(teacherLabel)}, 90 minutes — will use <strong>${cost} of ${student?makeupsOwedCountForStudent(student):'?'} owed make-up${cost===1?'':'s'}</strong> once attended.`;
+    const owed=student?makeupsOwedCountForStudent(student):0;
+    // A double session on a day that isn't their usual one costs TWO
+    // credits: the 90 minutes replaces both that week's regular lesson and
+    // the missed one. The cost was shown but never checked against what
+    // they actually owe, so the app would happily offer "2 of 1" — booking
+    // it would consume a credit the student doesn't have and leave the
+    // make-up count negative.
+    const tooExpensive = cost>owed;
+    el.innerHTML=`<strong>${escapeHtml(formatLedgerDate(date))} at ${escapeHtml(formatTime12h(time))}</strong> with ${escapeHtml(teacherLabel)}, 90 minutes — will use <strong>${cost} of ${owed} owed make-up${cost===1?'':'s'}</strong> once attended.`
+      + (tooExpensive ? `<div style="margin-top:8px;padding:8px 10px;background:rgba(224,108,108,0.14);border:1px solid rgba(224,108,108,0.45);border-radius:6px;color:#f0a0a0;font-size:12px;line-height:1.6">
+          A double session here costs <strong>${cost}</strong> make-ups because it falls on a different day from their usual lesson — the 90 minutes covers that week's regular session as well as the missed one. They only have <strong>${owed}</strong>.
+          <br>Pick a slot on their usual day (costs 1), or book a normal 45-minute make-up instead.
+        </div>` : '');
+    // Block the action rather than only warning: the number was always
+    // shown, and it still got booked.
+    const confirmBtn=document.getElementById('ms-primary-btn');
+    if(confirmBtn){
+      confirmBtn.disabled=tooExpensive;
+      confirmBtn.style.opacity=tooExpensive?'0.45':'';
+      confirmBtn.style.cursor=tooExpensive?'not-allowed':'';
+      confirmBtn.title=tooExpensive?('Costs '+cost+' make-ups but only '+owed+' owed'):'';
+    }
     return;
   }
   if(path==='separate'){
@@ -19868,6 +19889,17 @@ function confirmDoubleSessionMakeup(missedLessonId){
     }
     if(isRoomFullDuringRange(target.date, target.time, 90, target.id)){
       showToast('The rooms hit the 3-room limit during part of that 90-minute window — pick a different option.');
+      return;
+    }
+
+    // Re-checked at confirm time, not just when the panel rendered. The
+    // owed count can change while the modal is open (another device
+    // resolving a make-up), and a disabled button is a UI state, not a
+    // guarantee.
+    const costNow=doubleSessionCreditCost(student, target.date);
+    const owedNow=makeupsOwedCountForStudent(student);
+    if(costNow>owedNow){
+      showToast('That slot costs '+costNow+' make-ups but only '+owedNow+' are owed — pick a slot on their usual day, or book a normal make-up.');
       return;
     }
 
