@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-241</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-242</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -17616,21 +17616,31 @@ function findTeacherDoubleSessionWindows(teacherName, excludeLessonId){
     if(targetDate<todayKey) continue;
     const effSlots=getEffectiveTeacherDaySlots(teacherName, dayName, null, targetDate);
     effSlots.forEach((slot,i)=>{
-      if(slot.occupiedBy) return; // this slot itself must be free
+      // Unavailable slots are RECORDED with a reason rather than dropped.
+      // A slot that simply isn't in the list is indistinguishable from one
+      // that doesn't exist, which leaves no way to tell "taken" from
+      // "never offered" — the same problem the booking dropdowns had.
+      // A 90-minute session needs THIS slot and the one after it, so the
+      // blocker is often the next slot, which is why it isn't obvious from
+      // looking at the calendar.
+      const note=(why)=>windows.push({date:targetDate, time:slot.time, dayName, unavailable:why});
+      if(slot.occupiedBy){ note(slot.heldForRenewal ? ('held for '+slot.occupiedBy) : ('busy — '+slot.occupiedBy)); return; }
       const next=effSlots[i+1];
-      if(!next || next.occupiedBy) return; // and the slot right after it too
+      if(!next){ note('no slot after it for the 2nd half'); return; }
+      if(next.occupiedBy){ note('2nd half '+formatTime12h(next.time)+' busy — '+next.occupiedBy); return; }
       // Range checks over the FULL 90 minutes — the grid checks above
       // catch grid-aligned bookings, but staggered/off-grid ones (a
       // lesson at 5:45 inside a 5:30–7:00 window) only show up with a
       // proper interval-overlap check. Room capacity likewise can fill
       // partway through the window, not just at its slot boundaries.
-      if(isTeacherBusyDuringRange(teacherName, targetDate, slot.time, 90, excludeLessonId)) return;
+      if(isTeacherBusyDuringRange(teacherName, targetDate, slot.time, 90, excludeLessonId)){ note('teacher busy during the 90 min'); return; }
       if(isRoomFullDuringRange(targetDate, slot.time, 90, excludeLessonId)){
         // A room may free partway through this slot (e.g. a practice
         // session ending mid-slot) — a shifted 90-minute window starting
         // then is still a genuinely valid double-session option.
         const shifted=resolveShiftedBookableTime(targetDate, slot.time, 90, teacherName, excludeLessonId);
         if(shifted) windows.push({date:targetDate, time:shifted, dayName});
+        else note('rooms full during the 90 min');
         return;
       }
       windows.push({date:targetDate, time:slot.time, dayName});
@@ -19543,7 +19553,7 @@ function openScheduleMakeup(missedLessonId){
   // follow-up slot at all, this is what actually gives the admin a way
   // forward instead of a dead end.
   const otherWindows=missed.teacher ? findTeacherDoubleSessionWindows(missed.teacher, missedLessonId) : [];
-  const hasAnyOption=upcomingCandidates.length || otherWindows.length;
+  const hasAnyOption=upcomingCandidates.length || otherWindows.some(w=>!w.unavailable);
 
   openModal('Schedule Makeup — '+escapeHtml(missed.student||''), `
     <p style="color:var(--text-muted);margin-bottom:14px">Missed lesson: ${escapeHtml(formatLedgerDate(missed.date))}${missed.time?' at '+escapeHtml(formatTime12h(missed.time)):''} — ${escapeHtml(STATUS_LABELS[missed.status]||missed.status)}</p>
@@ -19559,7 +19569,9 @@ function openScheduleMakeup(missedLessonId){
       <div style="margin-top:10px">
         <select id="ms-double-target" style="width:100%" onchange="onMakeupDoubleTargetChange(${missedLessonId})">
           ${upcomingCandidates.map(l=>`<option value="existing:${l.id}">${escapeHtml(formatLedgerDate(l.date))} at ${escapeHtml(formatTime12h(l.time))} — ${escapeHtml(student?.name||missed.student||'')}'s regular lesson</option>`).join('')}
-          ${otherWindows.map(w=>`<option value="new:${w.date}:${w.time}">${escapeHtml(formatLedgerDate(w.date))} at ${escapeHtml(formatTime12h(w.time))} — new time with ${escapeHtml(missed.teacher||'')}</option>`).join('')}
+          ${otherWindows.map(w=>w.unavailable
+            ? `<option value="" disabled>${escapeHtml(formatLedgerDate(w.date))} at ${escapeHtml(formatTime12h(w.time))} — ${escapeHtml(w.unavailable)}</option>`
+            : `<option value="new:${w.date}:${w.time}">${escapeHtml(formatLedgerDate(w.date))} at ${escapeHtml(formatTime12h(w.time))} — new time with ${escapeHtml(missed.teacher||'')}</option>`).join('')}
           <option value="custom">Custom day &amp; start time…</option>
         </select>
       </div>
