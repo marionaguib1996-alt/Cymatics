@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-239</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-240</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -2257,6 +2257,16 @@ async function confirmRefund(studentId){
   };
   db.refunds.push(refund);
 
+  // Mark the STUDENT as refunded for this month, not just the ledger.
+  // A refund isn't a payment — the money went the other way — so showing
+  // them as "Paid" reads as though they settled up, which is the opposite
+  // of what happened. Recorded on the student so the badge and the
+  // end-of-month archive can both see it.
+  s.refundedMonth=refund.month;
+  s.refundedAt=refund.date;
+  s._localModifiedAt=Date.now();
+  if(typeof syncStudentUpdateToSupabase==='function'){ try{ syncStudentUpdateToSupabase(s); }catch(_){} }
+
   // A refund compensates the student with money in place of the sessions
   // they were owed, so clear their outstanding make-ups: mark each owed
   // lesson resolved, and archive any make-up sessions already booked for
@@ -3506,11 +3516,29 @@ function syncPaymentToggleToSupabase(id, month, paid, method){
       const byCode = (codeColOk && studentCode)
         ? (data||[]).filter(r=>r.student_code && String(r.student_code)===String(studentCode))
         : [];
-      const byId = byCode.length ? [] : (data||[]).filter(r=>r.student_id!=null && String(r.student_id)===String(id));
-      const byName = (byCode.length || byId.length) ? [] : (data||[]).filter(r=>
+      // UNION, not either/or. These three matchers find rows for the SAME
+      // person keyed three different ways, and after a messy sync a
+      // student can genuinely have one row carrying their code and another
+      // carrying their id. Treating code-matches as an alternative to
+      // id-matches meant only one set was collapsed, and then stamping the
+      // student_id onto the code-keyed row collided with the id-keyed row
+      // that already held that (student_id, month) — surfacing as
+      // "duplicate key violates payments_student_month_unique" on what
+      // looked like a simple update.
+      //
+      // Collapsing all of them together is also more correct on its own
+      // terms: one student, one month, one payment row.
+      const byId = (data||[]).filter(r=>r.student_id!=null && String(r.student_id)===String(id));
+      const byName = (data||[]).filter(r=>
         r.student_id==null && !r.student_code && studentName && r.student_name===studentName
       );
-      const rows=byCode.length ? byCode : (byId.length ? byId : byName);
+      const seenRowIds=new Set();
+      const rows=[].concat(byCode, byId, byName).filter(r=>{
+        const k=String(r.id);
+        if(seenRowIds.has(k)) return false;
+        seenRowIds.add(k);
+        return true;
+      });
       if(rows.length){
         const keep=rows[0];
         const dupes=rows.slice(1);
@@ -3518,6 +3546,10 @@ function syncPaymentToggleToSupabase(id, month, paid, method){
         dupes.forEach(d=>{ chain=chain.then(()=>window.supabaseClientV1.from('payments').delete().eq('id', d.id)); });
         return chain.then(()=>window.supabaseClientV1.from('payments').update(payload).eq('id', keep.id));
       } else {
+        // The insert can still race another device, or hit a row this
+        // month-scoped select didn't return. Falling back to an update
+        // keyed on (student_id, month) targets exactly the row the
+        // constraint is complaining about.
         return window.supabaseClientV1.from('payments').insert([payload]).then(res=>{
           if(res && res.error){
             return window.supabaseClientV1.from('payments').update(payload).eq('student_id', id).eq('month', month);
@@ -3851,7 +3883,9 @@ function renderStudents(){
       <td style="white-space:nowrap">${s.lesson_day?escapeHtml(s.lesson_day):'<span style="color:var(--danger,#e06c6c)">no day set</span>'}${s.lessonTime?'<br><span style="color:var(--text-muted);font-size:12px">'+escapeHtml(formatTime12h(s.lessonTime))+'</span>':''}</td>
       <td>${PLAN_LABELS[s.plan]}</td>
       <td style="font-weight:600">${amt}</td>
-      <td><span class="badge ${paid?'badge-green':'badge-red'}">${paid?'✓ Paid':'✗ Unpaid'}</span>${paid && method ? ` <span class="badge" style="opacity:0.8">${escapeHtml(method)}</span>` : ''}</td>
+      <td>${s.refundedMonth===month
+        ? `<span class="badge badge-amber" title="Refunded ${escapeAttr(s.refundedAt||'')} — this student is archived automatically once the month turns">↩ Refunded</span>`
+        : `<span class="badge ${paid?'badge-green':'badge-red'}">${paid?'✓ Paid':'✗ Unpaid'}</span>${paid && method ? ` <span class="badge" style="opacity:0.8">${escapeHtml(method)}</span>` : ''}`}</td>
       <td><button class='btn btn-sm' onclick='showHistory(${s.id})'>History</button></td><td><div class="actions">
         <button class="btn btn-sm" onclick="togglePayment(${s.id})">${paid?'Mark unpaid':'Mark paid'}</button>
         ${(s.plan==='trial'||s.plan==='group-trial') ? `<button class="btn btn-sm btn-gold" onclick="convertTrial(${s.id})">Convert</button>` : ''}
@@ -7990,6 +8024,49 @@ function applyFixFrozenWithLessons(){
   previewFixFrozenWithLessons();
 }
 
+// Archives students who were refunded in an EARLIER month. A refund means
+// they've left and been paid back, so carrying them in the active roster
+// afterwards inflates the student count, keeps their slot looking taken,
+// and leaves them sitting in Renewals Due to be chased.
+//
+// Runs on load rather than on a timer, and only for a month that has
+// already ENDED — archiving someone the same month they were refunded
+// would remove them from the list the admin is still working through.
+//
+// Guarded against archiving someone who came back: a student with upcoming
+// lessons, or marked paid for the current month, has clearly re-enrolled.
+function autoArchiveRefundedStudents(){
+  const month=currentMonth();
+  const todayKey=new Date().toISOString().slice(0,10);
+  let archived=0;
+  (db.students||[]).forEach(s=>{
+    if(!s.refundedMonth) return;
+    if((s.status||'active')==='archived') return;
+    if(String(s.refundedMonth)>=String(month)) return;     // still the refund month
+    if(db.payments && db.payments[s.id+'_'+month]) return;  // paid again — they're back
+    const hasUpcoming=(db.lessons||[]).some(l=>
+      lessonBelongsToStudent(l, s) &&
+      l.status==='scheduled' &&
+      (l.status_record||'active')!=='archived' &&
+      l.date && l.date>=todayKey
+    );
+    if(hasUpcoming) return;                                  // re-enrolled
+    s.status='archived';
+    s.archivedAfterRefund=s.refundedMonth;
+    s._localModifiedAt=Date.now();
+    if(typeof syncStudentUpdateToSupabase==='function'){ try{ syncStudentUpdateToSupabase(s); }catch(_){} }
+    archived++;
+  });
+  if(archived){
+    save();
+    console.warn(archived+' refunded student(s) archived — Database → Archived Students to restore.');
+    if(typeof showToast==='function'){
+      showToast(archived+' refunded student(s) archived — restore from Database if they return');
+    }
+  }
+  return archived;
+}
+
 function renderDeletionLog(){
   const el=document.getElementById('deletion-log-results');
   if(!el) return;
@@ -11851,6 +11928,8 @@ function syncHealthClick(){
   else if(typeof autoLoadFromCloud==='function') Promise.resolve(autoLoadFromCloud()).finally(updateSyncHealthBadge);
   updateSyncHealthBadge();
   if(typeof renderStaleDeviceBanner==='function') renderStaleDeviceBanner();
+  // Once per load, after the roster is present.
+  if(typeof autoArchiveRefundedStudents==='function') autoArchiveRefundedStudents();
 }
 
  const keepaliveFetch=async(...args)=>{
