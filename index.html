@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-243</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-244</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -19966,10 +19966,38 @@ function confirmDoubleSessionMakeup(missedLessonId){
     const sepIdx=rest.indexOf(':');
     const date=rest.slice(0,sepIdx);
     const time=rest.slice(sepIdx+1);
-    // Re-checked here too, same reasoning as the existing-lesson branch.
-    if(isTeacherBusyDuringRange(missed.teacher, date, time, 90, null) || isRoomFullDuringRange(date, time, 90, null)){
+    // Re-checked here too — but with the SAME own-lesson exclusion the
+    // window finder uses. Without it the finder offers a slot that
+    // combines with the student's own lesson, and then this check rejects
+    // the booking as "no longer free" because it counts that very lesson
+    // as the clash. The two must agree, or the app offers something it
+    // won't let you take.
+    const ownHere=(db.lessons||[]).filter(l=>
+      student && lessonBelongsToStudent(l, student) && l.date===date &&
+      (l.status_record||'active')!=='archived' && l.status==='scheduled'
+    );
+    const ownIds=ownHere.map(l=>l.id);
+    if(isTeacherBusyDuringRange(missed.teacher, date, time, 90, null, ownIds) || isRoomFullDuringRange(date, time, 90, null)){
       showToast('That window is no longer free — pick a different option.');
       return;
+    }
+
+    // Absorb the student's own lesson that falls inside the 90 minutes —
+    // that's what "combines with their own lesson" means. Leaving it in
+    // place would double-book them against themselves and pay the teacher
+    // for a session that no longer happens separately.
+    const winStart=timeToMinutes(time), winEnd=winStart+90;
+    const absorbed=ownHere.filter(l=>{
+      const ls=timeToMinutes(l.time||'');
+      return ls<winEnd && (ls+getLessonDurationMinutes(l))>winStart;
+    });
+    absorbed.forEach(l=>{
+      if(typeof logRecordDeletion==='function') logRecordDeletion('lesson', l, 'merged into a double session');
+      if(typeof deleteLessonFromSupabase==='function'){ try{ deleteLessonFromSupabase(l.id); }catch(_){} }
+    });
+    if(absorbed.length){
+      const gone=new Set(absorbed.map(l=>String(l.id)));
+      db.lessons=(db.lessons||[]).filter(l=>!gone.has(String(l.id)));
     }
 
     const newLesson={
