@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-247</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-249</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -2238,6 +2238,28 @@ function openRefundModal(studentId){
   `);
 }
 
+// Removes a departing student's UPCOMING lessons from the schedule.
+// Delivered sessions are never touched: the teacher taught them and was
+// paid for them, and archiving those would silently drop past payroll
+// totals and attendance counts — rewriting history because someone left
+// afterwards. Same rule the manual archive uses.
+function archiveUpcomingLessonsFor(s){
+  if(!s) return 0;
+  let n=0;
+  (db.lessons||[]).forEach(l=>{
+    const matches=lessonBelongsToStudent(l, s) || String(l.studentId)===String(s.public_id||'');
+    if(!matches || (l.status_record||'active')==='archived') return;
+    const consumed = l.status==='attended' || l.status==='absent_paid'
+      || l.status==='absent_excused' || l.status==='teacher_absent';
+    if(consumed) return;
+    l.status_record='archived';
+    l.archivedWithStudent=true;
+    if(typeof syncLessonUpdateToSupabase==='function'){ try{ syncLessonUpdateToSupabase(l); }catch(_){} }
+    n++;
+  });
+  return n;
+}
+
 async function confirmRefund(studentId){
   const s=(db.students||[]).find(x=>x.id===studentId);
   if(!s) return;
@@ -2264,6 +2286,11 @@ async function confirmRefund(studentId){
   // end-of-month archive can both see it.
   s.refundedMonth=refund.month;
   s.refundedAt=refund.date;
+  // Their remaining sessions come off the schedule now, not at month end.
+  // A refunded student isn't coming back, so leaving the lessons up
+  // blocks their slot against someone who could use it, shows the teacher
+  // sessions that won't happen, and counts them in payroll.
+  const clearedNow=archiveUpcomingLessonsFor(s);
   s._localModifiedAt=Date.now();
   if(typeof syncStudentUpdateToSupabase==='function'){ try{ syncStudentUpdateToSupabase(s); }catch(_){} }
 
@@ -2295,7 +2322,12 @@ async function confirmRefund(studentId){
   if(typeof renderReports==='function') renderReports();
   if(typeof renderOverview==='function') renderOverview();
   if(typeof renderLessons==='function') renderLessons();
-  showToast(clearedMakeups ? ('Refund recorded — '+clearedMakeups+' make-up'+(clearedMakeups===1?'':'s')+' cleared') : 'Refund recorded');
+  // Say what else changed. Removing lessons from the schedule silently
+  // would leave the teacher's week altered with no explanation.
+  const bits=[];
+  if(clearedMakeups) bits.push(clearedMakeups+' make-up'+(clearedMakeups===1?'':'s')+' cleared');
+  if(clearedNow) bits.push(clearedNow+' upcoming lesson'+(clearedNow===1?'':'s')+' removed');
+  showToast('Refund recorded'+(bits.length?' — '+bits.join(', '):''));
 
   if(window.supabaseClientV1){
     if(typeof syncLessonArchiveToSupabase==='function'){
@@ -8053,6 +8085,8 @@ function autoArchiveRefundedStudents(){
     if(hasUpcoming) return;                                  // re-enrolled
     s.status='archived';
     s.archivedAfterRefund=s.refundedMonth;
+    // Catches anything scheduled after the refund was recorded.
+    archiveUpcomingLessonsFor(s);
     s._localModifiedAt=Date.now();
     if(typeof syncStudentUpdateToSupabase==='function'){ try{ syncStudentUpdateToSupabase(s); }catch(_){} }
     archived++;
@@ -10437,6 +10471,20 @@ addStudent=function(){
  if(typeof cancelAddCourseForm==='function') cancelAddCourseForm();
 
  // Reset the form for the next entry
+ // They're enrolled, so they no longer need a place in the queue. Done
+ // HERE rather than when the form was filled, so abandoning the form
+ // doesn't quietly lose their position.
+ if(window._enrollingFromWaitingId){
+   const wid=window._enrollingFromWaitingId;
+   window._enrollingFromWaitingId=null;
+   const entry=(db.waitingList||[]).find(x=>String(x.id)===String(wid));
+   if(entry){
+     if(typeof logRecordDeletion==='function') logRecordDeletion('waitingEntry', entry, 'enrolled as a student');
+     db.waitingList=(db.waitingList||[]).filter(x=>String(x.id)!==String(wid));
+     if(typeof renderWaitingList==='function') renderWaitingList();
+     if(typeof updateWaitingBadge==='function') updateWaitingBadge();
+   }
+ }
  ['s-first','s-last','s-age','s-phone1','s-phone2','s-parent-email','s-joined-date'].forEach(id=>{
    const el=document.getElementById(id);
    if(el) el.value='';
@@ -11930,6 +11978,7 @@ function syncHealthClick(){
   if(typeof renderStaleDeviceBanner==='function') renderStaleDeviceBanner();
   // Once per load, after the roster is present.
   if(typeof autoArchiveRefundedStudents==='function') autoArchiveRefundedStudents();
+  if(typeof announceWaitingMatchesOnce==='function') announceWaitingMatchesOnce();
 }
 
  const keepaliveFetch=async(...args)=>{
@@ -18100,6 +18149,112 @@ function waitingSyncBannerHtml(){
        + '⚠ <strong>Waiting list is not syncing.</strong> ' + reason + '</div>';
 }
 
+// Pick WHICH open slots to tell someone about, then send one message
+// listing exactly those. Offering every match indiscriminately is rarely
+// right — some slots you'd rather hold, and a family given five options
+// tends to answer none of them.
+function openOfferSlots(entryId){
+  const e=(db.waitingList||[]).find(x=>String(x.id)===String(entryId));
+  if(!e) return;
+  const matches=waitingMatchesFor(e);
+  if(!matches.length){ showToast('No matching slots are free right now.'); return; }
+  const rows=matches.map((m,i)=>`
+    <label style="display:flex;align-items:center;gap:8px;padding:7px 0;cursor:pointer;border-bottom:1px solid var(--border)">
+      <input type="checkbox" class="offer-slot-check" data-idx="${i}" style="width:auto" ${i<3?'checked':''}>
+      <span><b>${escapeHtml(m.day)} ${escapeHtml(formatTime12h(m.time))}</b>
+        <span style="color:var(--text-muted)"> · ${escapeHtml(m.teacher)}</span></span>
+    </label>`).join('');
+  window._offerMatches=matches;
+  openModal('Offer slots — '+escapeHtml(e.name||''), `
+    <div style="margin-bottom:10px;color:var(--text-muted)">Tick the slots to mention. Only these appear in the message.</div>
+    <div style="max-height:260px;overflow-y:auto;margin-bottom:12px">${rows}</div>
+    <div style="text-align:right"><button class="btn btn-gold" onclick="sendSlotOffer('${escapeAttr(String(e.id))}')">Send on WhatsApp</button></div>
+  `);
+}
+
+function sendSlotOffer(entryId){
+  const e=(db.waitingList||[]).find(x=>String(x.id)===String(entryId));
+  if(!e) return;
+  const all=window._offerMatches||[];
+  const chosen=Array.from(document.querySelectorAll('.offer-slot-check'))
+    .filter(c=>c.checked).map(c=>all[Number(c.dataset.idx)]).filter(Boolean);
+  if(!chosen.length){ showToast('Tick at least one slot.'); return; }
+  const lines=chosen.map(m=>'• '+m.day+' at '+formatTime12h(m.time)+' with '+m.teacher).join('\n');
+  const msg='Hi '+(e.name||'')+'! Good news — '+(chosen.length===1?'a':'some')+' '+(e.instrument||'')+
+            ' slot'+(chosen.length===1?' has':'s have')+' opened up at Cymatics:\n\n'+lines+
+            '\n\nWould '+(chosen.length===1?'that':'any of those')+' work for you?';
+  const win=window.open(whatsAppSendUrl(e.phone||'', msg), '_blank');
+  if(!win){ showToast('Your browser blocked the WhatsApp popup — allow popups, then try again.'); return; }
+  // Recorded so the same family isn't chased twice, and so a quiet reply
+  // is visible as time passing rather than being forgotten.
+  e.lastOfferedAt=new Date().toISOString();
+  e.lastOfferedSlots=chosen.map(m=>m.day+' '+formatTime12h(m.time)).join(', ');
+  if(typeof syncWaitingEntryToSupabase==='function'){ try{ syncWaitingEntryToSupabase(e); }catch(_){} }
+  save(); closeModal(); renderWaitingList();
+  showToast('Offered '+chosen.length+' slot'+(chosen.length===1?'':'s')+' to '+(e.name||''));
+}
+
+// Fills Add Student from the entry rather than retyping it. Deliberately
+// does NOT remove them from the list — that happens when the student is
+// actually saved, so an abandoned form doesn't lose their place in the
+// queue.
+function enrolFromWaitingList(entryId){
+  const e=(db.waitingList||[]).find(x=>String(x.id)===String(entryId));
+  if(!e) return;
+  const matches=waitingMatchesFor(e);
+  const first=matches[0];
+  const parts=String(e.name||'').trim().split(/\s+/);
+  const setVal=(id,val)=>{ const el=document.getElementById(id); if(el && val!=null) el.value=val; };
+  // switchPage expects the nav button that was clicked, so it's called
+  // with the real one rather than synthesised — and guarded, because a
+  // failure to change tab must not stop the form being filled in.
+  try{
+    const navBtn=Array.from(document.querySelectorAll('.nav-btn, [onclick*="switchPage"]'))
+      .find(b=>/switchPage\(\s*'students'/.test(b.getAttribute('onclick')||''));
+    if(navBtn) navBtn.click();
+  }catch(_){}
+  setVal('s-first', parts[0]||'');
+  setVal('s-last', parts.slice(1).join(' '));
+  setVal('s-phone1', e.phone||'');
+  setVal('s-instrument', e.instrument||'');
+  if(first){
+    setVal('s-teacher', first.teacher||'');
+    setVal('s-day', first.day||'');
+    if(typeof updateStudentTimeSlotOptions==='function') updateStudentTimeSlotOptions();
+    setVal('s-time', first.time||'');
+  }
+  // Remembered so saving the student can clear them from the queue.
+  window._enrollingFromWaitingId=String(e.id);
+  // Guarded: a scroll failing must never stop the form being usable.
+  try{
+    const el=document.getElementById('s-first');
+    if(el && typeof el.scrollIntoView==='function') el.scrollIntoView({behavior:'smooth', block:'center'});
+  }catch(_){}
+  showToast('Add Student filled in from the waiting list — check the details and save');
+}
+
+// Told ONCE per app open when someone on the list can now be placed.
+// A match only existed if you happened to open the Waiting List tab, so a
+// slot could sit free for weeks while someone waited for it. Announced at
+// open rather than on a timer — a toast interrupting mid-task is how
+// notifications get ignored.
+function announceWaitingMatchesOnce(){
+  if(window.__waitingAnnounced) return;
+  window.__waitingAnnounced=true;
+  const ready=(db.waitingList||[]).filter(e=>
+    (e.status||'waiting')!=='deleted' &&
+    (typeof waitingMatchesFor==='function') && waitingMatchesFor(e).length
+  );
+  if(!ready.length) return;
+  const names=ready.slice(0,3).map(e=>e.name||'?').join(', ')
+            + (ready.length>3 ? ' and '+(ready.length-3)+' more' : '');
+  setTimeout(()=>{
+    if(typeof showToast==='function'){
+      showToast('A suitable slot has freed up for '+names+' on the waiting list — open Waiting List to offer it');
+    }
+  }, 1800); // after the first render settles, so it isn't missed
+}
+
 function renderWaitingList(){
   const host=document.getElementById('waiting-list-body');
   if(!host) return;
@@ -18132,14 +18287,26 @@ function renderWaitingList(){
            <div style="font-size:12px;color:var(--text-muted);margin-top:3px">${matches.slice(0,6).map(m=>escapeHtml(m.day+' '+formatTime12h(m.time)+' · '+m.teacher)).join('<br>')}${matches.length>6?'<br>…and '+(matches.length-6)+' more':''}</div>
          </div>`
       : `<div style="margin-top:6px;font-size:12px;color:var(--text-muted)">No matching slot free yet.</div>`;
-    const waMsg=encodeURIComponent('Hi '+(e.name||'')+'! Good news — a '+(e.instrument||'')+' slot has opened up at Cymatics'+(matches.length?' on '+matches[0].day+' at '+formatTime12h(matches[0].time):'')+'. Would you like it?');
+    // An offer is now a deliberate act: pick which slots to mention, send
+    // one message listing exactly those, and record that it happened.
+    // The old link fired straight to WhatsApp naming only the FIRST match,
+    // so a family heard about one option when three were open, and there
+    // was no trace afterwards — the same person could be messaged twice
+    // with nobody any the wiser.
+    const offeredBadge = e.lastOfferedAt
+      ? `<span class="badge badge-blue" style="font-size:10px" title="${escapeAttr('Offered '+new Date(e.lastOfferedAt).toLocaleString()+(e.lastOfferedSlots?' — '+e.lastOfferedSlots:''))}">✓ Offered ${escapeHtml(timeAgoLabel(e.lastOfferedAt))}</span>`
+      : '';
     const contactBtn = (phone && matches.length)
-      ? `<a class="btn btn-sm btn-gold" href="https://web.whatsapp.com/send?phone=${escapeAttr(toWhatsAppNumber(phone))}&text=${waMsg}" target="_blank" rel="noopener">💬 Offer slot</a>`
+      ? `<button class="btn btn-sm btn-gold" onclick="openOfferSlots('${escapeAttr(String(e.id))}')">💬 ${e.lastOfferedAt?'Offer again':'Offer slot'}</button>`
+      : '';
+    const enrolBtn = matches.length
+      ? `<button class="btn btn-sm" onclick="enrolFromWaitingList('${escapeAttr(String(e.id))}')" title="Fill in Add Student from this entry">➕ Enrol</button>`
       : '';
     return `<div class="unpaid-item" style="align-items:flex-start">
       <div style="min-width:0">
         <div class="unpaid-name">${escapeHtml(e.name||'')}
           ${isStudent?'<span class="badge badge-purple" style="font-size:10px" title="Existing student wanting to change day">🔄 Day change</span>':'<span class="badge badge-blue" style="font-size:10px" title="Not registered yet">✉️ Enquiry</span>'}
+          ${offeredBadge}
         </div>
         <div class="unpaid-meta">${escapeHtml(e.instrument||'')} · ${escapeHtml(dayLabel)}${phone?' · '+escapeHtml(phone):''}${waitingSince?' · waiting '+escapeHtml(waitingSince):''}</div>
         ${e.notes?`<div class="teacher-row-meta" style="margin-top:2px">${escapeHtml(e.notes)}</div>`:''}
@@ -18147,6 +18314,7 @@ function renderWaitingList(){
       </div>
       <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
         ${contactBtn}
+        ${enrolBtn}
         <button class="btn btn-sm" onclick="removeFromWaitingList('${escapeAttr(String(e.id))}')" title="Remove from the waiting list">✕</button>
       </div>
     </div>`;
