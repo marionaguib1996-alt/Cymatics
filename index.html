@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-245</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-246</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -17220,6 +17220,17 @@ window.updateStudentTimeSlotOptions=function(){
   // of that weekday happens to come first. Adding a student who begins in
   // three weeks was being warned about clashes happening this week.
   const startDate=(typeof dmyToIso==='function') ? dmyToIso(document.getElementById('s-joined-date')?.value||'') : '';
+  // With NO teacher chosen there is nobody to be busy, so any clash shown
+  // is somebody else's — the list ends up reporting every teacher's
+  // bookings at once, which is how "Teacher Busy — with Taleen" appeared
+  // for a slot that belongs to a different teacher entirely. Ask for the
+  // teacher first rather than answering a question that hasn't been
+  // asked yet.
+  if(!teacherName){
+    timeSel.innerHTML='<option value="">Choose a teacher first</option>'
+                    + '<option value="__custom__">✏️ Custom time...</option>';
+    return;
+  }
   const slots=getAvailableSlotsWithCapacity(teacherName, dayName, null, isGroupPlan(plan), startDate);
   if(!slots.length){ timeSel.innerHTML='<option value="">No available slots for this day</option><option value="__custom__">✏️ Custom time...</option>'; return; }
   timeSel.innerHTML=slots.map(({time,full,shiftedFrom,actualStart,shortWindow,busyWith})=>{
