@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-244</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-245</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -493,7 +493,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="form-field"><label for="s-phone2">Parent Phone</label><input id="s-phone2"></div>
       <div class="form-field"><label for="s-parent-email">Email</label><input id="s-parent-email" type="email"></div>
       <div class="form-field"><label for="s-age">Age</label><input id="s-age" type="number" min="1" max="120" step="1" placeholder="e.g. 10"></div>
-      <div class="form-field"><label for="s-joined-date">Starting Date</label><div style="display:flex;gap:4px"><input id="s-joined-date" type="text" placeholder="dd/mm/yyyy" maxlength="10" oninput="maskDateInput(this)"><button type="button" class="btn btn-sm" onclick="openDatePicker('s-joined-date')">📅</button></div></div>
+      <div class="form-field"><label for="s-joined-date">Starting Date</label><div style="display:flex;gap:4px"><input id="s-joined-date" type="text" placeholder="dd/mm/yyyy" maxlength="10" oninput="maskDateInput(this)" onchange="if(typeof updateStudentTimeSlotOptions==='function') updateStudentTimeSlotOptions()"><button type="button" class="btn btn-sm" onclick="openDatePicker('s-joined-date')">📅</button></div></div>
       <div class="form-field"><label for="s-day">Lesson Day</label><select id="s-day">
       <option>Sunday</option><option>Monday</option><option>Tuesday</option><option>Wednesday</option><option>Thursday</option><option>Friday</option><option>Saturday</option>
       </select></div>
@@ -15911,8 +15911,18 @@ function scheduleMonthlyLessons(student, startPreference){
   // occurrence AFTER today (used when the admin says the student starts
   // next week even though today is their lesson day). Otherwise today is
   // eligible when it falls on the lesson day.
+  // 'next' counts from TODAY, not from startBase. The dialog offering this
+  // choice computes its label as "next <day> after today" — so measuring
+  // from startBase instead advanced a second time whenever the Starting
+  // Date was already a future lesson day: the dialog said the 19th and the
+  // student landed on the 26th.
+  //
+  // Measuring from today is also what the option means. "Next Saturday"
+  // is only ever offered when today IS their lesson day and the admin
+  // wants to skip this week; a Starting Date already set in the future
+  // needs no skipping, and is honoured by nextWeekdayOnOrAfter below.
   const firstDate = startPreference==='next'
-    ? nextWeekdayStrictlyAfter(startBase, student.lesson_day)
+    ? nextWeekdayStrictlyAfter(todayKey, student.lesson_day)
     : nextWeekdayOnOrAfter(startBase, student.lesson_day);
   // For the auto monthly plans, the number of sessions is however many
   // lesson-days remain this month starting from the first scheduled date.
@@ -17027,9 +17037,9 @@ renderAddProfileTimeSlots();
 //
 // currentTime is always included even if it's now unavailable, so opening
 // a student's record never silently loses the time they're already on.
-function slotOptionsHtml(teacherName, dayName, excludeStudentId, isGroup, currentTime){
+function slotOptionsHtml(teacherName, dayName, excludeStudentId, isGroup, currentTime, forDate){
   const slots=(typeof getAvailableSlotsWithCapacity==='function')
-    ? getAvailableSlotsWithCapacity(teacherName, dayName, excludeStudentId, !!isGroup)
+    ? getAvailableSlotsWithCapacity(teacherName, dayName, excludeStudentId, !!isGroup, forDate)
     : [];
   let html=slots.map(function(sl){
     const bookValue=sl.full ? '' : (sl.actualStart||sl.time);
@@ -17128,9 +17138,19 @@ function isRoomFull(dayName, time, excludeStudentId){
 }
 
 // Extend slot dropdowns to mark room-full slots
-function getAvailableSlotsWithCapacity(teacherName, dayName, excludeStudentId, forDoubleSession){
+// forDate: the date availability should be judged ON. Without it this
+// always checked the NEXT occurrence of the weekday, so adding a student
+// who starts in three weeks was told about clashes happening this week —
+// "Teacher Busy — with Taleen" for a Taleen lesson that doesn't exist on
+// the chosen start date. The answer was about the wrong Saturday.
+function getAvailableSlotsWithCapacity(teacherName, dayName, excludeStudentId, forDoubleSession, forDate){
   const effectiveSlots=getEffectiveTeacherDaySlots(teacherName, dayName, excludeStudentId);
-  const targetDate=nextOccurrenceOfWeekday(dayName);
+  // Use the requested date when it genuinely falls on this weekday;
+  // otherwise fall back to the next occurrence, so a mismatched pair
+  // (day changed but date not yet updated) can't check a random day.
+  const targetDate=(forDate && typeof dateMatchesWeekday==='function' && dateMatchesWeekday(forDate, dayName))
+    ? forDate
+    : nextOccurrenceOfWeekday(dayName);
   // The `forDoubleSession` flag is passed by the student booking dropdowns
   // as isGroupPlan(plan) — i.e. it really means "this is an extended
   // (group) booking that prefers a full hour". A group session prefers 60
@@ -17196,7 +17216,11 @@ window.updateStudentTimeSlotOptions=function(){
   const plan=document.getElementById('s-plan')?.value||'';
   const timeSel=document.getElementById('s-time');
   if(!timeSel) return;
-  const slots=getAvailableSlotsWithCapacity(teacherName, dayName, null, isGroupPlan(plan));
+  // Judge availability on the STARTING DATE, not on whichever occurrence
+  // of that weekday happens to come first. Adding a student who begins in
+  // three weeks was being warned about clashes happening this week.
+  const startDate=(typeof dmyToIso==='function') ? dmyToIso(document.getElementById('s-joined-date')?.value||'') : '';
+  const slots=getAvailableSlotsWithCapacity(teacherName, dayName, null, isGroupPlan(plan), startDate);
   if(!slots.length){ timeSel.innerHTML='<option value="">No available slots for this day</option><option value="__custom__">✏️ Custom time...</option>'; return; }
   timeSel.innerHTML=slots.map(({time,full,shiftedFrom,actualStart,shortWindow,busyWith})=>{
     const bookValue=full ? '' : (actualStart||time);
