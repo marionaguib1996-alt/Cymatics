@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-246</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-247</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -17144,13 +17144,19 @@ function isRoomFull(dayName, time, excludeStudentId){
 // "Teacher Busy — with Taleen" for a Taleen lesson that doesn't exist on
 // the chosen start date. The answer was about the wrong Saturday.
 function getAvailableSlotsWithCapacity(teacherName, dayName, excludeStudentId, forDoubleSession, forDate){
-  const effectiveSlots=getEffectiveTeacherDaySlots(teacherName, dayName, excludeStudentId);
   // Use the requested date when it genuinely falls on this weekday;
   // otherwise fall back to the next occurrence, so a mismatched pair
   // (day changed but date not yet updated) can't check a random day.
   const targetDate=(forDate && typeof dateMatchesWeekday==='function' && dateMatchesWeekday(forDate, dayName))
     ? forDate
     : nextOccurrenceOfWeekday(dayName);
+  // targetDate MUST be passed through. Without it this builds the slot
+  // picture for whichever occurrence of the weekday comes next, while the
+  // room checks below use targetDate — so a future Starting Date got
+  // correct room info and stale "Teacher Busy" info in the same dropdown.
+  // That's why changing the date moved "Rooms Full" but never moved the
+  // teacher clashes.
+  const effectiveSlots=getEffectiveTeacherDaySlots(teacherName, dayName, excludeStudentId, targetDate);
   // The `forDoubleSession` flag is passed by the student booking dropdowns
   // as isGroupPlan(plan) — i.e. it really means "this is an extended
   // (group) booking that prefers a full hour". A group session prefers 60
