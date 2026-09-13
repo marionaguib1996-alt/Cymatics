@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-257</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-260</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1807,6 +1807,62 @@ function computeRenewalPrice(student, sessionCount, opts){
   }
 
   return {amount:subtotal, rate, billableCount, creditedSessions, source:'standard'};
+}
+
+// Extra sessions added outside the plan, with their own hand-typed price.
+// Deliberately NOT folded into getStudentPlanAmount: that figure is used
+// for renewals, reminders and revenue snapshots, and silently inflating it
+// would make a one-off session look like a permanent fee rise. Reported
+// separately so a total always says what it's made of.
+const DEFAULT_EXTRA_LESSON_FEE = 500;
+
+// Asked once, when the lesson is added. Charging is a decision someone
+// makes at that moment — recording it later means remembering which of
+// several added sessions was the paid one, which is exactly the sort of
+// thing that gets lost.
+//
+// Returns {charge, paid} or null if cancelled. A charge of 0 means the
+// session is part of their plan and costs nothing extra.
+function askExtraLessonCharge(studentName, onDone){
+  openModal('Charge for this session — '+escapeHtml(studentName||''), `
+    <div style="margin-bottom:12px;color:var(--text-muted)">Is this session charged on top of their plan, or part of what they already pay?</div>
+    <div class="form-field"><label for="xl-fee">Extra charge (EGP)</label>
+      <input id="xl-fee" type="number" min="0" value="${DEFAULT_EXTRA_LESSON_FEE}">
+      <small style="color:var(--text-muted)">Set 0 if it's covered by their plan and costs nothing extra.</small>
+    </div>
+    <div class="form-field"><label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+      <input id="xl-paid" type="checkbox" style="width:auto">
+      <span>Already paid for it</span>
+    </label>
+    <small style="color:var(--text-muted)">Leave unticked and it shows as unpaid until you mark it.</small></div>
+    <div style="text-align:right;margin-top:14px">
+      <button class="btn btn-gold" onclick="window.__xlDone(true)">Add lesson</button>
+    </div>
+  `);
+  window.__xlDone=(ok)=>{
+    if(!ok){ closeModal(); onDone(null); return; }
+    const charge=Math.max(0, Number(document.getElementById('xl-fee')?.value||0));
+    const paid=!!document.getElementById('xl-paid')?.checked;
+    closeModal();
+    onDone({charge, paid});
+  };
+}
+
+function studentExtraCharges(student, monthKey){
+  if(!student) return {unpaid:0, paid:0, total:0, count:0};
+  const m=monthKey||currentMonth();
+  let unpaidSum=0, paidSum=0, count=0;
+  (db.lessons||[]).forEach(l=>{
+    const fee=Number(l.extraCharge);
+    if(!(fee>0)) return;
+    if((l.status_record||'active')==='archived') return;
+    if(!lessonBelongsToStudent(l, student)) return;
+    const lm=String(l.month || l.date || '').slice(0,7);
+    if(lm!==String(m)) return;
+    count++;
+    if(l.unpaid) unpaidSum+=fee; else paidSum+=fee;
+  });
+  return {unpaid:unpaidSum, paid:paidSum, total:unpaidSum+paidSum, count};
 }
 
 function getStudentPlanAmount(student){
@@ -3876,6 +3932,13 @@ function renderStudents(){
     // one course is cancelled).
     const ownAmount=getStudentPlanAmount(s);
     let amt=egp(ownAmount);
+    // Shown as an added line rather than merged into the figure above, so
+    // the number always explains itself: "2,000 + 500 extra", never a
+    // silently different 2,500.
+    const extras=(typeof studentExtraCharges==='function') ? studentExtraCharges(s, month) : null;
+    if(extras && extras.total>0){
+      amt+=`<div style="font-size:11px;color:var(--gold);font-weight:400;margin-top:2px" title="${escapeAttr(extras.count+' extra session'+(extras.count===1?'':'s')+' this month'+(extras.unpaid>0?' — '+extras.unpaid+' EGP still unpaid':' — all paid'))}">+ ${egp(extras.total)} extra${extras.unpaid>0?' <span style="color:#e06c6c">('+egp(extras.unpaid)+' unpaid)</span>':''}</div>`;
+    }
     if(linkedCourses.length){
       const combined=[s,...linkedCourses].reduce((sum,c)=>sum+getStudentPlanAmount(c),0);
       amt=egp(ownAmount)+`<div style="font-size:11px;color:var(--text-muted);font-weight:400;margin-top:2px" title="Combined across all ${linkedCourses.length+1} of this person's courses — what they pay in one transfer">of ${egp(combined)} total</div>`;
@@ -5926,6 +5989,15 @@ function addLesson(studentId){
 // The actual lesson-creation body, shared by the collision-free path above
 // and the "add a new one anyway" choice in resolveLessonLogCollision.
 function createLoggedLesson(s, date, status){
+ // Same prompt the calendar route uses, so a lesson added here and one
+ // added there are charged the same way and neither quietly defaults.
+ askExtraLessonCharge(s.name||'', function(res){
+   if(!res) return;
+   finishAddLesson(s, date, status, res);
+ });
+}
+
+function finishAddLesson(s, date, status, res){
  db.lessons.push({
    id:Date.now(),
    studentId:s.id,
@@ -5935,7 +6007,9 @@ function createLoggedLesson(s, date, status){
    date:date,
    time:s.lessonTime||'',
    status:status,
-   month:String(date||'').slice(0,7) || currentMonth()
+   month:String(date||'').slice(0,7) || currentMonth(),
+   extraCharge: res.charge>0 ? res.charge : undefined,
+   unpaid: res.charge>0 ? !res.paid : undefined
  });
  const lesson=db.lessons[db.lessons.length-1];
   const newLog=createLessonLog(s,lesson);
@@ -10107,6 +10181,8 @@ async function pushAllDataToCloud(){
       // intent and the 'left at an old time slot' repair offers to undo a
       // change that was made on purpose.
       time_overridden: !!lesson.timeOverridden,
+      // The hand-typed price for a session charged on top of the plan.
+      extra_charge: (lesson.extraCharge!=null && Number(lesson.extraCharge)>0) ? Number(lesson.extraCharge) : null,
       notes:l.notes||''
     };
     const r=await upsertToCloud('lessons', 'id', l.id, payload);
@@ -11528,7 +11604,8 @@ async function _autoLoadFromCloudImpl(){
        makeupExpiredUnused: !!l.makeup_expired_unused,
        isExtendedDuration: !!l.is_extended_duration,
        timeOverridden: !!l.time_overridden,
-       notes: l.notes||''
+       extraCharge: (l.extra_charge!=null && Number(l.extra_charge)>0) ? Number(l.extra_charge) : undefined,
+        notes: l.notes||''
      }));
    }
 
@@ -12899,6 +12976,11 @@ async function syncLessonToSupabase(lesson){
      // intent and the 'left at an old time slot' repair offers to undo a
      // change that was made on purpose.
      time_overridden: !!lesson.timeOverridden,
+     // The hand-typed price for a session charged on top of the plan.
+     extra_charge: (lesson.extraCharge!=null && Number(lesson.extraCharge)>0) ? Number(lesson.extraCharge) : null,
+     // An additional session outside the student's plan allowance.
+     // Without this a reload forgets it was extra, and it starts
+     // consuming one of their paid sessions.
      notes: lesson.notes||''
    };
 
@@ -13011,7 +13093,8 @@ async function syncLessonToSupabase(lesson){
         makeupExpiredUnused: !!l.makeup_expired_unused,
         isExtendedDuration: !!l.is_extended_duration,
         timeOverridden: !!l.time_overridden,
-        notes: l.notes||''
+        extraCharge: (l.extra_charge!=null && Number(l.extra_charge)>0) ? Number(l.extra_charge) : undefined,
+          notes: l.notes||''
       }));
 
       save();
@@ -13095,6 +13178,11 @@ async function syncLessonUpdateToSupabase(lesson){
         // intent and the 'left at an old time slot' repair offers to undo a
         // change that was made on purpose.
         time_overridden: !!lesson.timeOverridden,
+        // The hand-typed price for a session charged on top of the plan.
+        extra_charge: (lesson.extraCharge!=null && Number(lesson.extraCharge)>0) ? Number(lesson.extraCharge) : null,
+        // An additional session outside the student's plan allowance.
+        // Without this a reload forgets it was extra, and it starts
+        // consuming one of their paid sessions.
         notes: lesson.notes||''
       })
       .eq('id', lesson.id);
@@ -18851,8 +18939,11 @@ function pickBookStudent(studentId){
     <button class="btn" style="width:100%;margin-bottom:6px" onclick="bookSlotThisWeekOnly('${escapeAttr(String(s.id))}')">
       Move <b>this week only</b><div style="font-size:11px;opacity:0.75;font-weight:400">A one-off swap — their regular slot stays as it is</div>
     </button>
-    <button class="btn btn-gold" style="width:100%" onclick="bookSlotChangeRegular('${escapeAttr(String(s.id))}')">
+    <button class="btn btn-gold" style="width:100%;margin-bottom:6px" onclick="bookSlotChangeRegular('${escapeAttr(String(s.id))}')">
       Change their <b>regular time</b><div style="font-size:11px;opacity:0.85;font-weight:400">Moves every future lesson to this day and time</div>
+    </button>
+    <button class="btn" style="width:100%" onclick="bookSlotExtraLesson('${escapeAttr(String(s.id))}')">
+      Add a <b>lesson here</b><div style="font-size:11px;opacity:0.75;font-weight:400">A new session, on top of their existing ones</div>
     </button>`;
 }
 
@@ -18888,6 +18979,72 @@ function bookSlotThisWeekOnly(studentId){
   if(typeof renderCalendarPage==='function') renderCalendarPage();
   if(typeof renderLessons==='function') renderLessons();
   showToast(s.name+' moved to '+formatTime12h(slot.time)+' for that week');
+}
+
+// A genuinely ADDITIONAL session, not a move. Deliberately a separate
+// button from "move this week only": the two look identical on the
+// calendar afterwards but mean opposite things for money — a move costs
+// nothing extra, an addition is a session someone has to pay for.
+//
+// Creates a lesson identical to one added from the Attendance Ledger —
+// same fields, same lesson log, same behaviour everywhere afterwards.
+// It was briefly a special "extra" kind with its own flag; that meant two
+// routes producing subtly different records, which is how "why is this
+// one behaving differently?" starts.
+function bookSlotExtraLesson(studentId){
+  const s=(db.students||[]).find(x=>String(x.id)===String(studentId));
+  const slot=window._bookSlot;
+  if(!s||!slot) return;
+  // Double-booking themselves is almost always a mistake worth catching.
+  const clash=(db.lessons||[]).find(l=>
+    lessonBelongsToStudent(l, s) && l.date===slot.date &&
+    (l.status_record||'active')!=='archived' && l.status!=='cancelled'
+  );
+  if(clash && !confirm(s.name+' already has a lesson on '+formatLedgerDate(slot.date)+
+      ' at '+formatTime12h(clash.time)+'.\n\nAdd a second one anyway?')) return;
+  askExtraLessonCharge(s.name||'', (res)=>{
+    if(!res) return;
+    finishBookSlotLesson(s, slot, res);
+  });
+}
+
+function finishBookSlotLesson(s, slot, res){
+  // Built to match addLesson() — the Quick Attendance Logger's own add —
+  // field for field, so a lesson created here is indistinguishable from
+  // one created there. Two routes producing subtly different records is
+  // how "why is this one behaving differently?" starts.
+  //
+  // That means `month` (payroll and revenue group by it, and a lesson
+  // without one falls out of both) and a lesson log, so the teacher has
+  // somewhere to write homework exactly as they would normally.
+  db.lessons=db.lessons||[];
+  db.lessons.push({
+    id:Date.now(),
+    studentId:s.id,
+    student:s.name,
+    instrument:s.instrument||'',
+    teacher:slot.teacherName,
+    date:slot.date,
+    time:slot.time,
+    status:'scheduled',
+    month:String(slot.date||'').slice(0,7) || currentMonth(),
+    // Hand-typed at the moment of booking. 0 means it's covered by their
+    // plan; anything above that is owed on top and shows as its own line
+    // in the Students tab rather than inflating their plan figure.
+    extraCharge: res.charge>0 ? res.charge : undefined,
+    unpaid: res.charge>0 ? !res.paid : undefined
+  });
+  const lesson=db.lessons[db.lessons.length-1];
+  if(typeof createLessonLog==='function'){ try{ createLessonLog(s, lesson); }catch(_){} }
+  if(typeof syncLessonToSupabase==='function'){ try{ syncLessonToSupabase(lesson); }catch(_){} }
+  save(); closeModal();
+  if(typeof renderCalendarPage==='function') renderCalendarPage();
+  if(typeof renderLessons==='function') renderLessons();
+  if(typeof renderTeachers==='function') renderTeachers();
+  if(typeof renderOverview==='function') renderOverview();
+  if(typeof renderStudents==='function') renderStudents();
+  showToast('Lesson added for '+(s.name||'')+' — '+formatLedgerDate(slot.date)+' at '+formatTime12h(slot.time)
+    +(res.charge>0 ? (res.paid ? ' · '+egp(res.charge)+' paid' : ' · '+egp(res.charge)+' UNPAID') : ''));
 }
 
 function bookSlotChangeRegular(studentId){
