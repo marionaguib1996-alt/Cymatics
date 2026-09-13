@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-261</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-262</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -4322,6 +4322,31 @@ function convertTrial(id){
      <div class="form-field"><label for="rn-plan">Convert To</label><select id="rn-plan" onchange="onRenewPlanChange(${id})">
        ${planOptionsHtml('monthly')}
      </select></div>
+   </div>
+   <div class="form-field wide" style="margin-top:10px">
+     <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:normal">
+       <input id="rn-custom-dates-toggle" type="checkbox" style="width:auto" onchange="onRenewCustomDatesToggle(${id})">
+       Use Custom Dates instead
+     </label>
+     <div class="teacher-row-meta" style="margin-top:2px">Pick specific dates by hand — any day of the week — instead of auto-scheduling from the regular lesson day. The same date twice means two sessions that day.</div>
+   </div>
+   <div id="rn-custom-dates-section" style="display:none">
+     <div class="form-field wide">
+       <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:normal">
+         <input id="rn-custom-is-group" type="checkbox" style="width:auto" ${isGroupPlan(student.plan)?'checked':''} onchange="updateRenewCustomPreview()">
+         Group session rate (750 EGP/session instead of 500)
+       </label>
+     </div>
+     <div class="form-field wide">
+       <label for="rn-custom-date">Add date(s)</label>
+       <div style="display:flex;gap:4px">
+         <input id="rn-custom-date" type="text" placeholder="dd/mm/yyyy" maxlength="10" oninput="maskDateInput(this)">
+         <button type="button" class="btn btn-sm" onclick="openDatePicker('rn-custom-date')">📅</button>
+         <button type="button" class="btn btn-sm btn-gold" onclick="addRenewCustomDate(${id})">+ Add</button>
+       </div>
+       <div id="rn-custom-date-chips" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px"></div>
+     </div>
+     <div id="rn-custom-preview" style="margin-top:6px;font-size:13px;color:var(--gold);font-weight:600"></div>
    </div>
    <div class="form-field wide" style="margin-top:10px">
      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:normal">
@@ -16344,6 +16369,10 @@ function onRenewCustomDatesToggle(id){
   const useCustom=!!document.getElementById('rn-custom-dates-toggle')?.checked;
   const planSection=document.getElementById('rn-plan-section');
   const customSection=document.getElementById('rn-custom-dates-section');
+  // Convert Trial reuses this toggle but has no rn-plan-section grid, so
+  // the guard matters — without it the custom section opened while the
+  // plan controls stayed visible, which is why it looked like nothing
+  // happened.
   if(planSection) planSection.style.display = useCustom ? 'none' : 'grid';
   if(customSection) customSection.style.display = useCustom ? 'block' : 'none';
 }
@@ -16942,12 +16971,18 @@ function confirmRenewalCustomDates(id, student){
     // A picked date can legitimately coincide with a lesson that already
     // exists (it wasn't superseded above precisely because it's one of
     // the picked dates) — don't create a second record on top of it.
-    const already=(db.lessons||[]).some(l=>
+    //
+    // But COUNT how many times this date was picked: entering it twice
+    // deliberately means two sessions that day. Skipping on "a lesson
+    // exists" alone silently discarded the second, so the duplicate the
+    // picker was just taught to keep never reached the schedule.
+    const wantedOnThisDate=dates.filter(d=>d===date).length;
+    const alreadyOnThisDate=(db.lessons||[]).filter(l=>
       String(l.studentId)===String(id) &&
       (l.status_record||'active')!=='archived' &&
       l.date===date
-    );
-    if(already) return;
+    ).length;
+    if(alreadyOnThisDate>=wantedOnThisDate) return;
     const lesson={
       id:Date.now()+i,
       studentId:student.id,
