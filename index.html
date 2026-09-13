@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-260</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-261</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -16355,15 +16355,26 @@ function addRenewCustomDate(id){
   const todayKey=new Date().toISOString().slice(0,10);
   if(iso<todayKey){ showToast('That date is in the past.'); return; }
   window._renewCustomDates=window._renewCustomDates||[];
-  if(!window._renewCustomDates.includes(iso)) window._renewCustomDates.push(iso);
+  // Duplicates are ALLOWED: adding the same date twice means two sessions
+  // that day, which is a real thing (a double-length catch-up, or two
+  // siblings' slots swapped onto one visit). Silently ignoring the second
+  // entry looked like the button had failed.
+  window._renewCustomDates.push(iso);
+  window._renewCustomDates.sort();
   window._renewCustomDates.sort();
   document.getElementById('rn-custom-date').value='';
   renderRenewCustomDateChips();
   updateRenewCustomPreview();
 }
 
-function removeRenewCustomDate(iso){
-  window._renewCustomDates=(window._renewCustomDates||[]).filter(d=>d!==iso);
+// Removes ONE entry by position, not every chip sharing that date. Now
+// that a repeated date means two sessions, filtering by value would delete
+// both — so clicking ✕ on the second chip would silently cancel the first
+// session too.
+function removeRenewCustomDate(index){
+  const arr=window._renewCustomDates||[];
+  const i=Number(index);
+  if(i>=0 && i<arr.length) arr.splice(i,1);
   renderRenewCustomDateChips();
   updateRenewCustomPreview();
 }
@@ -16372,9 +16383,9 @@ function renderRenewCustomDateChips(){
   const host=document.getElementById('rn-custom-date-chips');
   if(!host) return;
   const dates=window._renewCustomDates||[];
-  host.innerHTML=dates.map(iso=>{
+  host.innerHTML=dates.map((iso,i)=>{
     const dayName=WEEKDAY_NAMES[parseDateUTC(iso).getUTCDay()];
-    return `<span class="badge badge-blue" style="display:flex;align-items:center;gap:4px">${escapeHtml(dayName.slice(0,3))} ${escapeHtml(formatDateDMY(iso))} <span style="cursor:pointer" onclick="removeRenewCustomDate('${escapeAttr(iso)}')">✕</span></span>`;
+    return `<span class="badge badge-blue" style="display:flex;align-items:center;gap:4px">${escapeHtml(dayName.slice(0,3))} ${escapeHtml(formatDateDMY(iso))} <span style="cursor:pointer" onclick="removeRenewCustomDate(${i})">✕</span></span>`;
   }).join('');
 }
 
@@ -17115,14 +17126,20 @@ function addNewStudentCustomDate(){
   const todayKey=new Date().toISOString().slice(0,10);
   if(iso<todayKey){ showToast('That date is in the past.'); return; }
   window._newStudentCustomDates=window._newStudentCustomDates||[];
-  if(!window._newStudentCustomDates.includes(iso)) window._newStudentCustomDates.push(iso);
+  // Same rule as the renewal picker — a repeated date means two sessions
+  // that day, not a mistake to swallow.
+  window._newStudentCustomDates.push(iso);
+  window._newStudentCustomDates.sort();
   window._newStudentCustomDates.sort();
   document.getElementById('s-custom-date').value='';
   renderNewStudentCustomDateChips();
 }
 
-function removeNewStudentCustomDate(iso){
-  window._newStudentCustomDates=(window._newStudentCustomDates||[]).filter(d=>d!==iso);
+// By position, not by value — see removeRenewCustomDate.
+function removeNewStudentCustomDate(index){
+  const arr=window._newStudentCustomDates||[];
+  const i=Number(index);
+  if(i>=0 && i<arr.length) arr.splice(i,1);
   renderNewStudentCustomDateChips();
 }
 
@@ -17130,9 +17147,9 @@ function renderNewStudentCustomDateChips(){
   const host=document.getElementById('s-custom-date-chips');
   if(!host) return;
   const dates=window._newStudentCustomDates||[];
-  host.innerHTML=dates.map(iso=>{
+  host.innerHTML=dates.map((iso,i)=>{
     const dayName=WEEKDAY_NAMES[parseDateUTC(iso).getUTCDay()];
-    return `<span class="badge badge-blue" style="display:flex;align-items:center;gap:4px">${escapeHtml(dayName.slice(0,3))} ${escapeHtml(formatDateDMY(iso))} <span style="cursor:pointer" onclick="removeNewStudentCustomDate('${escapeAttr(iso)}')">✕</span></span>`;
+    return `<span class="badge badge-blue" style="display:flex;align-items:center;gap:4px">${escapeHtml(dayName.slice(0,3))} ${escapeHtml(formatDateDMY(iso))} <span style="cursor:pointer" onclick="removeNewStudentCustomDate(${i})">✕</span></span>`;
   }).join('');
 }
 
