@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-249</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-250</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -9988,6 +9988,10 @@ async function pushAllDataToCloud(){
       plan_notes:l.planNotes||'',
       makeup_expired_unused:l.makeupExpiredUnused||false,
       is_extended_duration:l.isExtendedDuration||false,
+      // A deliberate one-off time change. Without it a reload forgets the
+      // intent and the 'left at an old time slot' repair offers to undo a
+      // change that was made on purpose.
+      time_overridden: !!lesson.timeOverridden,
       notes:l.notes||''
     };
     const r=await upsertToCloud('lessons', 'id', l.id, payload);
@@ -11048,6 +11052,10 @@ async function _autoLoadFromCloudImpl(){
        // freeze state synced but the count didn't, so a reload left a
        // frozen student with nothing to restore and Resume gave back zero.
        frozenLessonsRemaining: Number(s.frozen_lessons_remaining)||0,
+       refundedMonth: s.refunded_month||'',
+       refundedAt: s.refunded_at||'',
+       archivedAfterRefund: s.archived_after_refund||'',
+       archivedByStaleSync: s.archived_by_stale_sync||'',
        frozenMakeupRefs: Array.isArray(s.frozen_makeup_refs) ? s.frozen_makeup_refs : [],
        frozenSince: s.frozen_since||'',
        frozenReason: s.frozen_reason||'',
@@ -11404,6 +11412,7 @@ async function _autoLoadFromCloudImpl(){
        planNotes: l.plan_notes||'',
        makeupExpiredUnused: !!l.makeup_expired_unused,
        isExtendedDuration: !!l.is_extended_duration,
+       timeOverridden: !!l.time_overridden,
        notes: l.notes||''
      }));
    }
@@ -11521,6 +11530,8 @@ async function _autoLoadFromCloudImpl(){
          dayGroup: r.day_group||null,
          fromTime: r.from_time||'',
          toTime: r.to_time||'',
+         lastOfferedAt: r.last_offered_at||'',
+         lastOfferedSlots: r.last_offered_slots||'',
          notes: r.notes||'',
          addedAt: r.added_at||'',
          status: r.status||'waiting'
@@ -12181,6 +12192,13 @@ async function _addStudentToSupabaseImpl(student){
       // had no count, and Resume then restored zero lessons. The freeze
       // looked like it worked and the resume silently gave nothing back.
       frozen_lessons_remaining: Number(student.frozenLessonsRemaining)||0,
+      // Refund state. Without it a reload loses the Refunded badge and the
+      // month-end archive never fires, so a student who left keeps showing
+      // as an ordinary unpaid student on every other device.
+      refunded_month: student.refundedMonth||null,
+      refunded_at: student.refundedAt||null,
+      archived_after_refund: student.archivedAfterRefund||null,
+      archived_by_stale_sync: student.archivedByStaleSync||null,
       frozen_makeup_refs: Array.isArray(student.frozenMakeupRefs) ? student.frozenMakeupRefs : [],
       frozen_since: student.frozenSince || null,
       frozen_reason: student.frozenReason || '',
@@ -12410,6 +12428,13 @@ async function syncStudentUpdateToSupabase(student){
       // had no count, and Resume then restored zero lessons. The freeze
       // looked like it worked and the resume silently gave nothing back.
       frozen_lessons_remaining: Number(student.frozenLessonsRemaining)||0,
+      // Refund state. Without it a reload loses the Refunded badge and the
+      // month-end archive never fires, so a student who left keeps showing
+      // as an ordinary unpaid student on every other device.
+      refunded_month: student.refundedMonth||null,
+      refunded_at: student.refundedAt||null,
+      archived_after_refund: student.archivedAfterRefund||null,
+      archived_by_stale_sync: student.archivedByStaleSync||null,
       frozen_makeup_refs: Array.isArray(student.frozenMakeupRefs) ? student.frozenMakeupRefs : [],
       frozen_since: student.frozenSince || null,
       frozen_reason: student.frozenReason || '',
@@ -12754,6 +12779,10 @@ async function syncLessonToSupabase(lesson){
      plan_notes: lesson.planNotes||'',
      makeup_expired_unused: lesson.makeupExpiredUnused||false,
      is_extended_duration: lesson.isExtendedDuration||false,
+     // A deliberate one-off time change. Without it a reload forgets the
+     // intent and the 'left at an old time slot' repair offers to undo a
+     // change that was made on purpose.
+     time_overridden: !!lesson.timeOverridden,
      notes: lesson.notes||''
    };
 
@@ -12865,6 +12894,7 @@ async function syncLessonToSupabase(lesson){
         planNotes: l.plan_notes||'',
         makeupExpiredUnused: !!l.makeup_expired_unused,
         isExtendedDuration: !!l.is_extended_duration,
+        timeOverridden: !!l.time_overridden,
         notes: l.notes||''
       }));
 
@@ -12945,6 +12975,10 @@ async function syncLessonUpdateToSupabase(lesson){
         plan_notes: lesson.planNotes||'',
         makeup_expired_unused: lesson.makeupExpiredUnused||false,
         is_extended_duration: lesson.isExtendedDuration||false,
+        // A deliberate one-off time change. Without it a reload forgets the
+        // intent and the 'left at an old time slot' repair offers to undo a
+        // change that was made on purpose.
+        time_overridden: !!lesson.timeOverridden,
         notes: lesson.notes||''
       })
       .eq('id', lesson.id);
@@ -20644,6 +20678,10 @@ async function syncWaitingEntryToSupabase(entry){
       // other device would go on offering slots outside it.
       from_time: entry.fromTime||null,
       to_time: entry.toTime||null,
+      // The offer record. Kept in the cloud so the same family isn't
+      // chased twice from two different devices.
+      last_offered_at: entry.lastOfferedAt||null,
+      last_offered_slots: entry.lastOfferedSlots||null,
       notes: entry.notes||'',
       added_at: entry.addedAt||new Date().toISOString(),
       status: entry.status||'waiting'
