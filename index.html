@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-264</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-265</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -21298,9 +21298,15 @@ async function checkVersionFreshness(){
     const storedNum=row?parseInt(row.value,10):0;
     if(storedNum && runningNum<storedNum){
       showVersionMismatchBanner(runningStr, row.value_string||('build '+storedNum));
-    } else if(runningNum>storedNum){
+    } else if(runningNum>storedNum && session.role==='admin'){
       // This client is the newest seen — advance the marker so any stale
       // client still running an older cached copy gets nudged.
+      //
+      // ADMIN ONLY. app_meta is admin-writable, so a teacher's browser was
+      // retrying a forbidden write on every load. Reading it is what
+      // matters for them: they still get the out-of-date banner, they just
+      // don't move the marker. And an admin opens the app often enough
+      // that the marker keeps up regardless.
       try{
         await window.supabaseClientV1.from('app_meta').upsert(
           {key:'latest_build', value:String(runningNum), value_string:runningStr, updated_at:new Date().toISOString()},
