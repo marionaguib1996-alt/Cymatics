@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-263</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-264</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -11783,8 +11783,18 @@ async function _autoLoadFromCloudImpl(){
          const k=String(e.id);
          if(seen.has(k)) return;            // already represented by an active cloud row
          if(tombstonedKeys.has(k)) return;  // deleted elsewhere — drop it, never re-upload
-         merged.push(e);                    // genuinely new local entry — keep + upload
-         if(typeof syncWaitingEntryToSupabase==='function'){ try{ syncWaitingEntryToSupabase(e); }catch(_){} }
+         merged.push(e);                    // genuinely new local entry — keep locally
+         // Only an ADMIN uploads it. waiting_list is admin-only server-side,
+         // so a teacher's device was firing a write it could never complete
+         // on every login and every 20-second sync — a wall of 403s that
+         // looked like a fault but was the policy working correctly.
+         //
+         // The entry is still kept locally, so nothing the teacher can see
+         // disappears; it simply isn't pushed by someone without the right
+         // to push it.
+         if(session.role==='admin' && typeof syncWaitingEntryToSupabase==='function'){
+           try{ syncWaitingEntryToSupabase(e); }catch(_){}
+         }
        });
        db.waitingList=merged;
        save();
@@ -12145,7 +12155,18 @@ try{
          });
          // 2xx = done; a 4xx that isn't 406 means the write is malformed
          // and will never succeed, so drop it rather than loop forever.
-         if(!resp.ok && resp.status!==406 && resp.status<500){
+         // 401/403 are NOT permanent. They mean "not signed in" or "signed
+         // in as someone without rights to this table" — both fixed by a
+         // correct login, and both common while switching between admin and
+         // teacher accounts to test. Dropping the write threw away the
+         // teacher's work and said so only in the console.
+         //
+         // 409 is a genuine conflict: the row already exists. Re-sending it
+         // will fail identically forever, so that one IS permanent.
+         if(resp.status===401 || resp.status===403){
+           remaining.push(item);
+           console.warn('Outbox item held (not authorised right now — will retry after signing in with the right account)');
+         } else if(!resp.ok && resp.status!==406 && resp.status<500){
            console.warn('Outbox item dropped (permanent error '+resp.status+')');
          } else if(!resp.ok){
            remaining.push(item); // 5xx / transient — keep for next attempt
