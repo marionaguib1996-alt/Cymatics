@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-262</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-263</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -11421,8 +11421,18 @@ async function _autoLoadFromCloudImpl(){
          // not a participant.
          const refused=new Set(pendingReupload.map(x=>keyOf(x)));
          let archived=0;
+         // A TEACHER's device must never archive-and-upload. Archiving is
+         // an admin decision about the academy's roster, and a teacher
+         // opening a stale phone was silently marking dozens of students
+         // archived for everyone — a side effect of logging in, which
+         // nobody asked for and nobody would think to look for.
+         //
+         // For them the local extras are simply dropped: the cloud copy is
+         // authoritative, their device catches up, and nothing is written.
+         const isAdmin = (session.role==='admin');
          merged.forEach(m=>{
            if(!refused.has(keyOf(m))) return;
+           if(!isAdmin){ m._dropLocalOnly=true; archived++; return; }
            m.status='archived';
            m.archivedByStaleSync=new Date().toISOString();
            m._localModifiedAt=Date.now();
@@ -11432,9 +11442,20 @@ async function _autoLoadFromCloudImpl(){
              else if(typeof addStudentToSupabase==='function') addStudentToSupabase(m);
            }catch(_){}
          });
-         console.warn('Using the cloud copy: archived '+archived+' local-only students (Database → Archived Students).');
-         if(typeof showToast==='function'){
-           showToast(archived+' out-of-date local student(s) archived — see Database → Archived Students');
+         if(!isAdmin){
+           for(let i=merged.length-1;i>=0;i--){ if(merged[i]._dropLocalOnly) merged.splice(i,1); }
+         }
+         // The message has to match what actually happened AND what the
+         // person can act on. Teachers have no Database tab, so pointing
+         // them there described a screen they cannot open.
+         if(isAdmin){
+           console.warn('Using the cloud copy: archived '+archived+' local-only students (Database → Archived Students).');
+           if(typeof showToast==='function'){
+             showToast(archived+' out-of-date local student(s) archived — see Database → Archived Students');
+           }
+         } else {
+           console.warn('Teacher device was out of date: dropped '+archived+' local-only students in favour of the cloud copy. Nothing was changed for anyone else.');
+           if(typeof showToast==='function') showToast('Updated to the latest data ✓');
          }
        };
 
@@ -15773,6 +15794,7 @@ function openAdminStudentProfile(studentId,studentName){
         <div>
           <div class="card-title">Student Information</div>
           <div class="summary-row"><span class="s-label">Teacher</span><span class="s-val">${escapeHtml(student.teacher||'--')}</span></div>
+          <div class="summary-row"><span class="s-label">Age</span><span class="s-val">${(student.age!=null && student.age!=='') ? escapeHtml(String(student.age)) : '--'}</span></div>
           <div class="summary-row"><span class="s-label">Phone</span><span class="s-val">${escapeHtml(student.phone1||'--')}</span></div>
           <div class="summary-row"><span class="s-label">Parent Phone</span><span class="s-val">${escapeHtml(student.phone2||'--')}</span></div>
           <div class="summary-row"><span class="s-label">Email</span><span class="s-val">${escapeHtml(student.email||'--')}</span></div>
