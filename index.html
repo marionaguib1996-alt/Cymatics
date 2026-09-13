@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-251</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-253</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -18930,9 +18930,24 @@ function renderCalendarPage(){
   slots.forEach(slot=>{
     const slotEnd=addSlotMinutes(slot, SESSION_DURATION_MINUTES);
     const lessonOccupancy=getLessonsAtDateTime(targetDate, slot, null).length;
-    const practiceAtSlot=(db.practiceSessions||[]).filter(p=>
-      p.date===targetDate && p.time===slot && (p.status_record||'active')!=='archived' && p.status!=='cancelled'
-    );
+    // Matched by OVERLAP, not an exact time match. Practice sessions can
+    // be booked at a custom time, so one starting at 5:00 lines up with no
+    // grid row at all — it vanished from the calendar AND from the room
+    // count, leaving the room reading as free while someone was in it.
+    // A session belongs to the row its start time falls inside.
+    const rowStart=timeToMinutes(slot);
+    // The row's own span: the gap to the NEXT slot, so a custom time lands
+    // in exactly one row rather than none or several. Named rowStart/
+    // rowEnd because slotStart/slotEnd already exist in this scope.
+    const nextRowSlot=baseSlots[baseSlots.indexOf(slot)+1];
+    const rowEnd=nextRowSlot ? timeToMinutes(nextRowSlot) : rowStart+SESSION_DURATION_MINUTES;
+    const practiceAtSlot=(db.practiceSessions||[]).filter(p=>{
+      if(p.date!==targetDate) return false;
+      if((p.status_record||'active')==='archived' || p.status==='cancelled') return false;
+      if(!p.time) return false;
+      const ps=timeToMinutes(p.time);
+      return ps>=rowStart && ps<rowEnd;
+    });
     const occupancy=lessonOccupancy+practiceAtSlot.length;
     // "Full" for booking purposes means a new 45-min lesson starting here
     // can't fit at ANY point of its own range — not just that the rooms
@@ -19186,7 +19201,9 @@ function renderCalendarPage(){
     // Practice column cell
     if(practiceAtSlot.length){
       html+=`<div style="background:#4a2f6b;padding:6px;font-size:11px;font-weight:600;text-align:center;color:#e0d0ff;border:1px solid #6b4a99;min-height:52px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px">
-        ${practiceAtSlot.map(p=>escapeHtml(p.studentName)+' ('+escapeHtml(p.instrument)+')').join('<br>')}
+        ${practiceAtSlot.map(p=>escapeHtml(p.studentName)+' ('+escapeHtml(p.instrument)+')'
+            + (p.time!==slot ? ' <span style="opacity:0.75">'+escapeHtml(formatTime12h(p.time))+'</span>' : '')
+            + (p.paid ? '' : ' <span style="color:#e2c47a" title="Unpaid">•</span>')).join('<br>')}
       </div>`;
     } else {
       html+=`<div style="background:#2a2438;border:1px solid #443a5c;min-height:52px"></div>`;
@@ -21533,18 +21550,37 @@ async function syncPracticeSessionToSupabase(session){
       status: session.status,
       month: session.month
     };
-    const {error}=await window.supabaseClientV1.from('practice_sessions').insert([payload]);
-    if(error) console.warn('Practice session sync failed:', error.message);
+    // Capture the id Supabase assigns. Without this the local row keeps a
+    // client-generated id the cloud has never seen, so the later
+    // "mark paid" update — which matches on id — hits ZERO rows and
+    // reports no error. The change looked saved, and the next download
+    // quietly replaced it with the old unpaid value.
+    const {data,error}=await window.supabaseClientV1.from('practice_sessions')
+      .insert([payload]).select().single();
+    if(error){ console.warn('Practice session sync failed:', error.message); return; }
+    if(data && data.id!=null && String(data.id)!==String(session.id)){
+      session.id=data.id;
+      save();
+      if(typeof renderPracticeSessionsPage==='function') renderPracticeSessionsPage();
+    }
   }catch(err){ console.warn('Practice session sync failed:', err.message); }
 }
 
 async function syncPracticeSessionUpdateToSupabase(session){
   try{
     if(!window.supabaseClientV1) return;
-    const {error}=await window.supabaseClientV1.from('practice_sessions')
+    const {data,error}=await window.supabaseClientV1.from('practice_sessions')
       .update({paid: session.paid, status: session.status})
-      .eq('id', session.id);
-    if(error) console.warn('Practice session update failed:', error.message);
+      .eq('id', session.id)
+      .select();
+    if(error){ console.warn('Practice session update failed:', error.message); return; }
+    // Zero rows matched means this session isn't in the cloud under this
+    // id — the change would be silently lost on the next download. Create
+    // it instead of pretending it saved.
+    if(!data || !data.length){
+      console.warn('Practice session '+session.id+' not found in the cloud — inserting it instead.');
+      if(typeof syncPracticeSessionToSupabase==='function') await syncPracticeSessionToSupabase(session);
+    }
   }catch(err){ console.warn('Practice session update failed:', err.message); }
 }
 
