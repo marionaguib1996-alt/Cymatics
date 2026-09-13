@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-253</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-255</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -848,6 +848,10 @@ input::placeholder{color:var(--text-dim)}
 <div class="card">
   <div class="card-title">Weekly Calendar</div>
   <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+    <button class="btn" onclick="calShiftWeek(-1)" title="Previous week">← Prev Week</button>
+    <span id="cal-date-label" style="font-weight:700;color:var(--gold);min-width:170px;text-align:center"></span>
+    <button class="btn" onclick="calShiftWeek(1)" title="Next week">Next Week →</button>
+    <button class="btn" onclick="calShiftWeek(0)" title="Back to the current week">This Week</button>
     <select id="cal-day" onchange="renderCalendarPage()" style="min-width:150px">
       <option>Sunday</option>
       <option>Monday</option>
@@ -4573,6 +4577,41 @@ function showProductBuyers(productId){
   `);
 }
 
+// A search box rather than a dropdown. With sixty-odd students a select
+// is a scroll hunt, and the name is the one thing the person selling
+// already knows. Typing narrows; clicking picks.
+function filterSaleStudents(productId){
+  const q=(document.getElementById('sl-student-search')?.value||'').trim().toLowerCase();
+  const box=document.getElementById('sl-student-results');
+  const hidden=document.getElementById('sl-student');
+  if(!box||!hidden) return;
+  // Clearing the box clears the selection, so an edited-then-emptied
+  // search can't leave a stale student silently attached to the sale.
+  if(!q){ hidden.value=''; box.innerHTML=''; checkDuplicateBookSale(productId); return; }
+  const hits=(db.students||[])
+    .filter(st=>(st.status||'active')!=='archived')
+    .filter(st=>String(st.name||'').toLowerCase().includes(q))
+    .slice(0,6);
+  if(!hits.length){
+    box.innerHTML='<div style="font-size:12px;color:var(--text-muted);padding:4px 0">No match — leave blank to record it without a student.</div>';
+    hidden.value=''; checkDuplicateBookSale(productId); return;
+  }
+  box.innerHTML=hits.map(st=>`<div onclick="pickSaleStudent('${escapeAttr(String(st.id))}','${jsString(st.name||'')}','${escapeAttr(String(productId))}')"
+      style="padding:6px 8px;cursor:pointer;border:1px solid var(--border);border-radius:5px;margin-bottom:3px;font-size:13px">
+      ${escapeHtml(st.name||'')}${st.instrument?` <span style="color:var(--text-muted)">· ${escapeHtml(st.instrument)}</span>`:''}
+    </div>`).join('');
+}
+
+function pickSaleStudent(id, name, productId){
+  const hidden=document.getElementById('sl-student');
+  const search=document.getElementById('sl-student-search');
+  if(hidden) hidden.value=id;
+  if(search) search.value=name;
+  const box=document.getElementById('sl-student-results');
+  if(box) box.innerHTML='<div style="font-size:12px;color:#a8e8a8;padding:4px 0">✓ '+escapeHtml(name)+' — clear the box to remove</div>';
+  checkDuplicateBookSale(productId);
+}
+
 function checkDuplicateBookSale(productId){
   const el=document.getElementById('sl-dup-warning');
   if(!el) return;
@@ -4596,15 +4635,11 @@ function openSellProduct(id){
     <div style="margin-bottom:10px;color:var(--text-muted)">In stock: <b>${p.qty||0}</b> · Price ${egp(p.price||0)} each</div>
     <div class="form-field"><label for="sl-qty">How many?</label><input id="sl-qty" type="number" min="1" value="1"></div>
     <div class="form-field"><label for="sl-price">Price each (EGP) — change for a one-off discount</label><input id="sl-price" type="number" min="0" value="${p.price||0}"></div>
-    <div class="form-field"><label for="sl-student">Student (optional)</label>
-      <select id="sl-student" onchange="checkDuplicateBookSale('${escapeAttr(String(p.id))}')">
-        <option value="">— not tied to a student (staff, walk-in, etc.) —</option>
-        ${(db.students||[])
-            .filter(st=>(st.status||'active')!=='archived')
-            .slice()
-            .sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')))
-            .map(st=>`<option value="${escapeAttr(String(st.id))}">${escapeHtml(st.name||'')}${st.instrument?' · '+escapeHtml(st.instrument):''}</option>`).join('')}
-      </select>
+    <div class="form-field"><label for="sl-student-search">Student (optional)</label>
+      <input id="sl-student-search" placeholder="Type a name to search — leave blank for staff / walk-in"
+             oninput="filterSaleStudents('${escapeAttr(String(p.id))}')" autocomplete="off">
+      <input type="hidden" id="sl-student" value="">
+      <div id="sl-student-results" style="margin-top:4px"></div>
       <div id="sl-dup-warning" style="margin-top:6px"></div>
     </div>
     <div class="form-field"><label for="sl-note">Note (optional)</label><input id="sl-note" placeholder="e.g. paid in cash"></div>
@@ -18730,6 +18765,17 @@ function calendarRescheduleLesson(lessonId, teacherName, targetDate, targetTime)
   showToast(escapeHtml(l.student||'Lesson')+' moved from '+formatTime12h(oldTime)+' to '+formatTime12h(targetTime));
 }
 
+// How many weeks forward or back the calendar is showing. Held here rather
+// than read from a field because the day selector and the week offset are
+// two separate choices — changing the day must not reset which week you
+// were looking at.
+window.calWeekOffset = window.calWeekOffset || 0;
+
+function calShiftWeek(delta){
+  window.calWeekOffset = (delta===0) ? 0 : (window.calWeekOffset||0) + delta;
+  renderCalendarPage();
+}
+
 function renderCalendarPage(){
   const grid=document.getElementById('calendar-grid');
   const statusEl=document.getElementById('cal-room-status');
@@ -18753,7 +18799,9 @@ function renderCalendarPage(){
 
   // Anchor to the actual next real-world occurrence of the selected weekday —
   // computed early so it's available for the teacher filter below too.
-  const targetDate=nextOccurrenceOfWeekday(dayName);
+  // Shifted by the week offset, so Prev/Next move the whole grid a week
+  // at a time while keeping the chosen weekday.
+  const targetDate=addDaysToDateString(nextOccurrenceOfWeekday(dayName), (window.calWeekOffset||0)*7);
   window._calCurrentDate=targetDate; // for features that default to the shown day
 
   // A teacher normally shows up only if they have configured slots for this
@@ -18912,10 +18960,11 @@ function renderCalendarPage(){
     </div>`;
   });
 
-  // Practice column header — same target date as the lesson columns
+  // Practice column header. The date used to sit here, which implied it
+  // applied only to this column — it's the whole grid's date, so it now
+  // lives once in the week navigation above.
   html+=`<div style="${headerCell};background:#1a1916;color:#c4a3f0;border-color:#333">
-    Practice<br>
-    <span style="font-size:11px;font-weight:400;color:var(--text-muted)">${escapeHtml(formatLedgerDate(targetDate))}</span>
+    Practice
   </div>`;
 
   // Build payment lookup: studentId → paid this month
@@ -19212,6 +19261,18 @@ function renderCalendarPage(){
 
   html+='</div>';
   grid.innerHTML=html;
+
+  // One date for the whole grid, in the navigation. Says plainly when
+  // you're looking at a week other than this one — the commonest way to
+  // misread a calendar is not noticing you've paged away from today.
+  const dateLabel=document.getElementById('cal-date-label');
+  if(dateLabel){
+    const off=window.calWeekOffset||0;
+    const suffix = off===0 ? '' : (off>0
+      ? ' <span style="font-size:11px;font-weight:400;opacity:0.8">(+'+off+' week'+(off===1?'':'s')+')</span>'
+      : ' <span style="font-size:11px;font-weight:400;opacity:0.8">('+off+' week'+(off===-1?'':'s')+')</span>');
+    dateLabel.innerHTML=escapeHtml(formatLedgerDate(targetDate))+suffix;
+  }
 
   if(statusEl){
     const totalBooked=(db.lessons||[]).filter(l=>l.date===targetDate && (l.status_record||'active')!=='archived').length;
@@ -22430,7 +22491,16 @@ function printTeacherPayrollLessons(teacherName){
 
   cursorY+=10;
   ctx.font='bold 13px Arial, sans-serif';
-  ctx.fillText('TOTAL: '+regularTotal+' Sessions'+(grpTotal>0?' + '+grpTotal+' Grp Sessions':''), padding, cursorY+13);
+  // Flag sessions paid at a hand-set amount. Without it the teacher sees a
+  // total that doesn't follow from the session count and has no way to
+  // tell whether it's a mistake or deliberate — which is exactly the
+  // question that comes back as "why is my payslip short?".
+  const customPayCount=eligibleLessons.filter(l=>
+    l.customPayrollAmount!=null && l.customPayrollAmount!=='' && Number(l.customPayrollAmount)>=0
+  ).length;
+  ctx.fillText('TOTAL: '+regularTotal+' Sessions'
+    +(grpTotal>0?' + '+grpTotal+' Grp Sessions':'')
+    +(customPayCount>0?' ('+customPayCount+' Custom Pay)':''), padding, cursorY+13);
   cursorY+=22;
   ctx.fillText('Payment: '+Math.round(paymentTotal), padding, cursorY+13);
 
