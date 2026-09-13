@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-256</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-257</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -16192,6 +16192,12 @@ function renewStudentSubscription(id, preCheckIdsCsv){
       <div class="form-field"><label for="rn-plan">Plan</label><select id="rn-plan" onchange="onRenewPlanChange(${id})">
         ${planOptionsHtml(student.plan)}
       </select></div>
+      <div class="form-field"><label for="rn-discount">Discount %</label>
+        <input id="rn-discount" type="number" min="0" max="100" placeholder="0"
+               value="${student.discountPercent!=null && student.discountPercent!=='' ? Number(student.discountPercent) : ''}"
+               oninput="onRenewPlanChange(${id})">
+        <small style="color:var(--text-muted)">Renewal is when a discount is usually agreed, so it's editable here. Blank means none. Applies from this cycle on.</small>
+      </div>
       <div class="form-field" id="rn-date-field" style="display:${isWeeklyPlan(student.plan)?'block':'none'}">
         <label for="rn-date">Session Date</label>
         <div style="display:flex;gap:4px">
@@ -16493,6 +16499,15 @@ function confirmRenewal(id){
   const lessonDay=document.getElementById('rn-day')?.value||student.lesson_day;
   const lessonTime=document.getElementById('rn-time')?.value||'';
   const plan=document.getElementById('rn-plan')?.value||student.plan;
+  // Discount read back from the renewal form. A blank box means NO
+  // discount, which has to be distinguishable from "field not present" —
+  // otherwise clearing it would silently leave the old discount in place,
+  // and the parent would keep paying the reduced fee after it ended.
+  const discEl=document.getElementById('rn-discount');
+  if(discEl){
+    const raw=String(discEl.value||'').trim();
+    student.discountPercent = raw==='' ? null : Math.max(0, Math.min(100, Number(raw)||0));
+  }
 
   if(!lessonDay){ showToast('Please choose a lesson day'); return; }
   if(!lessonTime){ showToast('Please choose a time slot'); return; }
@@ -22556,7 +22571,15 @@ function printTeacherPayrollLessons(teacherName){
     } else if(grpCount===totalCount && totalCount===1){
       summary='1 Grp session';
     } else if(countedCount===0){
-      summary=totalCount+' session'+(totalCount===1?'':'s')+(grpCount>0?' ('+grpCount+' Grp)':'');
+      // Flag hand-set amounts on the DAY line too, not only in the total.
+      // A teacher checking a payslip reads down the days; seeing the count
+      // only at the bottom leaves them unable to tell WHICH day differs.
+      const dayCustom=dayLessons.filter(l=>
+        l.customPayrollAmount!=null && l.customPayrollAmount!=='' && Number(l.customPayrollAmount)>=0
+      ).length;
+      summary=totalCount+' session'+(totalCount===1?'':'s')
+             +(grpCount>0?' ('+grpCount+' Grp)':'')
+             +(dayCustom>0?' ('+dayCustom+' Custom Pay)':'');
     } else {
       summary=totalCount+' sessions ('+attendedCount+' Attended, '+countedCount+' Counted)'+(grpCount>0?', '+grpCount+' Grp':'');
     }
