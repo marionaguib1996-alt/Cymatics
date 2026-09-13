@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-255</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-256</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -18776,6 +18776,159 @@ function calShiftWeek(delta){
   renderCalendarPage();
 }
 
+// Booking straight from a free cell. Two ways to place an EXISTING
+// student here, offered as separate buttons rather than one guessed
+// behaviour, because they differ in scope and getting it wrong is costly
+// in opposite directions:
+//
+//   this week only  — a one-off swap; their regular slot is untouched
+//   regular time    — changes their standing slot and moves every future
+//                     lesson to it
+//
+// Guessing "regular" when a one-off was meant rewrites a term's schedule;
+// guessing "one-off" when a move was meant leaves them drifting back next
+// week. The person clicking knows which; the app doesn't.
+function openBookFreeSlot(teacherName, date, time, dayName){
+  window._bookSlot={teacherName, date, time, dayName};
+  openModal('Book ' + escapeHtml(formatTime12h(time)) + ' — ' + escapeHtml(teacherName), `
+    <div style="margin-bottom:12px;color:var(--text-muted)">${escapeHtml(formatLedgerDate(date))} at ${escapeHtml(formatTime12h(time))}</div>
+    <div class="form-field"><label for="bk-search">Move an existing student here</label>
+      <input id="bk-search" placeholder="Type a name…" oninput="filterBookStudents()" autocomplete="off">
+      <div id="bk-results" style="margin-top:6px"></div>
+    </div>
+    <div id="bk-actions" style="margin-top:10px"></div>
+    <div style="border-top:1px solid var(--border);margin:16px 0 12px"></div>
+    <button class="btn btn-gold" style="width:100%" onclick="addNewStudentInSlot()">➕ Add a NEW student in this slot</button>
+  `);
+}
+
+function filterBookStudents(){
+  const q=(document.getElementById('bk-search')?.value||'').trim().toLowerCase();
+  const box=document.getElementById('bk-results');
+  const actions=document.getElementById('bk-actions');
+  if(!box) return;
+  if(actions) actions.innerHTML='';
+  if(!q){ box.innerHTML=''; return; }
+  const hits=(db.students||[])
+    .filter(st=>(st.status||'active')!=='archived' && !st.frozen)
+    .filter(st=>String(st.name||'').toLowerCase().includes(q))
+    .slice(0,6);
+  box.innerHTML=hits.length
+    ? hits.map(st=>`<div onclick="pickBookStudent('${escapeAttr(String(st.id))}')"
+        style="padding:6px 8px;cursor:pointer;border:1px solid var(--border);border-radius:5px;margin-bottom:3px;font-size:13px">
+        ${escapeHtml(st.name||'')} <span style="color:var(--text-muted)">· ${escapeHtml(st.instrument||'')} · ${escapeHtml(st.lesson_day||'')} ${escapeHtml(formatTime12h(st.lessonTime||''))}</span>
+      </div>`).join('')
+    : '<div style="font-size:12px;color:var(--text-muted)">No match.</div>';
+}
+
+function pickBookStudent(studentId){
+  const s=(db.students||[]).find(x=>String(x.id)===String(studentId));
+  const slot=window._bookSlot;
+  if(!s||!slot) return;
+  const box=document.getElementById('bk-results');
+  if(box) box.innerHTML='<div style="font-size:13px;color:#a8e8a8;padding:4px 0">✓ '+escapeHtml(s.name||'')+'</div>';
+  const actions=document.getElementById('bk-actions');
+  if(!actions) return;
+  actions.innerHTML=`
+    <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">
+      Currently ${escapeHtml(s.lesson_day||'—')} ${escapeHtml(formatTime12h(s.lessonTime||''))} with ${escapeHtml(s.teacher||'—')}.
+    </div>
+    <button class="btn" style="width:100%;margin-bottom:6px" onclick="bookSlotThisWeekOnly('${escapeAttr(String(s.id))}')">
+      Move <b>this week only</b><div style="font-size:11px;opacity:0.75;font-weight:400">A one-off swap — their regular slot stays as it is</div>
+    </button>
+    <button class="btn btn-gold" style="width:100%" onclick="bookSlotChangeRegular('${escapeAttr(String(s.id))}')">
+      Change their <b>regular time</b><div style="font-size:11px;opacity:0.85;font-weight:400">Moves every future lesson to this day and time</div>
+    </button>`;
+}
+
+function bookSlotThisWeekOnly(studentId){
+  const s=(db.students||[]).find(x=>String(x.id)===String(studentId));
+  const slot=window._bookSlot;
+  if(!s||!slot) return;
+  const todayKey=new Date().toISOString().slice(0,10);
+  // Their lesson in the week being viewed, if there is one — that's the
+  // lesson to move. Anchored to the Friday week the ledger already uses.
+  const wkStart=(typeof getFridayWeekStart==='function') ? getFridayWeekStart(slot.date) : slot.date;
+  const wkEnd=addDaysToDateString(wkStart, 6);
+  const lesson=(db.lessons||[]).find(l=>
+    lessonBelongsToStudent(l, s) && l.status==='scheduled' &&
+    (l.status_record||'active')!=='archived' &&
+    l.date>=wkStart && l.date<=wkEnd
+  );
+  if(!lesson){
+    showToast('No scheduled lesson for '+(s.name||'')+' in that week to move. Use "Change their regular time", or add the lesson first.');
+    return;
+  }
+  if(!confirm('Move '+(s.name||'')+"'s lesson from "+formatLedgerDate(lesson.date)+' '+formatTime12h(lesson.time)+
+              '\nto '+formatLedgerDate(slot.date)+' '+formatTime12h(slot.time)+' with '+slot.teacherName+'?\n\n'+
+              'This week only — their regular slot is unchanged.')) return;
+  lesson.date=slot.date;
+  lesson.time=slot.time;
+  lesson.teacher=slot.teacherName;
+  // Marked as a deliberate one-off so the "left at an old time" repair
+  // doesn't later offer to undo it.
+  lesson.timeOverridden=true;
+  if(typeof syncLessonUpdateToSupabase==='function'){ try{ syncLessonUpdateToSupabase(lesson); }catch(_){} }
+  save(); closeModal();
+  if(typeof renderCalendarPage==='function') renderCalendarPage();
+  if(typeof renderLessons==='function') renderLessons();
+  showToast(s.name+' moved to '+formatTime12h(slot.time)+' for that week');
+}
+
+function bookSlotChangeRegular(studentId){
+  const s=(db.students||[]).find(x=>String(x.id)===String(studentId));
+  const slot=window._bookSlot;
+  if(!s||!slot) return;
+  if(!confirm('Change '+(s.name||'')+"'s regular slot to "+slot.dayName+' '+formatTime12h(slot.time)+
+              ' with '+slot.teacherName+'?\n\nEvery FUTURE lesson moves. Past lessons are untouched.')) return;
+  s.lesson_day=slot.dayName;
+  s.lessonTime=slot.time;
+  s.teacher=slot.teacherName;
+  s._localModifiedAt=Date.now();
+  // Reuses the same rescheduling the Edit Student form uses, so a change
+  // made here behaves identically to one made there.
+  const todayKey=new Date().toISOString().slice(0,10);
+  let moved=0;
+  (db.lessons||[]).forEach(l=>{
+    if(!lessonBelongsToStudent(l, s)) return;
+    if(l.status!=='scheduled' || (l.status_record||'active')==='archived') return;
+    if(!l.date || l.date<todayKey) return;
+    l.date=nextWeekdayOnOrAfter(l.date, slot.dayName);
+    l.time=slot.time;
+    l.teacher=slot.teacherName;
+    if(typeof syncLessonUpdateToSupabase==='function'){ try{ syncLessonUpdateToSupabase(l); }catch(_){} }
+    moved++;
+  });
+  if(typeof syncStudentUpdateToSupabase==='function'){ try{ syncStudentUpdateToSupabase(s); }catch(_){} }
+  save(); closeModal();
+  if(typeof renderCalendarPage==='function') renderCalendarPage();
+  if(typeof renderStudents==='function') renderStudents();
+  if(typeof renderLessons==='function') renderLessons();
+  showToast(s.name+' now on '+slot.dayName+' '+formatTime12h(slot.time)+' — '+moved+' upcoming lesson(s) moved');
+}
+
+function addNewStudentInSlot(){
+  const slot=window._bookSlot;
+  if(!slot) return;
+  closeModal();
+  try{
+    const navBtn=Array.from(document.querySelectorAll('.nav-btn, [onclick*="switchPage"]'))
+      .find(b=>/switchPage\(\s*'students'/.test(b.getAttribute('onclick')||''));
+    if(navBtn) navBtn.click();
+  }catch(_){}
+  const setVal=(id,v)=>{ const el=document.getElementById(id); if(el && v!=null) el.value=v; };
+  setVal('s-teacher', slot.teacherName);
+  setVal('s-day', slot.dayName);
+  setVal('s-joined-date', (typeof isoToDmy==='function') ? isoToDmy(slot.date) : '');
+  if(typeof updateStudentTimeSlotOptions==='function') updateStudentTimeSlotOptions();
+  setVal('s-time', slot.time);
+  try{
+    const el=document.getElementById('s-first');
+    if(el && typeof el.scrollIntoView==='function') el.scrollIntoView({behavior:'smooth', block:'center'});
+  }catch(_){}
+  showToast('Add Student set to '+slot.dayName+' '+formatTime12h(slot.time)+' with '+slot.teacherName);
+}
+
 function renderCalendarPage(){
   const grid=document.getElementById('calendar-grid');
   const statusEl=document.getElementById('cal-room-status');
@@ -19243,7 +19396,7 @@ function renderCalendarPage(){
         // name rather than what it actually is: nothing booked here at
         // all. An explicit "Free" removes that ambiguity outright.
         const dropTime=full ? freesAt : slot;
-        html+=`<div ondragover="calendarDragOverCell(event)" ondragleave="calendarDragLeaveCell(event)" ondrop="calendarDropOnCell(event,'${escapeAttr(t.name)}','${targetDate}','${dropTime}')" title="${full?'Free from '+escapeHtml(formatTime12h(freesAt)):'Free'} — drop a lesson here to book it" style="background:#1b5e20;border:1px solid #2e7d32;min-height:52px;display:flex;align-items:center;justify-content:center;font-size:11px;color:rgba(165,214,167,0.6);text-align:center;padding:2px">${fullLabel}</div>`;
+        html+=`<div ondragover="calendarDragOverCell(event)" ondragleave="calendarDragLeaveCell(event)" ondrop="calendarDropOnCell(event,'${escapeAttr(t.name)}','${targetDate}','${dropTime}')" onclick="openBookFreeSlot('${jsString(t.name)}','${targetDate}','${dropTime}','${jsString(dayName)}')" title="${full?'Free from '+escapeHtml(formatTime12h(freesAt)):'Free'} — click to book, or drop a lesson here" style="background:#1b5e20;border:1px solid #2e7d32;min-height:52px;display:flex;align-items:center;justify-content:center;font-size:11px;color:rgba(165,214,167,0.6);text-align:center;padding:2px;cursor:pointer">${fullLabel}</div>`;
       }
     });
 
