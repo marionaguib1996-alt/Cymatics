@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-267</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-268</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -2727,6 +2727,24 @@ function normalizeStudentNameForMatch(name){
 // as 8. The rule that fixes it: if the lesson carries a studentId, that id
 // is authoritative and the name is not consulted at all. The name is only
 // a fallback for older records that have no studentId.
+// Resolves the student a lesson belongs to, PREFERRING a live record over
+// an archived one.
+//
+// A plain .find() returns whichever match sits first in the array. When a
+// student has two records — a live one and an archived leftover from a
+// bad sync — that ordering is arbitrary, so the calendar could report
+// "archived" for someone the Students tab shows as perfectly active, and
+// the two screens disagreed about the same person with no way to tell
+// which was right.
+//
+// Preferring the live record is also the correct answer on the merits: if
+// a student has any active record, they are active.
+function resolveLessonStudent(l){
+  const all=(db.students||[]).filter(s=>lessonBelongsToStudent(l, s));
+  if(!all.length) return null;
+  return all.find(s=>(s.status||'active')!=='archived') || all[0];
+}
+
 function lessonBelongsToStudent(l, s){
   if(!l || !s) return false;
   if(l.studentId!=null && l.studentId!=='') return String(l.studentId)===String(s.id);
@@ -6237,7 +6255,7 @@ if(sum){sum.innerHTML=`<div class="metric"><div class="metric-label">Lessons</di
      // lessonBelongsToStudent is id-authoritative whenever the lesson
      // carries a studentId, and only falls back to the name when it
      // genuinely has nothing else to go on.
-     const matchedStudent=(db.students||[]).find(s=>lessonBelongsToStudent(l, s));
+     const matchedStudent=resolveLessonStudent(l);
      let planBadges=typeof teacherPlanBadgesHtml==='function' ? teacherPlanBadgesHtml(matchedStudent?.plan) : '';
      // A lesson that WAS a trial (stamped at conversion) keeps its Trial
      // badge even though the student is no longer on a trial plan — the
@@ -10976,7 +10994,7 @@ function isPayrollGroupSession(l){
   // and was labelled "Grp" on the payslip.
   if(l.isDoubleSession) return false;
   if(l.isExtendedDuration) return true;
-  const st=(db.students||[]).find(s=>lessonBelongsToStudent(l, s));
+  const st=resolveLessonStudent(l);
   return !!(st && typeof isGroupPlan==='function' && isGroupPlan(st.plan));
 }
 
@@ -15242,7 +15260,7 @@ function renderTeacherWorkspace(){
     // whose day changed (e.g. Saturday to Friday) would stay filed under
     // the OLD day forever, since past dates never change.
     const dayFilteredLessons=dayFilter ? attendedLessons.filter(l=>{
-      const matchedStudent=(db.students||[]).find(s=>lessonBelongsToStudent(l, s));
+      const matchedStudent=resolveLessonStudent(l);
       return matchedStudent && matchedStudent.lesson_day===dayFilter;
     }) : attendedLessons;
 
@@ -19522,7 +19540,7 @@ function renderCalendarPage(){
       }
       if(booked.length>0){
         const l=booked[0];
-        const matchedStudent=(db.students||[]).find(s=>lessonBelongsToStudent(l, s)); // id-authoritative; see renderLessons for the linked-course reasoning
+        const matchedStudent=resolveLessonStudent(l); // id-authoritative; see renderLessons for the linked-course reasoning
         // A lesson keeps its OWN stored name/status regardless of what
         // happens to the student record later — so it renders identically
         // whether the student is a normal active student, was archived, or
@@ -22688,7 +22706,7 @@ function generateTeacherSchedulePhoto(teacherName, dayName, silent){
     const key=l.time+'|'+l.student;
     if(alreadyShown.has(key)) return;
     recoveredAny=true;
-    const matchedStudent=(db.students||[]).find(s=>lessonBelongsToStudent(l, s)); // id-authoritative; see renderLessons for the linked-course reasoning
+    const matchedStudent=resolveLessonStudent(l); // id-authoritative; see renderLessons for the linked-course reasoning
     const dur=getLessonDurationMinutes(l);
     allSlotInfo.push({
       time:l.time,
