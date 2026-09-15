@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-268</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-269</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -4382,6 +4382,13 @@ function convertTrial(id){
    </div>
    <div style="text-align:right;margin-top:14px"><button class="btn btn-gold" onclick="confirmRenewal(${id})">Confirm Conversion</button></div>`);
  window._renewPaymentMethod='InstaPay';
+ // Convert Trial reuses the renewal's custom-dates UI, so it must set up
+ // the same state. Without the student id the price preview looked the
+ // student up, found nothing, and priced an empty object — quoting
+ // "3 sessions × 500 EGP = 0 EGP". Clearing the dates matters too, or a
+ // previous dialog's picks carry into this one.
+ window._renewCustomDates=[];
+ window._renewCustomStudentId=id;
 }
 
 function renderTeachers(){
