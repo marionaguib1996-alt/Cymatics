@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-265</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-266</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -7349,7 +7349,17 @@ function restoreBackup(event){
      sessionStorage.setItem('skipNextAutoLoad','1');
      const pushNow=confirm('Backup restored locally.\n\nPush this restored data to Supabase now, so it survives the next reload? (Recommended — otherwise the cloud may overwrite it again.)\n\nClick Cancel to just review it locally first without touching the cloud yet.');
      if(pushNow){
-       pushAllDataToCloud().then(()=>{ location.reload(); });
+       // Reload only AFTER the push resolves, and only if it reported
+       // success — reloading regardless is what let a failed push look
+       // identical to a successful one while the cloud quietly won.
+       pushAllDataToCloud(true).then(()=>{
+         alert('Restored data pushed to the cloud. Reloading.');
+         location.reload();
+       }).catch(err=>{
+         alert('The push FAILED: '+(err&&err.message||err)+
+               '\n\nYour restored data is still here locally. Do NOT reload — fix the problem, '+
+               'then use Push to Cloud, or the cloud copy will overwrite it.');
+       });
      } else {
        alert('Restored locally only. Cloud auto-sync is paused for this one load so you can verify the data first — use the "Push to Cloud" button when ready, or reopen normally to discard the restore and resume live sync.');
        location.reload();
@@ -10129,7 +10139,12 @@ async function upsertToCloud(table, matchColumn, matchValue, payload){
   }
 }
 
-async function pushAllDataToCloud(){
+// alreadyConfirmed: the caller has already asked. Restore Academy does —
+// adding a second prompt here turned "yes, push it" into a silent no-op
+// when anyone reasonably cancelled the duplicate, and the reload that
+// followed let the cloud overwrite the restore. A recovery path must not
+// depend on answering the same question twice.
+async function pushAllDataToCloud(alreadyConfirmed){
   if(!window.supabaseClientV1){ alert('Supabase not connected.'); return; }
 
   // The most destructive button in the app: it writes everything in THIS
@@ -10152,7 +10167,7 @@ async function pushAllDataToCloud(){
     return;
   }
 
-  if(!confirm('Push everything in THIS browser up to the cloud?\n\n'+
+  if(!alreadyConfirmed && !confirm('Push everything in THIS browser up to the cloud?\n\n'+
               'Use this after restoring a backup on your main machine. Do NOT use it on a device that '+
               'is showing old or unexpected data — it would overwrite the good cloud copy with this one.')) return;
   const summary={students:0,teachers:0,lessons:0,lessonLogs:0,payments:0,payroll:0,expenses:0,instruments:0,practiceSessions:0,failed:0};
@@ -11311,6 +11326,26 @@ async function _autoLoadFromCloudImpl(){
        return String(s.student_code||s.public_id||('name:'+(s.name||'')));
      };
      const cloudByKey=new Map(cloudStudents.map(s=>[keyOf(s), s]));
+     // A SECOND index, by name + instrument. keyOf matches on student_code,
+     // which is right until the codes themselves change — a database reset
+     // reassigns them, so a device holding the old codes finds no match for
+     // ANYONE and the whole roster looks brand-new. That is how a phone
+     // opened after a reset archived every student.
+     //
+     // Name + instrument is deliberately a weaker key, used ONLY to
+     // recognise someone the code lookup missed. Including the instrument
+     // keeps a student taking two courses as two records, which is what
+     // they are.
+     const nameKeyOf=s=>String(s.name||'').trim().toLowerCase()+'|'+String(s.instrument||'').trim().toLowerCase();
+     const cloudByName=new Map();
+     cloudStudents.forEach(s=>{
+       const nk=nameKeyOf(s);
+       // Only index names that are UNAMBIGUOUS in the cloud. Two students
+       // sharing a name and instrument can't be told apart this way, and
+       // guessing between them is worse than treating the local one as new.
+       if(cloudByName.has(nk)) cloudByName.set(nk, null);
+       else cloudByName.set(nk, s);
+     });
      const localStudents=db.students||[];
 
      const merged=[];
@@ -11337,6 +11372,16 @@ async function _autoLoadFromCloudImpl(){
      localStudents.forEach(ls=>{
        const k=keyOf(ls);
        if(cloudByKey.has(k) || seen.has(k)) return; // already represented by the cloud copy
+       // Code found nothing — try name+instrument before concluding this
+       // is a student the cloud has never seen. A re-coded student is the
+       // same person, not a stranger to be archived.
+       const byName=cloudByName.get(nameKeyOf(ls));
+       if(byName){
+         console.warn('Student "'+(ls.name||'?')+'" matched by name, not code — local '+
+                      (ls.student_code||'(no code)')+' vs cloud '+(byName.student_code||'(no code)')+
+                      '. Keeping the cloud record; not archiving.');
+         return;
+       }
        seen.add(k);
        merged.push(ls);
        pendingReupload.push(ls);
