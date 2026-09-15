@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-266</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-267</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -7361,8 +7361,17 @@ function restoreBackup(event){
                'then use Push to Cloud, or the cloud copy will overwrite it.');
        });
      } else {
-       alert('Restored locally only. Cloud auto-sync is paused for this one load so you can verify the data first — use the "Push to Cloud" button when ready, or reopen normally to discard the restore and resume live sync.');
-       location.reload();
+       // Do NOT reload. The restored data is already in db and saved; a
+       // reload only creates the chance for the cloud to download over it,
+       // which is exactly what "review it locally first" is meant to avoid.
+       // Re-rendering shows the restored data immediately with no such risk.
+       alert('Restored locally only — nothing has been sent to the cloud.\n\n'+
+             'Review it now. When you are satisfied, use Push to Cloud to make it permanent.\n\n'+
+             'Do NOT reload before pushing: the cloud copy would replace what you just restored.');
+       ['renderStudents','renderLessons','renderOverview','renderTeachers','renderWaitingList',
+        'renderProducts','renderExpenses','renderNotesPage','renderCalendarPage'].forEach(fn=>{
+         if(typeof window[fn]==='function'){ try{ window[fn](); }catch(_){} }
+       });
      }
    }catch(err){
      alert('Invalid backup file: '+err.message);
@@ -10220,9 +10229,9 @@ async function pushAllDataToCloud(alreadyConfirmed){
       // A deliberate one-off time change. Without it a reload forgets the
       // intent and the 'left at an old time slot' repair offers to undo a
       // change that was made on purpose.
-      time_overridden: !!lesson.timeOverridden,
+      time_overridden: !!l.timeOverridden,
       // The hand-typed price for a session charged on top of the plan.
-      extra_charge: (lesson.extraCharge!=null && Number(lesson.extraCharge)>0) ? Number(lesson.extraCharge) : null,
+      extra_charge: (l.extraCharge!=null && Number(l.extraCharge)>0) ? Number(l.extraCharge) : null,
       notes:l.notes||''
     };
     const r=await upsertToCloud('lessons', 'id', l.id, payload);
