@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-269</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-271</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1863,6 +1863,85 @@ function studentExtraCharges(student, monthKey){
     if(l.unpaid) unpaidSum+=fee; else paidSum+=fee;
   });
   return {unpaid:unpaidSum, paid:paidSum, total:unpaidSum+paidSum, count};
+}
+
+// Repairs payment keys whose student ID no longer exists.
+//
+// Payments are keyed "<studentId>_<YYYY-MM>", and Supabase assigns its own
+// IDs. So any push into empty tables — which is what a restore does — gives
+// every student a new ID while the payments keep the old one. Every payment
+// silently detaches, every student reads as unpaid, and the month's revenue
+// collapses. That happened tonight and took two hand-written SQL scripts to
+// undo.
+//
+// Rewriting the key format to use the student CODE would prevent it at
+// source, but 45 places build these keys and there is no way to verify all
+// of them at once. This does the same job defensively: on load, any key
+// pointing at a student who no longer exists is re-pointed by NAME, which
+// the app already stores alongside every payment.
+//
+// Deliberately conservative — it only acts when the answer is certain:
+//   · the current ID must resolve to nobody (a live key is never touched)
+//   · exactly one student may carry that name (two-course students are
+//     left for a human, since the name cannot say which course paid)
+//   · the destination key must be free (never overwrite a real payment)
+function repairDetachedPaymentKeys(){
+  const students=db.students||[];
+  if(!students.length) return 0;
+  const liveIds=new Set(students.map(s=>String(s.id)));
+  const norm=v=>String(v||'').trim().toLowerCase().replace(/\s+/g,' ');
+
+  // Names carried by exactly one student. Counted across ALL of them,
+  // archived included — an archived namesake collides just the same.
+  const byName=new Map();
+  students.forEach(s=>{
+    const n=norm(s.name);
+    if(!n) return;
+    if(byName.has(n)) byName.set(n, null);
+    else byName.set(n, s);
+  });
+
+  let repaired=0;
+  // A SNAPSHOT of the name map, because the remapping rewrites it as it
+  // goes. paymentAmounts and paymentMethods are keyed identically to
+  // payments, so without this the first store consumes each name and the
+  // others can no longer look theirs up — the payment would move and its
+  // amount would be left behind, which is worse than not moving at all.
+  const names=Object.assign({}, db.paymentStudentNames||{});
+  const liveNames=db.paymentStudentNames||{};
+
+  const remap=(store, describe)=>{
+    Object.keys(store||{}).forEach(key=>{
+      const cut=key.lastIndexOf('_');
+      if(cut<1) return;
+      const id=key.slice(0,cut), month=key.slice(cut+1);
+      if(liveIds.has(id)) return;                    // still valid
+      const who=byName.get(norm(names[key]));
+      if(!who) return;                               // unknown or ambiguous
+      const newKey=who.id+'_'+month;
+      if(newKey===key) return;
+      if(Object.prototype.hasOwnProperty.call(store, newKey)) return; // taken
+      store[newKey]=store[key];
+      delete store[key];
+      // Move the name onto the new key in the LIVE map (the snapshot keeps
+      // serving lookups for the remaining stores).
+      if(liveNames[key]!=null){ liveNames[newKey]=liveNames[key]; delete liveNames[key]; }
+      repaired++;
+      console.warn('Re-pointed '+describe+' '+key+' → '+newKey+' ('+(who.name||'?')+')');
+    });
+  };
+
+  remap(db.payments, 'payment');
+  remap(db.paymentAmounts, 'payment amount');
+  remap(db.paymentMethods, 'payment method');
+
+  if(repaired){
+    save();
+    if(typeof showToast==='function'){
+      showToast(repaired+' payment record(s) re-linked after an ID change');
+    }
+  }
+  return repaired;
 }
 
 function getStudentPlanAmount(student){
@@ -10322,6 +10401,99 @@ async function pushAllDataToCloud(alreadyConfirmed){
     if(r.ok) summary.practiceSessions++; else summary.failed++;
   }
 
+  // ── The collections this function used to forget ────────────────────
+  // Push to Cloud sent 9 of the app's 24 collections. Everything added
+  // since it was written — products, sales, the waiting list, payment
+  // amounts and the rest — was silently omitted, while the summary still
+  // said "complete". That is why a restore could report success and leave
+  // payment_amounts empty and the products gone.
+  //
+  // Each block is independently try/caught so one missing table can't
+  // abort the rest, and each reports its own count. A collection that
+  // pushes nothing now says so instead of being invisible.
+  const pushList = async (label, rows, table, conflictCol, toPayload) => {
+    const arr = Array.isArray(rows) ? rows : [];
+    summary[label] = 0;
+    if(!arr.length) return;
+    try{
+      for(const r of arr){
+        try{
+          const payload = toPayload(r);
+          if(!payload) continue;
+          const { error } = await window.supabaseClientV1
+            .from(table).upsert(payload, {onConflict: conflictCol});
+          if(error){ summary.failed++; console.warn(label+' push failed:', error.message); }
+          else summary[label]++;
+        }catch(rowErr){ summary.failed++; console.warn(label+' row failed:', rowErr.message); }
+      }
+    }catch(tableErr){
+      console.warn(label+' table unavailable:', tableErr.message);
+    }
+  };
+
+  setStatus('⏳ Pushing waiting list, products, sales and the rest...');
+
+  await pushList('waitingList', db.waitingList, 'waiting_list', 'entry_key', e=>({
+    entry_key:String(e.id), name:e.name||'', phone:e.phone||'', student_id:e.studentId||null,
+    instrument:e.instrument||'', days:e.days||[], day_group:e.dayGroup||null,
+    from_time:e.fromTime||null, to_time:e.toTime||null,
+    last_offered_at:e.lastOfferedAt||null, last_offered_slots:e.lastOfferedSlots||null,
+    notes:e.notes||'', added_at:e.addedAt||new Date().toISOString(), status:e.status||'waiting'
+  }));
+
+  await pushList('products', db.products, 'products', 'id', p=>({
+    id:String(p.id), name:p.name||'', cost:Number(p.cost)||0, price:Number(p.price)||0,
+    qty:Number(p.qty)||0,
+    low_stock_at:(p.lowStockAt==null||p.lowStockAt==='')?3:Number(p.lowStockAt)||0,
+    created_at:p.createdAt||new Date().toISOString()
+  }));
+
+  await pushList('sales', db.sales, 'sales', 'id', sa=>({
+    id:String(sa.id), product_id:sa.productId!=null?String(sa.productId):null,
+    product_name:sa.productName||'', qty:Number(sa.qty)||0,
+    unit_price:Number(sa.unitPrice)||0, unit_cost:Number(sa.unitCost)||0,
+    student_id:sa.studentId!=null?String(sa.studentId):null, student_name:sa.studentName||'',
+    month:sa.month||'', sale_date:sa.date||null, note:sa.note||''
+  }));
+
+  // Keyed "<studentId>_<YYYY-MM>". This is what keeps past months truthful
+  // — without it the app re-derives old revenue from today's plans.
+  await pushList('paymentAmounts', Object.keys(db.paymentAmounts||{}), 'payment_amounts', 'payment_key', k=>({
+    payment_key:String(k),
+    amount:Number((db.paymentAmounts||{})[k])||0,
+    student_name:(db.paymentStudentNames||{})[k]||''
+  }));
+
+  // Shapes below are taken from each table's OWN existing sync function,
+  // not guessed — a payload naming a column that doesn't exist fails the
+  // whole row, and that is precisely the silent-loss problem being fixed.
+  await pushList('otherRevenue', db.otherRevenue, 'other_revenue', 'id', r=>({
+    id:String(r.id), description:r.desc||'', amount:Number(r.amount)||0, month:r.month||''
+  }));
+
+  await pushList('refunds', db.refunds, 'refunds', 'id', r=>({
+    id:String(r.id), student_id:r.studentId, student_name:r.studentName||'',
+    amount:Number(r.amount)||0, reason:r.reason||'', refund_date:r.date||null,
+    month:r.month||'', processed_by:r.processedBy||null
+  }));
+
+  await pushList('notes', db.notes, 'notes', 'id', n=>({
+    id:n.id, text:n.text||'', created_at:n.createdAt||new Date().toISOString()
+  }));
+
+  // resources is deliberately absent: it lives in Supabase STORAGE, not a
+  // table. Files are uploaded when added and can't be re-sent from here.
+
+  await pushList('teacherAbsences', db.teacherAbsences, 'teacher_absences', 'absence_key', a=>({
+    absence_key:String(a.id), teacher:a.teacher||'', date:a.date||null,
+    scope:a.scope||'day', from_time:a.fromTime||null, to_time:a.toTime||null,
+    reason:a.reason||''
+  }));
+
+  await pushList('renewalsDismissed', Object.keys(db.renewalsDismissed||{}), 'renewals_dismissed', 'dismissal_key', k=>({
+    dismissal_key:String(k), dismissed_at:(db.renewalsDismissed||{})[k]||new Date().toISOString()
+  }));
+
   save();
   if(typeof stampLastSync==='function') stampLastSync('pushed to cloud');
   setStatus(summary.failed ? '⚠️ Push completed with '+summary.failed+' failure(s)' : '🟢 All data pushed to cloud');
@@ -10335,6 +10507,15 @@ async function pushAllDataToCloud(alreadyConfirmed){
     'Expenses: '+summary.expenses+'\n'+
     'Instruments: '+summary.instruments+'\n'+
     'Practice sessions: '+summary.practiceSessions+'\n'+
+    'Waiting list: '+(summary.waitingList||0)+'\n'+
+    'Products: '+(summary.products||0)+'\n'+
+    'Sales: '+(summary.sales||0)+'\n'+
+    'Payment amounts: '+(summary.paymentAmounts||0)+'\n'+
+    'Other revenue: '+(summary.otherRevenue||0)+'\n'+
+    'Refunds: '+(summary.refunds||0)+'\n'+
+    'Notes: '+(summary.notes||0)+'\n'+
+    'Teacher absences: '+(summary.teacherAbsences||0)+'\n'+
+    'Dismissed renewals: '+(summary.renewalsDismissed||0)+'\n'+
     (summary.failed ? '\n⚠️ '+summary.failed+' record(s) failed — check the browser console for details.' : '\nEverything currently in this browser now also exists in Supabase.')
   );
 }
@@ -12327,6 +12508,9 @@ function syncHealthClick(){
   updateSyncHealthBadge();
   if(typeof renderStaleDeviceBanner==='function') renderStaleDeviceBanner();
   // Once per load, after the roster is present.
+  // Before anything reads a payment: re-point any key left dangling by an
+  // ID change, so a restore can't make everyone look unpaid.
+  if(typeof repairDetachedPaymentKeys==='function') repairDetachedPaymentKeys();
   if(typeof autoArchiveRefundedStudents==='function') autoArchiveRefundedStudents();
   if(typeof announceWaitingMatchesOnce==='function') announceWaitingMatchesOnce();
 }
