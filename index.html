@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-271</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-272</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -8412,18 +8412,26 @@ function autoArchiveRefundedStudents(){
     if(!s.refundedMonth) return;
     if((s.status||'active')==='archived') return;
     if(String(s.refundedMonth)>=String(month)) return;     // still the refund month
-    if(db.payments && db.payments[s.id+'_'+month]) return;  // paid again — they're back
-    const hasUpcoming=(db.lessons||[]).some(l=>
-      lessonBelongsToStudent(l, s) &&
-      l.status==='scheduled' &&
-      (l.status_record||'active')!=='archived' &&
-      l.date && l.date>=todayKey
-    );
-    if(hasUpcoming) return;                                  // re-enrolled
+    // Paying again is the ONE reliable sign they came back — money changed
+    // hands for the new cycle.
+    if(db.payments && db.payments[s.id+'_'+month]) return;
+
+    // Lessons alone are NOT that sign, which is where this went wrong.
+    // Recording a refund clears their upcoming lessons; any that remain are
+    // usually ones the refund missed — a lesson added afterwards by mistake,
+    // or one whose link was broken at the time. Treating those as "they
+    // re-enrolled" meant the student was never archived AND the lessons were
+    // never cleared, so a refunded student stayed on the calendar
+    // indefinitely. That is the exact symptom.
+    //
+    // So: archive them, and clear whatever is left over. If they genuinely
+    // returned they will have paid, and the check above already caught that.
     s.status='archived';
     s.archivedAfterRefund=s.refundedMonth;
-    // Catches anything scheduled after the refund was recorded.
-    archiveUpcomingLessonsFor(s);
+    // Clears whatever the refund left behind. Attended and absent-paid
+    // sessions are never touched — the teacher taught them and was paid.
+    const cleared=archiveUpcomingLessonsFor(s);
+    if(cleared) console.warn('Archived '+(s.name||'?')+' after refund — cleared '+cleared+' leftover lesson(s).');
     s._localModifiedAt=Date.now();
     if(typeof syncStudentUpdateToSupabase==='function'){ try{ syncStudentUpdateToSupabase(s); }catch(_){} }
     archived++;
