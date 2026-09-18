@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-272</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-274</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -6559,6 +6559,15 @@ function editLesson(id){
      </div>
    </div>
    <small>Changing the time here only affects this one session.</small>
+   ${l.isDoubleSession ? `
+   <div style="border-top:1px solid var(--border);margin:14px 0 10px"></div>
+   <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">
+     This is a <b>double session</b> — 90 minutes, covering ${Number(l.makeupCreditsDue)||1} make-up${(Number(l.makeupCreditsDue)||1)===1?'':'s'}.
+     ${(l.status==='attended'||l.status==='absent_paid') ? 'It has been attended, so the credit was used — undoing gives it back.' : 'Not attended yet, so no credit has been used.'}
+   </div>
+   <button class="btn" style="width:100%" onclick="undoDoubleSession('${escapeAttr(String(l.id))}')">
+     ↩ Make it a single session again<div style="font-size:11px;opacity:0.75;font-weight:400">Returns the make-up credit and keeps the lesson where it is</div>
+   </button>` : ''}
    <div style="text-align:right;margin-top:14px"><button class="btn btn-gold" onclick="saveEditLesson(${l.id})">Save Lesson</button></div>`);
 }
 
@@ -13290,6 +13299,31 @@ async function deleteTeacherProfileFromSupabase(profile){
 
 <script>
 // Phase 7.1 - Lesson Insert Sync
+// Removes a lesson from the cloud.
+//
+// Two places called this behind a typeof guard and it had never been
+// written, so both silently did nothing: re-applying a freeze, and the
+// absorbed lesson when a make-up becomes a double session. The lesson
+// disappeared locally and came back on the next download — for the
+// make-up case, double-booking the student against themselves again.
+//
+// Deletes the lesson's LOGS too, matching deleteLesson(): lesson logs
+// merge-preserve on download, so a stale cloud log would otherwise
+// reappear attached to nothing.
+async function deleteLessonFromSupabase(lessonId){
+  try{
+    if(!window.supabaseClientV1 || lessonId==null) return;
+    const { error } = await window.supabaseClientV1
+      .from('lessons').delete().eq('id', lessonId);
+    if(error) console.warn('Lesson delete sync failed:', error.message);
+    const { error: logErr } = await window.supabaseClientV1
+      .from('lesson_updates').delete().eq('lesson_id', lessonId);
+    if(logErr) console.warn('Lesson-log delete sync failed:', logErr.message);
+  }catch(err){
+    console.warn('Lesson delete sync failed:', err.message);
+  }
+}
+
 async function syncLessonToSupabase(lesson){
  try{
    if(!window.supabaseClientV1) return;
@@ -15847,7 +15881,17 @@ function openTeacherStudentWorkspace(studentId){
   const student=(db.students||[]).find(s=>String(s.id)===String(studentId) || String(s.public_id||'')===String(studentId));
   const host=document.getElementById('teacher-student-workspace');
   if(!student || !host) return;
-  const studentLogs=(db.lessonLogs||[]).map(log=>normalizeLessonLog(log,db.lessons.find(l=>l.id==log.lessonId))).filter(log=>String(log.studentId)===String(student.id) || log.studentName===student.name).sort((a,b)=>String(b.lessonDate||'').localeCompare(String(a.lessonDate||'')));
+  // Matched by ID alone. The old `id OR name` form attached one student's
+  // logs to another with the same name — which is not hypothetical here:
+  // Layana Ahmed and Youssef Bakry each have two course records, so every
+  // log of one course showed on the other's profile too. A log with no
+  // studentId still falls back to the name, since there is nothing else
+  // to match it on.
+  const studentLogs=(db.lessonLogs||[]).map(log=>normalizeLessonLog(log,db.lessons.find(l=>l.id==log.lessonId))).filter(log=>
+    (log.studentId!=null && log.studentId!=='')
+      ? String(log.studentId)===String(student.id)
+      : log.studentName===student.name
+  ).sort((a,b)=>String(b.lessonDate||'').localeCompare(String(a.lessonDate||'')));
   const attended=studentLogs.filter(l=>l.attendance==='attended').length;
   const absentPaid=studentLogs.filter(l=>l.attendance==='absent_paid').length;
   const excused=studentLogs.filter(l=>l.attendance==='absent_excused').length;
@@ -16047,7 +16091,11 @@ function openAdminStudentProfile(studentId,studentName){
 
   const studentLogs=(db.lessonLogs||[])
     .map(log=>normalizeLessonLog(log,db.lessons.find(l=>l.id==log.lessonId)))
-    .filter(log=>String(log.studentId)===String(student.id) || log.studentName===student.name)
+    // ID-first, same reasoning as above — a name match would pull in the
+    // other course of a two-course student.
+    .filter(log=>(log.studentId!=null && log.studentId!=='')
+      ? String(log.studentId)===String(student.id)
+      : log.studentName===student.name)
     .sort((a,b)=>String(b.lessonDate||'').localeCompare(String(a.lessonDate||'')));
   const attended=studentLogs.filter(l=>l.attendance==='attended').length;
   const absentPaid=studentLogs.filter(l=>l.attendance==='absent_paid').length;
@@ -20544,6 +20592,84 @@ function resolveShiftedBookableTime(date, nominalTime, durationMinutes, teacherN
     return t;
   }
   return null;
+}
+
+// Turns a double session back into an ordinary one, and hands the
+// make-up credits back.
+//
+// A double session is three things at once: a 90-minute booking, a link to
+// the lesson it makes up, and a claim on 1 or 2 owed credits. Undoing it
+// means reversing all three — clearing the flags alone would leave the
+// original lesson marked resolved and the credit gone for good.
+//
+// Which credits come back depends on WHEN this is undone:
+//   before it was attended — the credit was never consumed, so there is
+//     nothing to return; just unlink it
+//   after it was attended  — the credit WAS consumed, so the lessons it
+//     resolved are marked owed again
+function canUndoDoubleSession(lessonId){
+  const l=(db.lessons||[]).find(x=>String(x.id)===String(lessonId));
+  return !!(l && l.isDoubleSession);
+}
+
+function undoDoubleSession(lessonId){
+  const l=(db.lessons||[]).find(x=>String(x.id)===String(lessonId));
+  if(!l || !l.isDoubleSession){ showToast('That lesson is not a double session.'); return; }
+
+  const student=(typeof resolveLessonStudent==='function') ? resolveLessonStudent(l)
+              : (db.students||[]).find(s=>lessonBelongsToStudent(l, s));
+  const due=Number(l.makeupCreditsDue)||1;
+  const wasAttended = l.status==='attended' || l.status==='absent_paid';
+
+  // The lessons this booking resolved — only meaningful if it was attended,
+  // since resolution happens on attendance.
+  let toReopen=[];
+  if(wasAttended && student){
+    const original=(db.lessons||[]).find(x=>String(x.id)===String(l.makeupForLessonId));
+    const owed=(db.lessons||[]).filter(x=>
+      lessonBelongsToStudent(x, student) &&
+      x.makeupResolved===true &&
+      (x.status==='absent_excused' || x.status==='teacher_absent') &&
+      (x.status_record||'active')!=='archived'
+    ).sort((a,b)=>String(b.date||'').localeCompare(String(a.date||'')));
+    // Prefer the lesson it was explicitly booked for, then the most
+    // recently resolved, up to however many credits it claimed.
+    if(original && original.makeupResolved) toReopen.push(original);
+    owed.forEach(x=>{
+      if(toReopen.length>=due) return;
+      if(original && String(x.id)===String(original.id)) return;
+      toReopen.push(x);
+    });
+    toReopen=toReopen.slice(0, due);
+  }
+
+  const msg='Turn this back into a single 45-minute session?\n\n'+
+    (wasAttended
+      ? toReopen.length+' make-up credit'+(toReopen.length===1?'':'s')+' will be given back to '+((student&&student.name)||'the student')+'.'
+      : 'It was not attended yet, so no credit had been used — the link is simply removed.')+
+    '\n\nThe lesson stays on the calendar at its current time, as a normal session.';
+  if(!confirm(msg)) return;
+
+  toReopen.forEach(x=>{
+    x.makeupResolved=false;
+    if(typeof syncLessonUpdateToSupabase==='function'){ try{ syncLessonUpdateToSupabase(x); }catch(_){} }
+  });
+
+  l.isDoubleSession=false;
+  l.isExtendedDuration=false;
+  l.makeupForLessonId=null;
+  l.makeupCreditsDue=null;
+  // A hand-placed time stays deliberate, so the "left at an old time slot"
+  // repair doesn't later offer to drag it back to their regular slot.
+  l.timeOverridden=true;
+  if(typeof syncLessonUpdateToSupabase==='function'){ try{ syncLessonUpdateToSupabase(l); }catch(_){} }
+
+  save();
+  ['renderLessons','renderCalendarPage','renderOverview','renderReports','renderStudents']
+    .forEach(fn=>{ if(typeof window[fn]==='function'){ try{ window[fn](); }catch(_){} } });
+  showToast(toReopen.length
+    ? 'Back to a single session — '+toReopen.length+' make-up credit'+(toReopen.length===1?'':'s')+' returned'
+    : 'Back to a single session');
 }
 
 // --- Cascade: resolving a makeup automatically clears the original missed lesson ---
