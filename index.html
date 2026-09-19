@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-276</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-278</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1852,6 +1852,31 @@ function askExtraLessonCharge(studentName, onDone){
     closeModal();
     onDone({charge, paid});
   };
+}
+
+// Every extra charge in a month, across all students, split by whether it
+// has been paid.
+//
+// These are real income — a session charged on top of a plan — but they
+// were only ever shown on the student's own row. Nothing added them to
+// collected revenue, net profit or outstanding fees, so the money existed
+// on screen and nowhere in the accounts.
+//
+// Counted from the LESSON, so anything recorded before this existed is
+// included automatically; there is nothing to migrate.
+function monthExtraCharges(monthKey){
+  const m=monthKey||currentMonth();
+  let paid=0, unpaid=0, count=0;
+  (db.lessons||[]).forEach(l=>{
+    const fee=Number(l.extraCharge);
+    if(!(fee>0)) return;
+    if((l.status_record||'active')==='archived') return;
+    const lm=String(l.month || l.date || '').slice(0,7);
+    if(lm!==String(m)) return;
+    count++;
+    if(l.unpaid) unpaid+=fee; else paid+=fee;
+  });
+  return {paid, unpaid, total:paid+unpaid, count};
 }
 
 function studentExtraCharges(student, monthKey){
@@ -5080,7 +5105,11 @@ function renderOverview(){
   const productStats=(typeof productSoldStats==='function') ? productSoldStats(month) : {revenue:0, cost:0};
   const totalProductRevenue=productStats.revenue||0;
   const totalProductCost=productStats.cost||0;
-  const netProfit=collected+totalOtherRevenue+totalProductRevenue-totalTeacher-totalExp-totalProductCost-totalRefunds;
+  // Extra sessions charged on top of a plan. Paid ones are income; unpaid
+  // ones are owed. Shown as their own tiles rather than folded into the
+  // plan figures, so a total always says what it is made of.
+  const extras=(typeof monthExtraCharges==='function') ? monthExtraCharges(month) : {paid:0, unpaid:0, total:0, count:0};
+  const netProfit=collected+totalOtherRevenue+totalProductRevenue+extras.paid-totalTeacher-totalExp-totalProductCost-totalRefunds;
   const totalLiabilities=pendingTeacher+totalExp+outstanding;
 
   // Profit banner
@@ -14169,7 +14198,7 @@ window.addEventListener('load', function(){
 
    metrics.innerHTML += `
    <div class="metric green"><div class="metric-label">Revenue Collected</div><div class="metric-value green">${egp(collected)}</div></div>
-   <div class="metric amber"><div class="metric-label">Outstanding Fees</div><div class="metric-value amber">${egp(outstanding)}</div></div>
+   <div class="metric amber" title="Plan fees not yet paid this month, plus any unpaid extra sessions"><div class="metric-label">Outstanding Fees</div><div class="metric-value amber">${egp(outstanding + ((typeof monthExtraCharges==='function') ? monthExtraCharges(month).unpaid : 0))}</div></div>
    <div class="metric"><div class="metric-label">Expected Revenue</div><div class="metric-value">${egp(expectedRevenue)}</div></div>
    <div class="metric green"><div class="metric-label">Collection Rate</div><div class="metric-value green">${collectionRate}%</div></div>
    <div class="metric"><div class="metric-label">Paid Students</div><div class="metric-value">${paidCount}</div></div>`;
@@ -14370,6 +14399,11 @@ window.addEventListener('load', function(){
    if(metrics) metrics.innerHTML=`
    <div class="metric green"><div class="metric-label">Revenue Collected</div><div class="metric-value green">${egp(collected)}</div></div>
    <div class="metric green"><div class="metric-label">Other Revenue</div><div class="metric-value green">${egp(totalOtherRevenue)}</div></div>
+   <!-- Extra sessions charged on top of a plan. Paid ones are income;
+        unpaid ones are owed. Their own tile rather than folded into the
+        plan figures, so a total always says what it is made of. -->
+   ${(typeof monthExtraCharges==='function' && monthExtraCharges(month).total) ? `
+   <div class="metric green" title="${escapeAttr(monthExtraCharges(month).count+' extra session(s) charged on top of a plan this month')}"><div class="metric-label">Extra Sessions</div><div class="metric-value green">${egp(monthExtraCharges(month).paid)}${monthExtraCharges(month).unpaid?` <span style="font-size:12px;color:#e06c6c">+${egp(monthExtraCharges(month).unpaid)} unpaid</span>`:''}</div></div>` : ''}
    ${prodStats.revenue||prodStats.cost ? `
    <div class="metric green"><div class="metric-label">Product Sales</div><div class="metric-value green">${egp(prodStats.revenue||0)}</div></div>
    <div class="metric red"><div class="metric-label">Cost of Goods</div><div class="metric-value red">${egp(prodStats.cost||0)}</div></div>` : ''}
