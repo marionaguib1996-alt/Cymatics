@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-274</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-275</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1171,6 +1171,15 @@ input::placeholder{color:var(--text-dim)}
 </div>
 
 <div id="page-cloud" class="page">
+  <!-- First on the page, deliberately. This is the tool you reach for ON
+       a phone that is showing old data, and it used to sit below a dozen
+       repair tools — far enough down that it simply wasn't found. -->
+  <div class="card" style="border-color:var(--gold)">
+    <div class="card-title" style="margin-bottom:10px">☁️ Use Cloud Data Only</div>
+    <small style="display:block;margin-bottom:10px;color:var(--text-muted)">Replaces <b>this device's</b> data with the cloud copy. Use it first on any phone or laptop that opens showing old or unexpected students. <b>Do this instead of clearing site data</b> — clearing also wipes the record of what this device already knows, so the next sync treats its leftovers as brand-new and uploads them. Nothing in the cloud changes, and other devices are unaffected.</small>
+    <button class="btn btn-gold" style="width:100%" onclick="useCloudDataOnly()">Replace this device's data with the cloud</button>
+  </div>
+
   <div class="card">
     <div class="card-title">Cloud Migration</div>
     <p style="margin-bottom:12px">Configure your Supabase credentials in this file, then use the tools below.</p>
@@ -1307,9 +1316,6 @@ input::placeholder{color:var(--text-dim)}
     <div id="unlinked-courses-results" style="margin-top:14px"></div>
 
     <div style="border-top:1px solid var(--border);margin:20px 0 16px;"></div>
-    <div class="card-title" style="margin-bottom:10px">Use Cloud Data Only (fix an out-of-date device)</div>
-    <small style="display:block;margin-bottom:8px;color:var(--text-muted)">Replaces <b>this device's</b> data with the cloud copy. Use it on a phone or laptop that opens showing old students. <b>Do this instead of clearing site data</b> — clearing also wipes the record of what this device knows, so the next sync treats its leftovers as new students and uploads them, recreating the old roster as duplicates. Nothing in the cloud changes and other devices are unaffected.</small>
-    <button class="btn" onclick="useCloudDataOnly()">☁️ Replace this device's data with the cloud</button>
 
     <div style="border-top:2px solid var(--gold);margin:24px 0 16px;"></div>
     <div class="card-title" style="margin-bottom:4px">Post-Reset Cleanup</div>
