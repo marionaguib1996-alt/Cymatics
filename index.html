@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-275</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-276</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -8425,7 +8425,26 @@ function autoArchiveRefundedStudents(){
   let archived=0;
   (db.students||[]).forEach(s=>{
     if(!s.refundedMonth) return;
-    if((s.status||'active')==='archived') return;
+    // An ALREADY-archived student still gets their leftover lessons
+    // cleared. The old early return meant anyone archived by another
+    // route — manually, or by a refund recorded before this cleanup
+    // existed — kept their upcoming lessons forever: the student was
+    // gone from the roster while their sessions stayed on the calendar
+    // and in payroll. That is the reported symptom.
+    if((s.status||'active')==='archived'){
+      if(typeof archiveUpcomingLessonsFor==='function'){
+        const late=archiveUpcomingLessonsFor(s);
+        if(late){
+          archived+=0; // not a new archive — just a cleanup
+          save();
+          console.warn('Cleared '+late+' leftover lesson(s) for already-archived '+(s.name||'?')+'.');
+          if(typeof showToast==='function'){
+            showToast('Cleared '+late+' leftover lesson(s) for '+(s.name||'a refunded student'));
+          }
+        }
+      }
+      return;
+    }
     if(String(s.refundedMonth)>=String(month)) return;     // still the refund month
     // Paying again is the ONE reliable sign they came back — money changed
     // hands for the new cycle.
