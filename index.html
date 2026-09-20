@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-287</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-288</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -15920,6 +15920,29 @@ async function syncLessonLogToSupabase(log){
       homework_status: log.homeworkStatus||'',
       homework_due_date: log.homeworkDueDate||null
     };
+    // NEVER upload a log with nothing written in it.
+    //
+    // The upsert conflicts on lesson_id, so an empty placeholder — the one
+    // the app creates automatically whenever a lesson is marked attended —
+    // OVERWRITES whatever is already in the cloud for that lesson. A
+    // teacher would write their notes, someone would mark another lesson
+    // attended, and the placeholder would erase their work with blanks.
+    // That is why Ayman's cloud rows exist and are all empty.
+    //
+    // A blank log carries no information, so there is nothing to lose by
+    // not sending it: the row will be created the moment anyone writes
+    // something real.
+    const hasAnythingWritten =
+      ['topicCovered','teacherNotes','lessonNotes','nextLessonGoal','nextLessonFocus','homework']
+        .some(k=>String(log[k]||'').trim().length>0)
+      || (log.performanceRating!=null && log.performanceRating!=='')
+      || (log.performance && log.performance.rating!=null)
+      || (Array.isArray(log.repertoire) && log.repertoire.length>0)
+      || String(log.homeworkStatus||'').trim().length>0;
+    if(!hasAnythingWritten){
+      return;   // nothing to save, and sending it would destroy what is there
+    }
+
     const {error}=await window.supabaseClientV1.from('lesson_updates')
       .upsert(payload, {onConflict:'lesson_id'});
     if(error){
@@ -16611,10 +16634,15 @@ window.applyMergeDuplicateLogs=function(){
     if(typeof logRecordDeletion==='function'){
       try{ logRecordDeletion('lessonLog', l, 'duplicate log merged'); }catch(_){}
     }
-    // Remove the cloud row too, or the next download brings it back.
-    if(window.supabaseClientV1 && l.id!=null){
+    // Remove the cloud row too, or the next download brings it back — but
+    // ONLY for a numeric id. A local-only log has a UUID or a Date.now()
+    // string that the cloud has never seen, and asking Postgres to delete
+    // a bigint column by UUID is a guaranteed 400 that fills the sync log
+    // with failures for rows that were never there.
+    const numericId = (l.id!=null && /^[0-9]+$/.test(String(l.id))) ? l.id : null;
+    if(window.supabaseClientV1 && numericId!=null){
       try{
-        window.supabaseClientV1.from('lesson_updates').delete().eq('id', l.id)
+        window.supabaseClientV1.from('lesson_updates').delete().eq('id', numericId)
           .then(({error})=>{ if(error) console.warn('Duplicate log cloud delete failed:', error.message); });
       }catch(_){}
     }
