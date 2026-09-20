@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-283</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-285</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1056,6 +1056,12 @@ input::placeholder{color:var(--text-dim)}
 <div class="card">
   <div class="card-title">Homework Analytics</div>
   <div id="homework-analytics" class="metric-grid"></div>
+</div>
+
+<div class="card">
+  <div class="card-title">Lesson Log Coverage <small style="text-transform:none;letter-spacing:normal;font-weight:400;color:var(--text-muted)">— are teachers' logs actually being saved?</small></div>
+  <small style="display:block;margin-bottom:10px;color:var(--text-muted)">Counts only <b>attended</b> lessons, since those are the ones with something to write about. A log that exists but is empty counts as <b>blank</b> — the record saved, but nothing was written in it. Click a teacher to see exactly which lessons are missing a log.</small>
+  <div id="log-coverage"></div>
 </div>
 
   <div class="report-section-header">📤 Export</div>
@@ -16289,6 +16295,195 @@ function exportHomeworkCSV(){
 
 // Extend Reports with Homework Analytics (follows existing renderReports wrap pattern)
 (function(){
+// Lesson log coverage — whether teachers' logs are actually being saved.
+//
+// Existing analytics measure whether STUDENTS complete homework. This
+// measures whether TEACHERS are recording anything at all, which is a
+// different question and the one that goes unnoticed: a log that silently
+// fails to save looks exactly like a teacher who forgot, and nobody finds
+// out until someone asks for a student's history.
+//
+// Only ATTENDED lessons count. A teacher-absent or excused lesson has
+// nothing to write about, so counting it against a teacher would be unfair
+// and would bury the real gaps in noise.
+//
+// Three states, not two:
+//   logged — a log exists with something written in it
+//   blank  — a log record exists but every content field is empty
+//   missing— no log at all
+// "Blank" is the interesting one: the save worked, so it points at habit
+// rather than a technical fault.
+function lessonLogCoverage(monthKey){
+  const m=monthKey||currentMonth();
+  const logsByLesson=new Map();
+  (db.lessonLogs||[]).forEach(lg=>{ if(lg && lg.lessonId!=null) logsByLesson.set(String(lg.lessonId), lg); });
+
+  const hasContent=lg=>{
+    if(!lg) return false;
+    return ['lessonNotes','topicCovered','homework','repertoire','nextLessonFocus',
+            'nextLessonGoal','teacherNotes','performance']
+      .some(k=>String(lg[k]||'').trim().length>0);
+  };
+
+  const rows=new Map();
+  (db.lessons||[]).forEach(l=>{
+    if((l.status_record||'active')==='archived') return;
+    if(l.status!=='attended') return;
+    const lm=String(l.month || l.date || '').slice(0,7);
+    if(lm!==String(m)) return;
+    const t=l.teacher||'(no teacher)';
+    if(!rows.has(t)) rows.set(t, {teacher:t, taught:0, logged:0, blank:0, missing:[], lastLogged:null});
+    const r=rows.get(t);
+    r.taught++;
+    const lg=logsByLesson.get(String(l.id));
+    if(!lg){ r.missing.push(l); return; }
+    if(hasContent(lg)){
+      r.logged++;
+      const when=lg.createdAt||l.date;
+      if(when && (!r.lastLogged || String(when)>String(r.lastLogged))) r.lastLogged=when;
+    } else {
+      r.blank++;
+      r.missing.push(l);
+    }
+  });
+
+  return [...rows.values()].map(r=>{
+    r.coverage = r.taught ? Math.round((r.logged/r.taught)*100) : 0;
+    return r;
+  }).sort((a,b)=>a.coverage-b.coverage);   // worst first — that is the point
+}
+
+function renderLogCoverage(){
+  const el=document.getElementById('log-coverage');
+  if(!el) return;
+  const month=currentMonth();
+  const rows=lessonLogCoverage(month);
+  if(!rows.length){
+    el.innerHTML='<div style="color:var(--text-muted);font-size:13px">No attended lessons this month yet.</div>';
+    return;
+  }
+  const ago=iso=>{
+    if(!iso) return 'never';
+    const d=Math.floor((Date.now()-new Date(iso).getTime())/86400000);
+    if(d<=0) return 'today';
+    if(d===1) return 'yesterday';
+    return d+' days ago';
+  };
+  el.innerHTML=`<table><thead><tr>
+      <th>Teacher</th><th>Attended</th><th>Logged</th><th>Blank</th><th>Coverage</th><th>Last written</th><th></th>
+    </tr></thead><tbody>`
+    + rows.map(r=>{
+        const colour = r.coverage>=90 ? 'var(--success,#4caf50)' : (r.coverage>=60 ? 'var(--gold)' : '#e06c6c');
+        return `<tr>
+          <td><b>${escapeHtml(r.teacher)}</b></td>
+          <td>${r.taught}</td>
+          <td>${r.logged}</td>
+          <td>${r.blank ? `<span style="color:var(--gold)">${r.blank}</span>` : '0'}</td>
+          <td style="color:${colour};font-weight:700">${r.coverage}%</td>
+          <td style="color:var(--text-muted)">${escapeHtml(ago(r.lastLogged))}</td>
+          <td style="white-space:nowrap">
+            <button class="btn btn-sm" onclick="showTeacherLogs('${jsString(r.teacher)}')" title="Read what was actually written">📖 Read logs</button>
+            ${r.missing.length ? `<button class="btn btn-sm" onclick="showMissingLogs('${jsString(r.teacher)}')">${r.missing.length} gap${r.missing.length===1?'':'s'}</button>` : ''}
+          </td>
+        </tr>`;
+      }).join('')
+    + '</tbody></table>';
+}
+
+// The specific lessons with no log, so a conversation can be "these four"
+// rather than "please log more".
+// Reads the actual content of a teacher's logs for the month.
+//
+// Coverage answers "did they write one?"; this answers "is what they wrote
+// any good?" — the question that decides whether a student's history is
+// worth anything. It also surfaces a log that saved but came out empty,
+// which looks identical to a forgotten one until you open it.
+function showTeacherLogs(teacherName){
+  const month=currentMonth();
+  const logsByLesson=new Map();
+  (db.lessonLogs||[]).forEach(lg=>{ if(lg && lg.lessonId!=null) logsByLesson.set(String(lg.lessonId), lg); });
+
+  const lessons=(db.lessons||[]).filter(l=>
+    (l.teacher||'')===teacherName &&
+    l.status==='attended' &&
+    (l.status_record||'active')!=='archived' &&
+    String(l.month || l.date || '').slice(0,7)===String(month)
+  ).sort((a,b)=>String(b.date||'').localeCompare(String(a.date||'')));
+
+  if(!lessons.length){
+    showToast('No attended lessons for '+teacherName+' this month.');
+    return;
+  }
+
+  // Only the fields a teacher actually fills in, labelled as they appear
+  // to them — an admin reading this shouldn't have to decode field names.
+  const FIELDS=[
+    ['topicCovered','Topic covered'],
+    ['lessonNotes','Lesson notes'],
+    ['repertoire','Repertoire'],
+    ['performance','Performance'],
+    ['homework','Homework set'],
+    ['nextLessonFocus','Next lesson focus'],
+    ['nextLessonGoal','Next lesson goal'],
+    ['teacherNotes','Teacher notes']
+  ];
+
+  const body=lessons.map(l=>{
+    const lg=logsByLesson.get(String(l.id));
+    const filled=lg ? FIELDS.filter(([k])=>String(lg[k]||'').trim().length>0) : [];
+    let inner;
+    if(!lg){
+      inner='<div style="color:#e06c6c;font-size:12px">No log written for this lesson.</div>';
+    } else if(!filled.length){
+      inner='<div style="color:var(--gold);font-size:12px">A log was saved, but every field is empty.</div>';
+    } else {
+      inner=filled.map(([k,label])=>
+        `<div style="margin-top:6px"><span style="color:var(--text-muted);font-size:11px">${escapeHtml(label)}</span>`
+        +`<div style="font-size:13px;white-space:pre-wrap">${escapeHtml(String(lg[k]))}</div></div>`
+      ).join('');
+      if(lg.homework && lg.homeworkCompleted){
+        inner+='<div style="margin-top:6px"><span class="badge badge-green" style="font-size:10px">homework marked done</span></div>';
+      }
+    }
+    return `<div style="padding:10px 0;border-bottom:1px solid var(--border)">
+      <div style="font-weight:700;font-size:13px">${escapeHtml(formatLedgerDate(l.date))} ${escapeHtml(formatTime12h(l.time||''))}
+        — ${escapeHtml(l.student||'?')}
+        <span style="color:var(--text-muted);font-weight:400">${escapeHtml(l.instrument||'')}</span></div>
+      ${inner}
+    </div>`;
+  }).join('');
+
+  const written=lessons.filter(l=>{
+    const lg=logsByLesson.get(String(l.id));
+    return lg && FIELDS.some(([k])=>String(lg[k]||'').trim().length>0);
+  }).length;
+
+  openModal('Lesson logs — '+escapeHtml(teacherName), `
+    <div style="margin-bottom:10px;color:var(--text-muted)">${written} of ${lessons.length} attended lessons this month have something written. Newest first.</div>
+    <div style="max-height:420px;overflow-y:auto">${body}</div>
+  `);
+}
+
+function showMissingLogs(teacherName){
+  const row=lessonLogCoverage(currentMonth()).find(r=>r.teacher===teacherName);
+  if(!row || !row.missing.length){ showToast('Nothing missing for '+teacherName); return; }
+  const logsByLesson=new Map();
+  (db.lessonLogs||[]).forEach(lg=>{ if(lg && lg.lessonId!=null) logsByLesson.set(String(lg.lessonId), lg); });
+  openModal('Missing logs — '+escapeHtml(teacherName), `
+    <div style="margin-bottom:10px;color:var(--text-muted)">Attended lessons this month with no log, or with a log that was saved empty.</div>
+    <div style="max-height:320px;overflow-y:auto">
+      ${row.missing.sort((a,b)=>String(a.date).localeCompare(String(b.date))).map(l=>{
+        const blank=logsByLesson.has(String(l.id));
+        return `<div style="padding:6px 0;border-bottom:1px solid var(--border);font-size:13px">
+          ${escapeHtml(formatLedgerDate(l.date))} ${escapeHtml(formatTime12h(l.time||''))}
+          — <b>${escapeHtml(l.student||'?')}</b>
+          <span style="color:var(--text-muted)">${escapeHtml(l.instrument||'')}</span>
+          ${blank ? '<span class="badge badge-amber" style="font-size:10px">saved but empty</span>' : '<span class="badge badge-red" style="font-size:10px">no log</span>'}
+        </div>`;
+      }).join('')}
+    </div>`);
+}
+
   const oldRenderReportsHomework = renderReports;
   renderReports = function(){
     if(oldRenderReportsHomework) oldRenderReportsHomework();
@@ -16305,6 +16500,9 @@ function exportHomeworkCSV(){
       <div class="metric green"><div class="metric-label">Completed</div><div class="metric-value green">${completed}</div></div>
       <div class="metric green"><div class="metric-label">Completion Rate</div><div class="metric-value green">${rate}%</div></div>`;
     }
+    // Rendered alongside the homework tiles, but outside the `if (el)` —
+    // it has its own container and shouldn't depend on that one existing.
+    if(typeof renderLogCoverage==='function') renderLogCoverage();
   };
 })();
 
