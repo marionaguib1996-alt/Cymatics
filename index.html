@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-279</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-280</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -19159,9 +19159,31 @@ function renderFreeSlotsOverview(){
       const dateThisWeek=(typeof addDaysToDateStringLocal==='function') ? addDaysToDateStringLocal(weekStart, offsetFromFriday) : null;
       const dayAlreadyPassed = dateThisWeek ? (dateThisWeek<todayKey) : false;
 
-      const times=getEffectiveTeacherDaySlots(t.name, dayName, null)
-        .filter(s=>!s.occupiedBy)
-        .map(s=>s.time)
+      // A free slot is only worth offering if it sits CLOSE to something
+      // the teacher is already doing that day. Booking an isolated slot
+      // with a 90-minute hole either side means the teacher comes in for
+      // one lesson, or waits around between two — so those are left out.
+      //
+      // "Close" means adjacent or with a single empty slot between, which
+      // is the most a reasonable gap can be. Measured against the day's
+      // own slot grid rather than in minutes, so it holds whatever the
+      // session length is.
+      //
+      // A teacher with NO lessons that day is exempt: there is nothing to
+      // be near, and excluding an empty day would make it unbookable
+      // forever.
+      const daySlotGrid=getEffectiveTeacherDaySlots(t.name, dayName, null);
+      const busyIdx=daySlotGrid.map((sl,i)=>sl.occupiedBy?i:-1).filter(i=>i>=0);
+      const nearSomething=(idx)=>{
+        if(!busyIdx.length) return true;               // empty day — all fine
+        return busyIdx.some(b=>Math.abs(b-idx)<=2);    // adjacent, or one gap
+      };
+
+      const times=daySlotGrid
+        .map((sl,i)=>({sl, i}))
+        .filter(({sl})=>!sl.occupiedBy)
+        .filter(({i})=>nearSomething(i))
+        .map(({sl})=>sl.time)
         .filter(time=>{
           if(dayAlreadyPassed) return true; // day's already passed this week — genuinely free
           if(pendingRenewalStudentForSlot(t.name, dayName, time)) return false; // reserved for a pending renewal
