@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-278</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-279</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -11043,6 +11043,16 @@ function editProfile(i){
      ${dayOptions.map(d=>`<option value="${d}" ${currentDays.includes(d)?'selected':''}>${d}</option>`).join('')}
    </select>
    <small>Hold Ctrl/Cmd to select multiple days</small>
+
+   <p style="margin-top:14px"><strong>Not Taking New Students</strong></p>
+   <small style="display:block;margin-bottom:6px;color:var(--text-muted)">Tick a day to stop that day being offered when adding a NEW student — in Add Student, renewals, make-ups, the calendar and waiting-list matches alike. Existing students can still be moved into those slots, and nothing already booked changes. Untick to reopen.</small>
+   <div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:4px">
+     ${dayOptions.map(d=>`<label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-weight:normal">
+       <input type="checkbox" class="ep-closed-day" value="${escapeAttr(d)}" style="width:auto" ${(Array.isArray(p.closedDays)&&p.closedDays.includes(d))?'checked':''}>
+       <span>${escapeHtml(d.slice(0,3))}</span>
+     </label>`).join('')}
+   </div>
+
    <p style="margin-top:14px"><strong>Time Slots Per Day</strong></p>
    <small>Generated from academy working hours in 45-minute sessions. Hold Ctrl/Cmd to select multiple slots per day. Only available days show slot pickers.</small>
    <div id="ep-timeslots-container" class="teacher-log-grid" style="margin-top:8px">
@@ -11073,6 +11083,10 @@ function saveEditProfile(i){
  p.rate=Number(document.getElementById('ep-rate')?.value)||0;
  p.instruments=[...(document.getElementById('ep-inst')?.selectedOptions||[])].map(o=>o.value);
  p.days=[...(document.getElementById('ep-days')?.selectedOptions||[])].map(o=>o.value);
+ // Days this teacher is closed to NEW students. Read from the form every
+ // time, so unticking a day genuinely reopens it rather than leaving a
+ // stale entry behind.
+ p.closedDays=[...document.querySelectorAll('.ep-closed-day')].filter(c=>c.checked).map(c=>c.value);
  p.timeSlots=readTimeSlotMultiSelect('ep-slots');
 
  // If the teacher's name actually changed, cascade it everywhere a teacher
@@ -13155,6 +13169,10 @@ async function syncTeacherToSupabase(profile){
       // would silently be repriced at the new rate, restating payslips
       // that have already been handed over.
       rate_history: Array.isArray(profile.rateHistory) ? profile.rateHistory : [],
+      // Which days this teacher is closed to new students. Without this in
+      // the cloud the setting lives on one device, and every other one keeps
+      // offering slots you have deliberately closed.
+      closed_days: Array.isArray(profile.closedDays) ? profile.closedDays : [],
       instruments: profile.instruments || [],
       available_days: profile.days || profile.available_days || [],
       time_slots: profile.timeSlots || {}
@@ -13260,6 +13278,7 @@ window.downloadCloud = async function(){
         // Read the rate history back, falling back to whatever this device
         // already had so a cloud row predating the column doesn't wipe it.
         rateHistory: Array.isArray(t.rate_history) ? t.rate_history : (existing?.rateHistory||[]),
+        closedDays: Array.isArray(t.closed_days) ? t.closed_days : (existing?.closedDays||[]),
         instruments: t.instruments || [],
         days: t.available_days || [],
         timeSlots: (t.time_slots && Object.keys(t.time_slots).length) ? t.time_slots : (existing?.timeSlots||{}),
@@ -13298,6 +13317,10 @@ async function syncTeacherUpdateToSupabase(profile){
       // would silently be repriced at the new rate, restating payslips
       // that have already been handed over.
       rate_history: Array.isArray(profile.rateHistory) ? profile.rateHistory : [],
+      // Which days this teacher is closed to new students. Without this in
+      // the cloud the setting lives on one device, and every other one keeps
+      // offering slots you have deliberately closed.
+      closed_days: Array.isArray(profile.closedDays) ? profile.closedDays : [],
       instruments: profile.instruments || [],
       available_days: profile.days || [],
       time_slots: profile.timeSlots || {}
@@ -17829,7 +17852,12 @@ function slotOptionsHtml(teacherName, dayName, excludeStudentId, isGroup, curren
     // as "Teacher Busy" made a soft, self-expiring reservation look like a
     // hard conflict — with no hint that it frees itself after that date,
     // or that renewing (or archiving) that student releases it at once.
-    if(sl.busyWith && sl.heldForRenewal) label+=' (Held for '+sl.busyWith+' — awaiting renewal)';
+    // Closed reads differently from busy: the slot is empty, the teacher
+    // just isn't accepting anyone new into it. Saying "Teacher Busy" would
+    // be a plain untruth and would send someone hunting for a clash that
+    // doesn't exist.
+    if(sl.closedToNew) label+=' (Not taking new students)';
+    else if(sl.busyWith && sl.heldForRenewal) label+=' (Held for '+sl.busyWith+' — awaiting renewal)';
     else if(sl.busyWith) label+=' (Teacher Busy — with '+sl.busyWith+')';
     else if(sl.full) label+=' (Rooms Full)';
     const isCurrent=currentTime && (sl.actualStart||sl.time)===currentTime;
@@ -17955,7 +17983,7 @@ function getAvailableSlotsWithCapacity(teacherName, dayName, excludeStudentId, f
     // unavailable time just vanish with no explanation — looked like a
     // bug rather than "teacher's still with another student." Show it
     // as a disabled option with a reason instead, same as Rooms Full.
-    if(slot.occupiedBy){ results.push({time:slot.time, full:true, busyWith:slot.occupiedBy, heldForRenewal:!!slot.heldForRenewal}); return; }
+    if(slot.occupiedBy){ results.push({time:slot.time, full:true, busyWith:slot.occupiedBy, heldForRenewal:!!slot.heldForRenewal, closedToNew:!!slot.closedToNew}); return; }
     const nominal=slot.time;
 
     // 1) Full preferred duration fits at the nominal start — the normal,
@@ -18400,10 +18428,41 @@ function getTeacherBookingsByTime(teacherName, dayName, targetDate, excludeStude
 // photo export) should call to get a teacher's actual slot list for a day
 // — never the raw static prof.timeSlots[dayName] directly, once any
 // Group-plan booking exists that day.
+// Is this teacher closed to NEW students on this weekday?
+//
+// Per-day rather than per-teacher, because availability is usually a
+// day-by-day judgement: Mariam may be full on Saturday and happy to take
+// more on Tuesday. A teacher-wide switch would force her to close both.
+function teacherClosedOnDay(teacherName, dayName){
+  const prof=(db.teacherProfiles||[]).find(p=>p.name===teacherName);
+  if(!prof) return false;
+  const closed=Array.isArray(prof.closedDays) ? prof.closedDays : [];
+  return closed.indexOf(dayName)!==-1;
+}
+
 function getEffectiveTeacherDaySlots(teacherName, dayName, excludeStudentId, targetDateOverride){
   const prof=(db.teacherProfiles||[]).find(p=>p.name===teacherName);
   const baseSlots=(prof?.timeSlots||{})[dayName]||generateSlotsForDay(dayName)||[];
   if(!baseSlots.length) return [];
+
+  // Closed to NEW students — but an EXISTING one may still be moved here.
+  // excludeStudentId is how the app says "I am working with this specific
+  // student", which only happens when editing or rescheduling someone who
+  // already exists. Its absence means a new booking, which is what the
+  // switch is for.
+  //
+  // Done at this one point deliberately: every screen that shows a
+  // teacher's availability — Add Student, renewals, make-ups, the
+  // calendar, weekly free slots, waiting-list matching — reads its slots
+  // from here, so one check covers all of them with none left out.
+  if(!excludeStudentId && teacherClosedOnDay(teacherName, dayName)){
+    return baseSlots.map(t=>({
+      time:t,
+      occupiedBy:'not taking new students',
+      closedToNew:true,
+      durationMinutes:SESSION_DURATION_MINUTES
+    }));
+  }
   const targetDate=targetDateOverride||nextOccurrenceOfWeekday(dayName);
   const bookingsByTime=getTeacherBookingsByTime(teacherName, dayName, targetDate, excludeStudentId);
   return computeEffectiveSlots(baseSlots, bookingsByTime);
@@ -20041,7 +20100,14 @@ function renderCalendarPage(){
         // name rather than what it actually is: nothing booked here at
         // all. An explicit "Free" removes that ambiguity outright.
         const dropTime=full ? freesAt : slot;
+        // A day closed to new students shows as closed rather than as an
+        // inviting green cell. Still droppable: moving an EXISTING student
+        // here is allowed — the switch only stops new bookings.
+        if(typeof teacherClosedOnDay==='function' && teacherClosedOnDay(t.name, dayName)){
+          html+=`<div ondragover="calendarDragOverCell(event)" ondragleave="calendarDragLeaveCell(event)" ondrop="calendarDropOnCell(event,'${escapeAttr(t.name)}','${targetDate}','${dropTime}')" title="${escapeAttr(t.name)} is not taking new students on ${escapeAttr(dayName)}s — an existing student can still be moved here" style="background:#2a2a2a;border:1px dashed #555;min-height:52px;display:flex;align-items:center;justify-content:center;font-size:10px;color:#888;text-align:center;padding:2px">closed to new</div>`;
+        } else {
         html+=`<div ondragover="calendarDragOverCell(event)" ondragleave="calendarDragLeaveCell(event)" ondrop="calendarDropOnCell(event,'${escapeAttr(t.name)}','${targetDate}','${dropTime}')" onclick="openBookFreeSlot('${jsString(t.name)}','${targetDate}','${dropTime}','${jsString(dayName)}')" title="${full?'Free from '+escapeHtml(formatTime12h(freesAt)):'Free'} — click to book, or drop a lesson here" style="background:#1b5e20;border:1px solid #2e7d32;min-height:52px;display:flex;align-items:center;justify-content:center;font-size:11px;color:rgba(165,214,167,0.6);text-align:center;padding:2px;cursor:pointer">${fullLabel}</div>`;
+        }
       }
     });
 
