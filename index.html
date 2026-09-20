@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-286</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-287</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1255,6 +1255,12 @@ input::placeholder{color:var(--text-dim)}
     <button class="btn" onclick="previewCloudDuplicateCleanup()">🔍 Preview Cloud Cleanup (changes nothing)</button>
     <small style="display:block;margin-top:8px;color:var(--text-muted)">The tool above fixes your <em>local</em> records; this one cleans the <strong>Supabase table itself</strong>, where the duplicate rows actually live. Rows count as the same person only when <strong>name, teacher and instrument all match</strong> — so a student with two genuine courses is never collapsed — and at least one row always survives for everyone. The row kept is the one this app already points at, or failing that the earliest. Back up before applying.</small>
     <div id="cloudclean-results" style="margin-top:14px"></div>
+
+    <div style="border-top:1px solid var(--border);margin:20px 0 16px;"></div>
+    <div class="card-title" style="margin-bottom:10px">Merge Duplicate Lesson Logs</div>
+    <button class="btn" onclick="previewMergeDuplicateLogs()">🔍 Preview (changes nothing)</button>
+    <small style="display:block;margin-top:8px;color:var(--text-muted)">A lesson can end up with <strong>two</strong> logs — one written on the device and one from the cloud, each with a different internal id, so they never recognised each other. The teacher writes into whichever the app hands them, and on the next open it may show the other one, blank. Their notes were never lost, just hidden behind the twin. This keeps the copy with writing in it and removes the empty duplicate; where both are written and identical, it keeps one. Anything genuinely different is left untouched for you to look at. Preview changes nothing.</small>
+    <div id="mergelogs-results" style="margin-top:14px"></div>
 
     <div style="border-top:1px solid var(--border);margin:20px 0 16px;"></div>
     <div class="card-title" style="margin-bottom:10px">Reconnect Orphaned Lesson Logs</div>
@@ -16495,6 +16501,131 @@ window.showTeacherLogs=function(teacherName){
     <div style="max-height:420px;overflow-y:auto">${body}</div>
   `);
 }
+
+// Merging duplicate lesson logs.
+//
+// A lesson can carry TWO logs: one created locally with a Date.now() id,
+// one downloaded from the cloud with Supabase's own id. Nothing matches
+// them, so both survive. The teacher workspace shows whichever comes first
+// in the array — so a teacher writes into one, and on the next open sees
+// the other, empty. Their work was never lost, only hidden.
+//
+// Keeps the copy with writing and drops the empty twin. Where both are
+// written and the text is identical (the same log saved twice), keeps one.
+// Where both are written and DIFFER, both are kept and reported — merging
+// those would destroy something a teacher typed.
+function analyseDuplicateLogs(){
+  const CONTENT=['topicCovered','teacherNotes','lessonNotes','nextLessonGoal','nextLessonFocus','homework'];
+  const txt=l=>CONTENT.map(k=>String(l[k]||'').trim()).join('\u0001');
+  const has=l=>CONTENT.some(k=>String(l[k]||'').trim())
+    || (l.performanceRating!=null && l.performanceRating!=='')
+    || (l.performance && l.performance.rating!=null)
+    || (Array.isArray(l.repertoire) && l.repertoire.length>0);
+
+  const byLesson=new Map();
+  (db.lessonLogs||[]).forEach(l=>{
+    if(!l || l.lessonId==null) return;
+    const k=String(l.lessonId);
+    if(!byLesson.has(k)) byLesson.set(k, []);
+    byLesson.get(k).push(l);
+  });
+
+  const keep=[], drop=[], conflicts=[];
+  let bothEmpty=0, oneWritten=0, identical=0;
+
+  byLesson.forEach((group)=>{
+    if(group.length<2) return;
+    const written=group.filter(has);
+
+    if(written.length===0){
+      // Nothing written either side — keep the oldest, drop the rest.
+      const sorted=group.slice().sort((a,b)=>String(a.id).localeCompare(String(b.id)));
+      keep.push(sorted[0]); drop.push(...sorted.slice(1)); bothEmpty++;
+      return;
+    }
+    if(written.length===1){
+      // The whole point: a teacher's writing was hiding behind a blank.
+      keep.push(written[0]);
+      drop.push(...group.filter(l=>l!==written[0]));
+      oneWritten++;
+      return;
+    }
+    const first=txt(written[0]);
+    if(written.every(l=>txt(l)===first)){
+      keep.push(written[0]);
+      drop.push(...group.filter(l=>l!==written[0]));
+      identical++;
+      return;
+    }
+    // Genuinely different text in each — never merged automatically.
+    conflicts.push(group);
+  });
+
+  return {keep, drop, conflicts, bothEmpty, oneWritten, identical,
+          duplicatedLessons: bothEmpty+oneWritten+identical+conflicts.length};
+}
+
+window.previewMergeDuplicateLogs=function(){
+  const r=analyseDuplicateLogs();
+  const el=document.getElementById('mergelogs-results');
+  if(!el) return;
+  if(!r.duplicatedLessons){
+    el.innerHTML='<div style="color:var(--text-muted);font-size:13px">No duplicated lesson logs — nothing to merge.</div>';
+    return;
+  }
+  const recovered=r.drop.length ? '' : '';
+  el.innerHTML=`
+    <div style="padding:10px;border:1px solid var(--border);border-radius:6px">
+      <div style="font-weight:700;margin-bottom:8px">${r.duplicatedLessons} lesson(s) have more than one log</div>
+      <div style="font-size:13px;line-height:1.9">
+        <div><b>${r.bothEmpty}</b> — both copies blank, nothing written either side</div>
+        <div style="color:#a8e8a8"><b>${r.oneWritten}</b> — one copy has a teacher's writing, the other is blank <i>(this writing will start showing again)</i></div>
+        <div><b>${r.identical}</b> — both written with identical text (the same log saved twice)</div>
+        ${r.conflicts.length ? `<div style="color:#e06c6c"><b>${r.conflicts.length}</b> — both written but DIFFERENT; left untouched for you to check</div>` : ''}
+      </div>
+      <div style="margin-top:10px;font-size:13px"><b>${r.drop.length}</b> duplicate log(s) would be removed. No writing is lost — where one copy has text, that is the copy kept.</div>
+      <button class="btn btn-gold" style="margin-top:10px" onclick="applyMergeDuplicateLogs()">Merge ${r.drop.length} duplicate(s)</button>
+    </div>
+    ${r.conflicts.length ? '<div style="margin-top:10px;font-size:12px;color:var(--text-muted)">Conflicting pairs are listed in the browser console.</div>' : ''}`;
+  if(r.conflicts.length){
+    console.warn('Lesson logs where BOTH copies were written with different text — not merged:');
+    r.conflicts.forEach(g=>{
+      console.warn('  lesson '+g[0].lessonId+' ('+(g[0].teacherName||'?')+', '+(g[0].lessonDate||'?')+')');
+      g.forEach(l=>console.warn('     id '+l.id+' : '+String(l.teacherNotes||l.topicCovered||'').slice(0,80)));
+    });
+  }
+};
+
+window.applyMergeDuplicateLogs=function(){
+  const r=analyseDuplicateLogs();
+  if(!r.drop.length){ showToast('Nothing to merge.'); return; }
+  if(!confirm('Merge '+r.drop.length+' duplicate lesson log(s)?\n\n'+
+              r.oneWritten+' lesson(s) have writing hidden behind a blank copy — that writing will start showing again.\n\n'+
+              'Every removed copy goes to the Deletion Log and can be restored.')) return;
+
+  const dropIds=new Set(r.drop.map(l=>String(l.id)));
+  r.drop.forEach(l=>{
+    // logRecordDeletion, not logDeletion — the latter doesn't exist, and a
+    // typeof guard around it would have silently skipped the whole audit
+    // trail while looking like it worked.
+    if(typeof logRecordDeletion==='function'){
+      try{ logRecordDeletion('lessonLog', l, 'duplicate log merged'); }catch(_){}
+    }
+    // Remove the cloud row too, or the next download brings it back.
+    if(window.supabaseClientV1 && l.id!=null){
+      try{
+        window.supabaseClientV1.from('lesson_updates').delete().eq('id', l.id)
+          .then(({error})=>{ if(error) console.warn('Duplicate log cloud delete failed:', error.message); });
+      }catch(_){}
+    }
+  });
+  db.lessonLogs=(db.lessonLogs||[]).filter(l=>!dropIds.has(String(l.id)));
+  save();
+  ['renderTeacherWorkspace','renderReports','renderDatabase','renderStudents']
+    .forEach(fn=>{ if(typeof window[fn]==='function'){ try{ window[fn](); }catch(_){} } });
+  showToast(r.drop.length+' duplicate log(s) merged'+(r.oneWritten?' — '+r.oneWritten+' hidden note(s) recovered':''));
+  if(typeof previewMergeDuplicateLogs==='function') previewMergeDuplicateLogs();
+};
 
 window.showMissingLogs=function(teacherName){
   const row=lessonLogCoverage(currentMonth()).find(r=>r.teacher===teacherName);
