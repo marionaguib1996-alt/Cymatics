@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-288</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-289</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -15716,7 +15716,28 @@ function addMonthsToDateString(dateStr, months){
 function openTeacherLessonLogForLesson(lessonId){
   const lesson=(db.lessons||[]).find(l=>String(l.id)===String(lessonId));
   if(!lesson){ showToast('Lesson not found.'); return; }
-  let log=(db.lessonLogs||[]).find(l=>String(l.lessonId)===String(lesson.id));
+  // Matched by lessonId AND student. A log carries the student it was
+  // written for, and lesson ids were renumbered when the cloud was rebuilt
+  // — so a log written for one student can end up pointing at a completely
+  // different student's lesson. Opening it by id alone showed the wrong
+  // person's notes, and worse, would have saved this lesson's notes over
+  // theirs.
+  //
+  // The student on the log is the trustworthy part; the lesson id is not.
+  const sameStudent=(lg)=>{
+    if(lg.studentId!=null && lg.studentId!=='' && lesson.studentId!=null){
+      if(String(lg.studentId)===String(lesson.studentId)) return true;
+    }
+    const a=String(lg.studentName||'').trim().toLowerCase();
+    const b=String(lesson.student||lesson.student_name||'').trim().toLowerCase();
+    return !!a && a===b;
+  };
+  let log=(db.lessonLogs||[]).find(l=>String(l.lessonId)===String(lesson.id) && sameStudent(l));
+  const mismatched=(db.lessonLogs||[]).find(l=>String(l.lessonId)===String(lesson.id) && !sameStudent(l));
+  if(!log && mismatched){
+    console.warn('Lesson '+lesson.id+' ('+(lesson.student||'?')+') has a log belonging to '+
+                 (mismatched.studentName||'someone else')+' — leaving it alone and starting a fresh one.');
+  }
   if(!log){
     const student=(db.students||[]).find(s=>String(s.id)===String(lesson.studentId) || s.name===(lesson.student||lesson.student_name));
     if(!student){ showToast('Student not found for this lesson.'); return; }
