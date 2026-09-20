@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-280</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-283</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -2919,7 +2919,18 @@ migrateBackfillLessonStudentIds();
 // Archiving keeps attended lessons on the record, so teacher payroll and
 // past reports are unaffected, and it can be undone from the Database tab.
 const TRIAL_AUTO_ARCHIVE_DAYS = 7;
-const MONTHLY_AUTO_ARCHIVE_DAYS = 14;
+// 6, not 14. A monthly student who hasn't renewed sits in Renewals Due
+// being chased; two weeks of that is long past the point where the answer
+// is clear, and meanwhile their slot looks spoken for. Six days is one
+// missed lesson plus a few days' grace.
+const MONTHLY_AUTO_ARCHIVE_DAYS = 6;
+
+// How long an unrenewed student's regular slot stays reserved. Shorter
+// than the archive window on purpose: the slot is the scarce thing, so it
+// is released for someone else three days before the student themselves
+// is archived. That gap is deliberate — you can still take their money on
+// day five and keep them, even though the slot is already back on offer.
+const RENEWAL_SLOT_HOLD_DAYS = 3;
 function autoArchiveStaleTrials(){
   const todayKey=new Date().toISOString().slice(0,10);
   const archived=[];
@@ -2947,7 +2958,19 @@ function autoArchiveStaleTrials(){
       lessonBelongsToStudent(l, s) && (l.status_record||'active')!=='archived'
     );
     if(own.some(l=>l.status==='scheduled')) return; // something is still booked
-    const attended=own.filter(l=>l.status==='attended' && l.date).map(l=>l.date).sort();
+    // "Absent & Paid" counts as activity too. The session was paid for and
+    // consumed — the student simply didn't turn up — so it dates their last
+    // contact exactly as an attended lesson does.
+    //
+    // Only counting 'attended' meant anyone whose last session was a paid
+    // absence looked like they had no history at all, so the archive skipped
+    // them entirely. They sat in Renewals Due indefinitely with their slot
+    // held, which is how one student stayed there for three weeks.
+    //
+    // Excused and teacher-absent are deliberately NOT here: those owe a
+    // make-up, so the student is still mid-cycle rather than finished.
+    const attended=own.filter(l=>(l.status==='attended' || l.status==='absent_paid') && l.date)
+      .map(l=>l.date).sort();
     if(!attended.length) return;
     // If lessons carrying this student's NAME exist but aren't linked to
     // them (an orphaned link), the picture above is incomplete — their most
@@ -17891,9 +17914,15 @@ const MAX_SIMULTANEOUS_LESSONS = 3;
 
 // ── Room capacity helpers ──────────────────────────────────────────────────────
 
-function getLessonsAtSlot(dayName, time, excludeStudentId){
+// forDate: the date to judge. Without it this always looked at the NEXT
+// occurrence of the weekday, so adding a student who starts in three
+// weeks was told about clashes happening THIS week — and the list of
+// names came from a different Sunday than the one being booked.
+function getLessonsAtSlot(dayName, time, excludeStudentId, forDate){
   const excludeStudent=excludeStudentId ? (db.students||[]).find(s=>String(s.id)===String(excludeStudentId)) : null;
-  const targetDate=nextOccurrenceOfWeekday(dayName);
+  const targetDate=(forDate && typeof dateMatchesWeekday==='function' && dateMatchesWeekday(forDate, dayName))
+    ? forDate
+    : nextOccurrenceOfWeekday(dayName);
   const prevSlot=addSlotMinutes(time, -SESSION_DURATION_MINUTES);
   // Dedupe by student name, not id — a student's default-assignment record
   // and their actual lesson record can legitimately have different/drifted
@@ -18130,12 +18159,20 @@ window.onEditStudentDayChange=function(studentId){
     // isRoomFull here previously rejected slots the dropdown had just
     // offered as free (default weekly assignments with no lesson booked),
     // so a genuinely free slot was selectable but wouldn't save.
-    if(dayName && time && isRoomFullDuringRange(nextOccurrenceOfWeekday(dayName), time, dur, null)){
+    // Judge the STARTING DATE the person actually chose, not whichever
+    // occurrence of that weekday comes next. Checking the wrong week
+    // rejected a slot that is genuinely free on the day they are booking.
+    const startIso=(typeof dmyToIso==='function') ? dmyToIso(document.getElementById('s-joined-date')?.value||'') : '';
+    const checkDate=(startIso && typeof dateMatchesWeekday==='function' && dateMatchesWeekday(startIso, dayName))
+      ? startIso
+      : nextOccurrenceOfWeekday(dayName);
+    if(dayName && time && isRoomFullDuringRange(checkDate, time, dur, null)){
       openModal('🚫 Rooms Fully Occupied',`
         <div style="text-align:center;padding:20px 0">
           <div style="font-size:1.1rem;font-weight:600;margin-bottom:8px">All 3 rooms are occupied at ${escapeHtml(formatTime12h(time))} on ${escapeHtml(dayName)}</div>
           <div style="color:var(--text-muted);margin-bottom:16px">Please choose a different time slot or day.</div>
-          <div>${getLessonsAtSlot(dayName,time,null).map(s=>`<span class="badge badge-amber" style="margin:3px">${escapeHtml(s.name||'Student')}</span>`).join('')}</div>
+          <div style="color:var(--text-muted);font-size:12px;margin-bottom:6px">${escapeHtml(formatLedgerDate(checkDate))}</div>
+          <div>${getLessonsAtSlot(dayName,time,null,checkDate).map(s=>`<span class="badge badge-amber" style="margin:3px">${escapeHtml(s.name||'Student')}</span>`).join('')}</div>
         </div>`);
       return;
     }
@@ -18410,8 +18447,11 @@ function getTeacherBookingsByTime(teacherName, dayName, targetDate, excludeStude
     ).map(l=>l.date).filter(Boolean).sort();
     if(!own.length) return;
     const lastDate=own[own.length-1];
-    const holdUntil=(typeof nextWeekdayStrictlyAfter==='function')
-      ? nextWeekdayStrictlyAfter(lastDate, s.lesson_day) : null;
+    // A fixed number of days after their last lesson, rather than "their
+    // next lesson day" — that was a whole week, which is long enough for
+    // a slot to sit idle while someone on the waiting list wants it.
+    const holdUntil=(typeof addDaysToDateString==='function')
+      ? addDaysToDateString(lastDate, RENEWAL_SLOT_HOLD_DAYS) : null;
     if(!holdUntil || targetDate>holdUntil) return; // hold expired — slot is free
     const duration=isGroupPlan(s.plan) ? GROUP_SESSION_DURATION_MINUTES : SESSION_DURATION_MINUTES;
     bookingsByTime[s.lessonTime]={
