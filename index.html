@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-285</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-286</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -16313,16 +16313,34 @@ function exportHomeworkCSV(){
 //   missing— no log at all
 // "Blank" is the interesting one: the save worked, so it points at habit
 // rather than a technical fault.
-function lessonLogCoverage(monthKey){
+window.lessonLogCoverage=function(monthKey){
   const m=monthKey||currentMonth();
   const logsByLesson=new Map();
   (db.lessonLogs||[]).forEach(lg=>{ if(lg && lg.lessonId!=null) logsByLesson.set(String(lg.lessonId), lg); });
 
+  // What counts as "the teacher wrote something".
+  //
+  // The app creates an EMPTY log automatically whenever a lesson is marked
+  // attended — sensible, it gives the teacher somewhere to write. So the
+  // presence of a log proves nothing; only its contents do.
+  //
+  // The previous check ran String(value).trim() over every field, which was
+  // wrong for the two that aren't text: `performance` starts as the object
+  // {rating:null}, and String({}) is "[object Object]" — never empty. Every
+  // auto-created log therefore looked written, and every teacher showed
+  // 100%, including one who has never opened the app.
   const hasContent=lg=>{
     if(!lg) return false;
-    return ['lessonNotes','topicCovered','homework','repertoire','nextLessonFocus',
-            'nextLessonGoal','teacherNotes','performance']
+    const textWritten=['lessonNotes','topicCovered','homework',
+                       'nextLessonFocus','nextLessonGoal','teacherNotes']
       .some(k=>String(lg[k]||'').trim().length>0);
+    if(textWritten) return true;
+    // A rating on its own is a real entry — the teacher assessed the lesson
+    // even if they typed nothing.
+    const rating=(lg.performance && lg.performance.rating!=null) ? lg.performance.rating : lg.performanceRating;
+    if(rating!=null && rating!=='') return true;
+    // repertoire is an array of pieces, not a string.
+    return Array.isArray(lg.repertoire) && lg.repertoire.length>0;
   };
 
   const rows=new Map();
@@ -16353,7 +16371,7 @@ function lessonLogCoverage(monthKey){
   }).sort((a,b)=>a.coverage-b.coverage);   // worst first — that is the point
 }
 
-function renderLogCoverage(){
+window.renderLogCoverage=function(){
   const el=document.getElementById('log-coverage');
   if(!el) return;
   const month=currentMonth();
@@ -16398,7 +16416,7 @@ function renderLogCoverage(){
 // any good?" — the question that decides whether a student's history is
 // worth anything. It also surfaces a log that saved but came out empty,
 // which looks identical to a forgotten one until you open it.
-function showTeacherLogs(teacherName){
+window.showTeacherLogs=function(teacherName){
   const month=currentMonth();
   const logsByLesson=new Map();
   (db.lessonLogs||[]).forEach(lg=>{ if(lg && lg.lessonId!=null) logsByLesson.set(String(lg.lessonId), lg); });
@@ -16417,29 +16435,42 @@ function showTeacherLogs(teacherName){
 
   // Only the fields a teacher actually fills in, labelled as they appear
   // to them — an admin reading this shouldn't have to decode field names.
+  // Text fields only. repertoire and performance are handled separately
+  // below because they aren't strings — rendering them naively printed
+  // "[object Object]" and made an empty log look filled in.
   const FIELDS=[
     ['topicCovered','Topic covered'],
     ['lessonNotes','Lesson notes'],
-    ['repertoire','Repertoire'],
-    ['performance','Performance'],
     ['homework','Homework set'],
     ['nextLessonFocus','Next lesson focus'],
     ['nextLessonGoal','Next lesson goal'],
     ['teacherNotes','Teacher notes']
   ];
+  const extraBits=lg=>{
+    const out=[];
+    if(Array.isArray(lg.repertoire) && lg.repertoire.length){
+      out.push(['Repertoire', lg.repertoire.map(r=>typeof r==='string'?r:(r&&r.title)||'').filter(Boolean).join(', ')]);
+    }
+    const rating=(lg.performance && lg.performance.rating!=null) ? lg.performance.rating : lg.performanceRating;
+    if(rating!=null && rating!=='') out.push(['Performance', String(rating)+'/5']);
+    return out.filter(([,v])=>String(v||'').trim().length>0);
+  };
 
   const body=lessons.map(l=>{
     const lg=logsByLesson.get(String(l.id));
-    const filled=lg ? FIELDS.filter(([k])=>String(lg[k]||'').trim().length>0) : [];
+    const filled=lg
+      ? FIELDS.filter(([k])=>String(lg[k]||'').trim().length>0).map(([k,label])=>[label, String(lg[k])])
+          .concat(extraBits(lg))
+      : [];
     let inner;
     if(!lg){
       inner='<div style="color:#e06c6c;font-size:12px">No log written for this lesson.</div>';
     } else if(!filled.length){
       inner='<div style="color:var(--gold);font-size:12px">A log was saved, but every field is empty.</div>';
     } else {
-      inner=filled.map(([k,label])=>
+      inner=filled.map(([label,value])=>
         `<div style="margin-top:6px"><span style="color:var(--text-muted);font-size:11px">${escapeHtml(label)}</span>`
-        +`<div style="font-size:13px;white-space:pre-wrap">${escapeHtml(String(lg[k]))}</div></div>`
+        +`<div style="font-size:13px;white-space:pre-wrap">${escapeHtml(value)}</div></div>`
       ).join('');
       if(lg.homework && lg.homeworkCompleted){
         inner+='<div style="margin-top:6px"><span class="badge badge-green" style="font-size:10px">homework marked done</span></div>';
@@ -16455,7 +16486,8 @@ function showTeacherLogs(teacherName){
 
   const written=lessons.filter(l=>{
     const lg=logsByLesson.get(String(l.id));
-    return lg && FIELDS.some(([k])=>String(lg[k]||'').trim().length>0);
+    if(!lg) return false;
+    return FIELDS.some(([k])=>String(lg[k]||'').trim().length>0) || extraBits(lg).length>0;
   }).length;
 
   openModal('Lesson logs — '+escapeHtml(teacherName), `
@@ -16464,7 +16496,7 @@ function showTeacherLogs(teacherName){
   `);
 }
 
-function showMissingLogs(teacherName){
+window.showMissingLogs=function(teacherName){
   const row=lessonLogCoverage(currentMonth()).find(r=>r.teacher===teacherName);
   if(!row || !row.missing.length){ showToast('Nothing missing for '+teacherName); return; }
   const logsByLesson=new Map();
