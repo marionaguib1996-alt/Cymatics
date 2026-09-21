@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-289</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-290</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -16363,10 +16363,37 @@ function exportHomeworkCSV(){
 //   missing— no log at all
 // "Blank" is the interesting one: the save worked, so it points at habit
 // rather than a technical fault.
+// The log for a lesson — but ONLY if it was written for that lesson's
+// student. Lesson ids were renumbered when the cloud was rebuilt, so an old
+// log can point at a lesson that now belongs to someone else entirely (a
+// July log of Mario's student ended up on one of Basil's lessons). Looking
+// logs up by lesson id alone credited the wrong teacher with it. The editor
+// has checked the student since v289; the reports now do the same.
+window.buildLessonLogIndex=function(){
+  const idx=new Map();
+  (db.lessonLogs||[]).forEach(lg=>{
+    if(!lg || lg.lessonId==null) return;
+    const k=String(lg.lessonId);
+    if(!idx.has(k)) idx.set(k, []);
+    idx.get(k).push(lg);
+  });
+  return idx;
+};
+window.logForLesson=function(idx, lesson){
+  const list=idx.get(String(lesson.id));
+  if(!list) return null;
+  const norm=v=>String(v||'').trim().toLowerCase();
+  return list.find(lg=>{
+    if(lg.studentId!=null && lg.studentId!=='' && lesson.studentId!=null &&
+       String(lg.studentId)===String(lesson.studentId)) return true;
+    const a=norm(lg.studentName), b=norm(lesson.student||lesson.student_name);
+    return !!a && a===b;
+  }) || null;
+};
+
 window.lessonLogCoverage=function(monthKey){
   const m=monthKey||currentMonth();
-  const logsByLesson=new Map();
-  (db.lessonLogs||[]).forEach(lg=>{ if(lg && lg.lessonId!=null) logsByLesson.set(String(lg.lessonId), lg); });
+  const logsByLesson=buildLessonLogIndex();
 
   // What counts as "the teacher wrote something".
   //
@@ -16403,11 +16430,15 @@ window.lessonLogCoverage=function(monthKey){
     if(!rows.has(t)) rows.set(t, {teacher:t, taught:0, logged:0, blank:0, missing:[], lastLogged:null});
     const r=rows.get(t);
     r.taught++;
-    const lg=logsByLesson.get(String(l.id));
+    const lg=logForLesson(logsByLesson, l);
     if(!lg){ r.missing.push(l); return; }
     if(hasContent(lg)){
       r.logged++;
-      const when=lg.createdAt||l.date;
+      // The date of the LESSON written about, not the log's createdAt.
+      // createdAt records when the log record was made, and every log
+      // restored or merged today was stamped today — so the column read
+      // "today" for nearly everyone regardless of when anything was written.
+      const when=l.date;
       if(when && (!r.lastLogged || String(when)>String(r.lastLogged))) r.lastLogged=when;
     } else {
       r.blank++;
@@ -16438,7 +16469,7 @@ window.renderLogCoverage=function(){
     return d+' days ago';
   };
   el.innerHTML=`<table><thead><tr>
-      <th>Teacher</th><th>Attended</th><th>Logged</th><th>Blank</th><th>Coverage</th><th>Last written</th><th></th>
+      <th>Teacher</th><th>Attended</th><th>Logged</th><th>Blank</th><th>Coverage</th><th>Latest lesson logged</th><th></th>
     </tr></thead><tbody>`
     + rows.map(r=>{
         const colour = r.coverage>=90 ? 'var(--success,#4caf50)' : (r.coverage>=60 ? 'var(--gold)' : '#e06c6c');
@@ -16468,8 +16499,7 @@ window.renderLogCoverage=function(){
 // which looks identical to a forgotten one until you open it.
 window.showTeacherLogs=function(teacherName){
   const month=currentMonth();
-  const logsByLesson=new Map();
-  (db.lessonLogs||[]).forEach(lg=>{ if(lg && lg.lessonId!=null) logsByLesson.set(String(lg.lessonId), lg); });
+  const logsByLesson=buildLessonLogIndex();
 
   const lessons=(db.lessons||[]).filter(l=>
     (l.teacher||'')===teacherName &&
@@ -16507,7 +16537,7 @@ window.showTeacherLogs=function(teacherName){
   };
 
   const body=lessons.map(l=>{
-    const lg=logsByLesson.get(String(l.id));
+    const lg=logForLesson(logsByLesson, l);
     const filled=lg
       ? FIELDS.filter(([k])=>String(lg[k]||'').trim().length>0).map(([k,label])=>[label, String(lg[k])])
           .concat(extraBits(lg))
@@ -16535,7 +16565,7 @@ window.showTeacherLogs=function(teacherName){
   }).join('');
 
   const written=lessons.filter(l=>{
-    const lg=logsByLesson.get(String(l.id));
+    const lg=logForLesson(logsByLesson, l);
     if(!lg) return false;
     return FIELDS.some(([k])=>String(lg[k]||'').trim().length>0) || extraBits(lg).length>0;
   }).length;
@@ -16679,13 +16709,12 @@ window.applyMergeDuplicateLogs=function(){
 window.showMissingLogs=function(teacherName){
   const row=lessonLogCoverage(currentMonth()).find(r=>r.teacher===teacherName);
   if(!row || !row.missing.length){ showToast('Nothing missing for '+teacherName); return; }
-  const logsByLesson=new Map();
-  (db.lessonLogs||[]).forEach(lg=>{ if(lg && lg.lessonId!=null) logsByLesson.set(String(lg.lessonId), lg); });
+  const logsByLesson=buildLessonLogIndex();
   openModal('Missing logs — '+escapeHtml(teacherName), `
     <div style="margin-bottom:10px;color:var(--text-muted)">Attended lessons this month with no log, or with a log that was saved empty.</div>
     <div style="max-height:320px;overflow-y:auto">
       ${row.missing.sort((a,b)=>String(a.date).localeCompare(String(b.date))).map(l=>{
-        const blank=logsByLesson.has(String(l.id));
+        const blank=!!logForLesson(logsByLesson, l);
         return `<div style="padding:6px 0;border-bottom:1px solid var(--border);font-size:13px">
           ${escapeHtml(formatLedgerDate(l.date))} ${escapeHtml(formatTime12h(l.time||''))}
           — <b>${escapeHtml(l.student||'?')}</b>
