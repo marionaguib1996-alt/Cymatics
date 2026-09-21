@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-290</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-291</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1060,7 +1060,7 @@ input::placeholder{color:var(--text-dim)}
 
 <div class="card">
   <div class="card-title">Lesson Log Coverage <small style="text-transform:none;letter-spacing:normal;font-weight:400;color:var(--text-muted)">— are teachers' logs actually being saved?</small></div>
-  <small style="display:block;margin-bottom:10px;color:var(--text-muted)">Counts only <b>attended</b> lessons, since those are the ones with something to write about. A log that exists but is empty counts as <b>blank</b> — the record saved, but nothing was written in it. Click a teacher to see exactly which lessons are missing a log.</small>
+  <small style="display:block;margin-bottom:10px;color:var(--text-muted)">Counts only <b>attended</b> lessons from <b>18 Sep 2026</b> onward — the start of reliable logging. A log that exists but is empty counts as <b>blank</b> — the record saved, but nothing was written in it. Click a teacher to see exactly which lessons are missing a log.</small>
   <div id="log-coverage"></div>
 </div>
 
@@ -1255,6 +1255,12 @@ input::placeholder{color:var(--text-dim)}
     <button class="btn" onclick="previewCloudDuplicateCleanup()">🔍 Preview Cloud Cleanup (changes nothing)</button>
     <small style="display:block;margin-top:8px;color:var(--text-muted)">The tool above fixes your <em>local</em> records; this one cleans the <strong>Supabase table itself</strong>, where the duplicate rows actually live. Rows count as the same person only when <strong>name, teacher and instrument all match</strong> — so a student with two genuine courses is never collapsed — and at least one row always survives for everyone. The row kept is the one this app already points at, or failing that the earliest. Back up before applying.</small>
     <div id="cloudclean-results" style="margin-top:14px"></div>
+
+    <div style="border-top:1px solid var(--border);margin:20px 0 16px;"></div>
+    <div class="card-title" style="margin-bottom:10px">Clear Lesson Logs Before 18 Sep 2026</div>
+    <button class="btn" onclick="previewPurgeOldLogs()">🔍 Preview (changes nothing)</button>
+    <small style="display:block;margin-top:8px;color:var(--text-muted)">Permanently removes every lesson <b>log</b> dated before 18 Sep 2026 — from this device and from the cloud. <b>Lessons are not touched</b>, only the notes attached to them. These do <b>not</b> go to the Deletion Log and cannot be restored. Every other device drops its own copies automatically on its next load, and will never upload them again. Logs from 18 Sep onward are unaffected and stay restorable as normal.</small>
+    <div id="purgelogs-results" style="margin-top:14px"></div>
 
     <div style="border-top:1px solid var(--border);margin:20px 0 16px;"></div>
     <div class="card-title" style="margin-bottom:10px">Merge Duplicate Lesson Logs</div>
@@ -2696,8 +2702,120 @@ function stampLastSync(label){
   try{ save(); }catch(_){}
 }
 window.stampLastSync=stampLastSync;
+// Lesson logs dated before this were cleared for good on 21 Sep 2026.
+// They came from the first weeks of logging, when saves were being
+// overwritten, duplicated and attached to the wrong students — the record
+// was not trustworthy, and teachers are not being asked to redo it.
+//
+// This constant IS the tombstone. Every device runs the same code, so every
+// device drops old logs on load and refuses to upload them. Without it, any
+// phone still holding an old copy would see "not in the cloud" and put it
+// back — which is exactly how deleted logs used to reappear.
+const LOG_PURGE_BEFORE='2026-09-18';
+
+// Does this log belong to this lesson's student? Lesson ids were renumbered
+// when the cloud was rebuilt, so a log can point at a lesson that now
+// belongs to someone else. Anything inherited from the lesson — teacher,
+// date, name — is only trusted when the student matches.
+function logMatchesLessonStudent(log, lesson){
+  if(!log || !lesson) return false;
+  if(log.studentId!=null && log.studentId!=='' && lesson.studentId!=null &&
+     String(log.studentId)===String(lesson.studentId)) return true;
+  const a=String(log.studentName||'').trim().toLowerCase();
+  const b=String(lesson.student||lesson.student_name||'').trim().toLowerCase();
+  if(!a) return true;          // no name on the log yet — it takes the lesson's
+  return a===b;
+}
+
+function logEffectiveDate(log){
+  if(!log) return '';
+  if(log.lessonDate) return String(log.lessonDate);
+  const l=(db.lessons||[]).find(x=>String(x.id)===String(log.lessonId));
+  return (l && logMatchesLessonStudent(log, l)) ? String(l.date||'') : '';
+}
+
+// Unknown date → kept. Deleting something because its date is missing
+// would be guessing.
+function logIsBeforeCutoff(log){
+  const d=logEffectiveDate(log);
+  return !!d && d<LOG_PURGE_BEFORE;
+}
+
+// Drops logs dated before the cut-off from THIS device — the logs
+// themselves only; lessons are never touched. Also removes any old log
+// still waiting in the upload queue, which would otherwise replay later
+// and put it straight back in the cloud.
+function purgeOldLessonLogsLocally(){
+  const before=(db.lessonLogs||[]).length;
+  db.lessonLogs=(db.lessonLogs||[]).filter(l=>!logIsBeforeCutoff(l));
+  const removed=before-db.lessonLogs.length;
+  let dequeued=0;
+  try{
+    const KEY='cymatics_sync_outbox_v1';
+    const q=JSON.parse(localStorage.getItem(KEY)||'[]');
+    const kept=q.filter(item=>{
+      if(!/lesson_updates/.test(String(item && item.url))) return true;
+      try{
+        const body=JSON.parse(item.body||'null');
+        const rows=Array.isArray(body)?body:[body];
+        const old=rows.some(r=>r && r.lesson_date && String(r.lesson_date)<LOG_PURGE_BEFORE);
+        if(old){ dequeued++; return false; }
+      }catch(_){}
+      return true;
+    });
+    if(dequeued) localStorage.setItem(KEY, JSON.stringify(kept));
+  }catch(_){}
+  if(removed) save();
+  return {removed, dequeued};
+}
+
+async function previewPurgeOldLogs(){
+  const el=document.getElementById('purgelogs-results');
+  if(!el) return;
+  const localOld=(db.lessonLogs||[]).filter(logIsBeforeCutoff).length;
+  let cloudOld='?';
+  try{
+    if(window.supabaseClientV1){
+      const {count,error}=await window.supabaseClientV1.from('lesson_updates')
+        .select('id',{count:'exact',head:true}).lt('lesson_date', LOG_PURGE_BEFORE);
+      if(!error) cloudOld=count;
+    }
+  }catch(_){}
+  el.innerHTML=`<div style="padding:10px;border:1px solid var(--border);border-radius:6px;font-size:13px;line-height:1.9">
+      <div><b>${localOld}</b> old log(s) on this device</div>
+      <div><b>${cloudOld}</b> old log(s) in the cloud</div>
+      <div style="color:var(--text-muted)">Lessons stay exactly as they are.</div>
+      <button class="btn btn-danger" style="margin-top:8px" onclick="applyPurgeOldLogs()">Permanently clear logs before 18 Sep</button>
+    </div>`;
+}
+
+async function applyPurgeOldLogs(){
+  if(!confirm('Permanently delete every lesson log dated before 18 Sep 2026?\n\n'+
+              'Only the logs — no lesson is touched.\n'+
+              'This does NOT go to the Deletion Log and cannot be undone.')) return;
+  const local=purgeOldLessonLogsLocally();
+  let cloudMsg='';
+  try{
+    if(window.supabaseClientV1){
+      // By DATE, not by id — ids were never reliable for these logs, and
+      // deleting by a local id is how the earlier merge hit "invalid bigint".
+      const {error}=await window.supabaseClientV1.from('lesson_updates')
+        .delete().lt('lesson_date', LOG_PURGE_BEFORE);
+      cloudMsg = error ? ' — cloud delete FAILED: '+error.message : ' and cleared from the cloud';
+    }
+  }catch(e){ cloudMsg=' — cloud delete FAILED: '+e.message; }
+  ['renderTeacherWorkspace','renderReports','renderDatabase']
+    .forEach(fn=>{ if(typeof window[fn]==='function'){ try{ window[fn](); }catch(_){} } });
+  showToast(local.removed+' old log(s) removed from this device'+cloudMsg);
+  previewPurgeOldLogs();
+}
+
 function normalizeLessonLog(log,lesson){
  if(!log) return log;
+ // Only inherit from the lesson if it is this student's lesson. Taking the
+ // teacher and date from someone else's lesson is how a July log of
+ // Fateema Ibrahim's became "Omar Sherif, September" in the cloud.
+ if(lesson && !logMatchesLessonStudent(log, lesson)) lesson=null;
  const lessonDate=log.lessonDate || lesson?.date || lesson?.lesson_date || '';
  const rating=log.performanceRating ?? log.performance?.rating ?? null;
  log.lessonId=log.lessonId ?? lesson?.id ?? null;
@@ -11929,9 +12047,7 @@ async function _autoLoadFromCloudImpl(){
        homeworkStatus: row.homework_status||'',
        homeworkDueDate: row.homework_due_date||''
      }));
-     const cloudById=new Map(cloudLogs.map(l=>[String(l.id), l]));
      const localLogs=db.lessonLogs||[];
-     const localById=new Map(localLogs.map(l=>[String(l.id), l]));
      // A cloud log's lesson_id is frozen at the moment it was uploaded,
      // which is often BEFORE its lesson had swapped its temporary
      // Date.now() id for the real one. The local copy gets corrected when
@@ -11954,27 +12070,55 @@ async function _autoLoadFromCloudImpl(){
      // emptier cloud copy that may have synced before editing finished.
      const hasContent=l=>!!(l && (l.topicCovered || l.teacherNotes || l.lessonNotes || l.nextLessonGoal || l.homework || l.performanceRating));
 
+     // Matched by LESSON + STUDENT, not by id.
+     //
+     // A log made on a device has a Date.now() id; the cloud row for the same
+     // lesson has Supabase's id. Matching by id meant the two never met, so
+     // every sync kept both — which is where 308 duplicates came from, and
+     // they would have kept coming back. The cloud allows exactly one row per
+     // lesson, so lesson + student is the real identity of a log.
+     //
+     // The LOCAL object is kept whenever one exists, so its id never changes
+     // under a teacher who has the editor open — a changed id would make
+     // their Save find nothing. Content is copied into it from the cloud
+     // when the cloud has the better copy.
+     const keyOf=l=>(l.lessonId!=null && l.lessonId!=='')
+       ? 'L:'+String(l.lessonId)+'|'+String(l.studentName||'').trim().toLowerCase()
+       : 'I:'+String(l.id);
+     const CONTENT_KEYS=['performanceRating','topicCovered','teacherNotes','lessonNotes',
+                         'nextLessonGoal','nextLessonFocus','homework','homeworkStatus','homeworkDueDate'];
+
+     const cloudByKey=new Map(), localByKey=new Map();
+     cloudLogs.forEach(l=>{
+       if(logIsBeforeCutoff(l)) return;                 // cleared — never comes back
+       const k=keyOf(l), prev=cloudByKey.get(k);
+       if(!prev || (hasContent(l) && !hasContent(prev))) cloudByKey.set(k, l);
+     });
+     localLogs.forEach(l=>{
+       if(logIsBeforeCutoff(l)) return;
+       const k=keyOf(l), prev=localByKey.get(k);
+       // Local twins collapse too: the one with writing wins.
+       if(!prev || (hasContent(l) && !hasContent(prev))) localByKey.set(k, l);
+     });
+
      const merged=[];
      const pendingReupload=[];
-     // Start from the union of ids so nothing is dropped from either side.
-     const allIds=new Set([...cloudById.keys(), ...localById.keys()]);
-     allIds.forEach(id=>{
-       const cloud=cloudById.get(id);
-       const local=localById.get(id);
+     new Set([...cloudByKey.keys(), ...localByKey.keys()]).forEach(k=>{
+       const cloud=cloudByKey.get(k), local=localByKey.get(k);
        if(cloud && !local){ merged.push(cloud); return; }
        if(local && !cloud){
-         // Present locally, absent from cloud → never synced. Keep it and
-         // re-queue it so it reaches the cloud.
          merged.push(local);
-         if(hasContent(local)) pendingReupload.push(local);
+         if(hasContent(local)) pendingReupload.push(local);   // never reached the cloud
          return;
        }
-       // Present in both: prefer the local copy when it carries content the
-       // cloud copy is missing (local edit that hadn't fully propagated),
-       // otherwise trust the cloud copy as canonical — but never let a
-       // dangling lesson_id win over one that actually resolves.
-       if(hasContent(local) && !hasContent(cloud)){ merged.push(reconcileLessonId(local, cloud)); pendingReupload.push(local); }
-       else merged.push(reconcileLessonId(cloud, local));
+       // Both. Cloud is canonical when it has writing (another device may
+       // have edited it); local wins only when the cloud copy is blank.
+       if(hasContent(cloud)){
+         CONTENT_KEYS.forEach(ck=>{ if(ck in cloud) local[ck]=cloud[ck]; });
+       } else if(hasContent(local)){
+         pendingReupload.push(local);
+       }
+       merged.push(reconcileLessonId(local, cloud));
      });
      db.lessonLogs=merged;
      // Re-queue any preserved local logs for upload (fire-and-forget).
@@ -12631,6 +12775,8 @@ function syncHealthClick(){
   // Before anything reads a payment: re-point any key left dangling by an
   // ID change, so a restore can't make everyone look unpaid.
   if(typeof repairDetachedPaymentKeys==='function') repairDetachedPaymentKeys();
+  // Keeps every device in step with the log clear-out, online or not.
+  if(typeof purgeOldLessonLogsLocally==='function') purgeOldLessonLogsLocally();
   if(typeof autoArchiveRefundedStudents==='function') autoArchiveRefundedStudents();
   if(typeof announceWaitingMatchesOnce==='function') announceWaitingMatchesOnce();
 }
@@ -15716,6 +15862,15 @@ function addMonthsToDateString(dateStr, months){
 function openTeacherLessonLogForLesson(lessonId){
   const lesson=(db.lessons||[]).find(l=>String(l.id)===String(lessonId));
   if(!lesson){ showToast('Lesson not found.'); return; }
+  // Logs before the cut-off are cleared and refused on upload. Without this
+  // a teacher could type a whole log for an old lesson and watch it vanish
+  // on the next sync — so say so up front instead.
+  if(String(lesson.date||'')<LOG_PURGE_BEFORE){
+    openModal('Lesson Log', `<div class="teacher-empty" style="text-align:left">
+      Logging is open for lessons from <b>${escapeHtml(formatLedgerDate(LOG_PURGE_BEFORE))}</b> onward.
+      This lesson is earlier, so there is nothing to fill in here.</div>`);
+    return;
+  }
   // Matched by lessonId AND student. A log carries the student it was
   // written for, and lesson ids were renumbered when the cloud was rebuilt
   // — so a log written for one student can end up pointing at a completely
@@ -15926,7 +16081,11 @@ async function syncLessonLogToSupabase(log){
     // linked lesson's teacher, then the student's current teacher.
     const linkedLesson=(db.lessons||[]).find(l=>String(l.id)===String(log.lessonId));
     const linkedStudent=(db.students||[]).find(s=>String(s.id)===String(log.studentId) || String(s.public_id||'')===String(log.studentId));
-    const teacherId=(log.teacherName||linkedLesson?.teacher||linkedStudent?.teacher||'').trim();
+    // Never upload a log from before the clear-out — it would resurrect it.
+    if(typeof logIsBeforeCutoff==='function' && logIsBeforeCutoff(log)) return;
+    // The lesson's teacher is only trusted if it is this student's lesson.
+    const ownLesson=(linkedLesson && logMatchesLessonStudent(log, linkedLesson)) ? linkedLesson : null;
+    const teacherId=(log.teacherName||ownLesson?.teacher||linkedStudent?.teacher||'').trim();
     const payload={
       lesson_id: log.lessonId,
       student_id: String(log.studentId||''),
@@ -16426,6 +16585,9 @@ window.lessonLogCoverage=function(monthKey){
     if(l.status!=='attended') return;
     const lm=String(l.month || l.date || '').slice(0,7);
     if(lm!==String(m)) return;
+    // Lessons before the log cut-off can't be logged any more, so counting
+    // them would show permanent gaps no teacher could ever close.
+    if(String(l.date||'')<LOG_PURGE_BEFORE) return;
     const t=l.teacher||'(no teacher)';
     if(!rows.has(t)) rows.set(t, {teacher:t, taught:0, logged:0, blank:0, missing:[], lastLogged:null});
     const r=rows.get(t);
@@ -16505,6 +16667,7 @@ window.showTeacherLogs=function(teacherName){
     (l.teacher||'')===teacherName &&
     l.status==='attended' &&
     (l.status_record||'active')!=='archived' &&
+    String(l.date||'')>=LOG_PURGE_BEFORE &&
     String(l.month || l.date || '').slice(0,7)===String(month)
   ).sort((a,b)=>String(b.date||'').localeCompare(String(a.date||'')));
 
