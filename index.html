@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-296</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-297</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -2733,6 +2733,17 @@ function logMatchesLessonStudent(log, lesson){
 // proves nothing. A log left at "Not rated" with every field blank is not
 // a logged lesson: it must still show as one to do — in the teacher's own
 // list and in the admin report alike, so the two can never disagree.
+// The logs anyone is allowed to SEE — admin, teacher or student.
+//
+// Logs before the cut-off were cleared for good. A copy can still turn up
+// on a device that has been offline, or inside an old backup someone
+// restores, so the views filter as well: cleared means gone from the
+// screen too, not just from storage. One list, so a new screen can't
+// accidentally show them.
+function visibleLessonLogs(){
+  return (db.lessonLogs||[]).filter(l=>!logIsBeforeCutoff(l));
+}
+
 function lessonLogHasWriting(lg){
   if(!lg) return false;
   const text=['topicCovered','teacherNotes','lessonNotes','nextLessonGoal','nextLessonFocus','homework']
@@ -16267,7 +16278,7 @@ function openTeacherStudentWorkspace(studentId){
   // log of one course showed on the other's profile too. A log with no
   // studentId still falls back to the name, since there is nothing else
   // to match it on.
-  const studentLogs=(db.lessonLogs||[]).map(log=>normalizeLessonLog(log,db.lessons.find(l=>l.id==log.lessonId))).filter(log=>
+  const studentLogs=visibleLessonLogs().map(log=>normalizeLessonLog(log,db.lessons.find(l=>l.id==log.lessonId))).filter(log=>
     (log.studentId!=null && log.studentId!=='')
       ? String(log.studentId)===String(student.id)
       : log.studentName===student.name
@@ -16386,7 +16397,7 @@ function toggleHomeworkDone(logId){
 }
 
 function getAllHomeworkLogs(){
-  return (db.lessonLogs||[])
+  return visibleLessonLogs()
     .map(log=>normalizeLessonLog(log, db.lessons.find(l=>l.id==log.lessonId)))
     .filter(log=>log.homework && String(log.homework).trim())
     .filter(log=>{
@@ -16469,7 +16480,7 @@ function openAdminStudentProfile(studentId,studentName){
   const host=document.getElementById('admin-student-profile-detail');
   if(!student || !host) return;
 
-  const studentLogs=(db.lessonLogs||[])
+  const studentLogs=visibleLessonLogs()
     .map(log=>normalizeLessonLog(log,db.lessons.find(l=>l.id==log.lessonId)))
     // ID-first, same reasoning as above — a name match would pull in the
     // other course of a two-course student.
@@ -17023,7 +17034,7 @@ function renderStudentPortalHomework(){
   const studentId=sel.value;
   if(!studentId){ list.innerHTML=teacherEmpty('Select your name above to view your homework.'); return; }
   const student=(db.students||[]).find(s=>String(s.id)===String(studentId));
-  const logs=(db.lessonLogs||[])
+  const logs=visibleLessonLogs()
     .map(log=>normalizeLessonLog(log, db.lessons.find(l=>l.id==log.lessonId)))
     .filter(log=>{
       // Exclude homework tied to a lesson that's been archived or deleted —
