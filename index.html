@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-295</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-296</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -12683,7 +12683,13 @@ try{
    // queue until someone reviews them (see "Changes that never reached the
    // cloud"). An item with no timestamp has an unknown age, so it waits too.
    // __cfBypass is set only while sending items a person has just ticked.
-   const heldBack = window.__cfBypass ? [] :
+   // The hold-back exists because an ADMIN's old queued write could be a
+   // deletion or a pre-edit version that would undo newer work. A teacher
+   // only ever adds — their own lesson logs — so holding those back would
+   // just mean their writing sits on a phone for no reason. Teachers send,
+   // whatever the age.
+   const adminSession = (typeof session!=='undefined' && session && session.role==='admin');
+   const heldBack = (window.__cfBypass || !adminSession) ? [] :
      items.filter(it=>!(it && it.ts && (Date.now()-it.ts)<=24*60*60*1000));
    if(heldBack.length){
      items=items.filter(it=>heldBack.indexOf(it)===-1);
@@ -16116,9 +16122,10 @@ function saveTeacherLessonLog(logId){
    window.__lastLogSyncError=null;
    Promise.resolve(syncLessonLogToSupabase(log)).then(()=>{
      const err=window.__lastLogSyncError;
-     showToast(err
-       ? '⚠ Saved on this device, but NOT in the cloud: '+err+' — it will keep retrying. Please send us this message on WhatsApp.'
-       : 'Lesson log saved ✓');
+     // Short enough to read on a phone. The reason is kept because it is
+     // the one thing that lets the problem be fixed.
+     showToast(err ? '⚠ Saved here, not in cloud — retrying. WhatsApp us: '+err
+                   : 'Log saved ✓');
    });
 }
 
@@ -22561,7 +22568,11 @@ function showVersionMismatchBanner(running, latest){
     const bar=document.createElement('div');
     bar.id='version-mismatch-banner';
     bar.style.cssText='position:fixed;top:0;left:0;right:0;z-index:99999;background:#b45309;color:#fff;padding:10px 16px;font-size:14px;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,0.3)';
-    bar.innerHTML='⚠ You may be on an old cached copy (running '+escapeHtml(running)+', latest is '+escapeHtml(latest)+'). <strong>Hard refresh</strong> (Ctrl/Cmd+Shift+R) to update.'
+    // Teachers read this on a phone, where "Ctrl+Shift+R" means nothing.
+    // Short, and an instruction that works on any device.
+    bar.innerHTML=(typeof session!=='undefined' && session && session.role==='admin')
+      ? '⚠ Old copy ('+escapeHtml(running)+' → '+escapeHtml(latest)+'). <strong>Hard refresh</strong> (Ctrl/Cmd+Shift+R).'
+      : '⚠ Update available — close the app and open it again.'
       +' <span style="cursor:pointer;text-decoration:underline;margin-left:8px" onclick="this.parentElement.remove()">dismiss</span>';
     document.body.appendChild(bar);
   }catch(_){}
@@ -22578,6 +22589,12 @@ function updateBackupReminderBanner(){
   try{
     const existing=document.getElementById('backup-reminder-banner');
     if(existing) existing.remove();
+    // Admin only. Backing up is something only an admin can do — the tab
+    // isn't even in a teacher's menu — so showing this to a teacher was
+    // asking them to fix something they can't reach, and reads like a
+    // fault in the app. (The line above still runs first, so the banner
+    // disappears immediately if a teacher signs in on the same device.)
+    if(!(typeof session!=='undefined' && session && session.role==='admin')) return;
     const lastStr=localStorage.getItem('cymatics_last_backup_at');
     const dismissedStr=localStorage.getItem('cymatics_backup_reminder_dismissed_at');
     const now=new Date();
@@ -24432,8 +24449,13 @@ function renderRevenueTrendChart(){
     if(!n){ if(el) el.remove(); return; }
     if(!el){ el=document.createElement('div'); el.id='cf-banner'; document.body.appendChild(el); }
     el.style.cssText='position:fixed;left:0;right:0;bottom:0;z-index:9999;background:#3a2f12;color:#f3dfa6;padding:12px 14px calc(12px + env(safe-area-inset-bottom,0px));display:flex;gap:10px;align-items:center;font-size:14px;border-top:1px solid #e2c47a';
-    el.innerHTML=`<span style="flex:1">This device has <b>${n}</b> unsent change${n===1?'':'s'} — it has not been refreshed from the cloud yet.</span>
-      <button class="btn btn-gold" style="min-height:40px" onclick="window.cloudFirstReview()">Review</button>`;
+    const admin=(typeof session!=='undefined' && session && session.role==='admin');
+    // Teachers get one short line on a phone screen; there is nothing for
+    // them to decide, it simply keeps trying.
+    el.innerHTML=admin
+      ? `<span style="flex:1">This device has <b>${n}</b> unsent change${n===1?'':'s'} — not refreshed from the cloud yet.</span>
+         <button class="btn btn-gold" style="min-height:40px" onclick="window.cloudFirstReview()">Review</button>`
+      : `<span style="flex:1"><b>${n}</b> still sending…</span>`;
   }
 
   // ── the flow ────────────────────────────────────────────────────────────
@@ -24449,8 +24471,11 @@ function renderRevenueTrendChart(){
     // 1. recent changes go out; the gate inside flushOutbox holds old ones back
     if(typeof window.flushOutbox==='function'){ await waitIdle(); try{ await window.flushOutbox(); }catch(_){} }
 
-    // 2. old changes only with consent
-    const stillOld=readQ().filter(isOld);
+    // 2. old changes only with consent — and only for an admin. A teacher's
+    // queue is their own lesson logs, so there is nothing to weigh up: it
+    // all goes, and they are never shown a list to decide about.
+    const isAdminSession=(typeof session!=='undefined' && session && session.role==='admin');
+    const stillOld=isAdminSession ? readQ().filter(isOld) : [];
     if(stillOld.length){
       const described=[];
       for(const it of stillOld) described.push(await describe(it));
@@ -24526,7 +24551,10 @@ function renderRevenueTrendChart(){
       }
       save();
       if(restored && typeof showToast==='function'){
-        showToast(restored+' lesson log(s) on this device have not reached the cloud yet — kept and retrying.');
+        const admin=(typeof session!=='undefined' && session && session.role==='admin');
+        showToast(admin
+          ? restored+' lesson log(s) here have not reached the cloud yet — kept and retrying.'
+          : restored+' log(s) still sending…');
       }
     }catch(err){
       console.warn('Cloud-first refresh failed — keeping this device\'s copy:', err && err.message);
