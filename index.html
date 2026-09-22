@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-292</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-293</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -12045,6 +12045,12 @@ async function _autoLoadFromCloudImpl(){
        nextLessonGoal: row.next_lesson_goal||'',
        homework: row.homework||'',
        homeworkStatus: row.homework_status||'',
+       // Rebuilt from homework_status. Without these the Done tick and the
+       // notes came back blank on any other device, so a fully written log
+       // looked half-empty — including in the coverage report.
+       homeworkCompleted: String(row.homework_status||'').toLowerCase()==='completed',
+       lessonNotes: row.notes||'',
+       nextLessonFocus: row.next_lesson_goal||'',
        homeworkDueDate: row.homework_due_date||''
      }));
      const localLogs=db.lessonLogs||[];
@@ -16083,8 +16089,17 @@ function saveTeacherLessonLog(logId){
   if(openStudentId && (openStudentId===String(log.studentId) || (db.students||[]).find(s=>String(s.id)===openStudentId)?.name===log.studentName)){
     openTeacherStudentWorkspace(openStudentId);
   }
-   syncLessonLogToSupabase(log);
-  showToast('Lesson log saved');
+   // Wait for the cloud's answer before claiming it saved. Saying "saved"
+   // when the database refused the write is how a teacher's work went
+   // missing quietly — they had no reason to check, and nobody found out
+   // until someone asked why the logs were empty.
+   window.__lastLogSyncError=null;
+   Promise.resolve(syncLessonLogToSupabase(log)).then(()=>{
+     const err=window.__lastLogSyncError;
+     showToast(err
+       ? '⚠ Saved on this device, but NOT in the cloud: '+err+' — it will keep retrying. Please tell Mario.'
+       : 'Lesson log saved ✓');
+   });
 }
 
 async function syncLessonLogToSupabase(log){
@@ -16142,6 +16157,7 @@ async function syncLessonLogToSupabase(log){
     const {error}=await window.supabaseClientV1.from('lesson_updates')
       .upsert(payload, {onConflict:'lesson_id'});
     if(error){
+      window.__lastLogSyncError=error.message;
       console.warn('Lesson log sync failed:', error.message);
       // Queue for automatic retry rather than dropping it. A permission
       // failure (RLS) that later gets fixed on the server, or a transient
@@ -16150,6 +16166,7 @@ async function syncLessonLogToSupabase(log){
       if(typeof window.enqueueLessonLogRetry==='function') window.enqueueLessonLogRetry(log);
     }
   }catch(err){
+    window.__lastLogSyncError=err.message;
     console.warn('Lesson log sync failed:', err.message);
     if(typeof window.enqueueLessonLogRetry==='function') window.enqueueLessonLogRetry(log);
   }
@@ -24439,9 +24456,24 @@ function renderRevenueTrendChart(){
     return refreshFromCloud(origLoad);
   }
 
+  // Writing a teacher has done that the cloud has not accepted yet.
+  const logHasWriting=l=>!!(l && (String(l.topicCovered||'').trim() || String(l.teacherNotes||'').trim()
+    || String(l.lessonNotes||'').trim() || String(l.nextLessonGoal||'').trim()
+    || String(l.homework||'').trim() || l.performanceRating!=null
+    || (l.performance && l.performance.rating!=null)));
+  const logKey=l=>String(l.lessonId)+'|'+String(l.studentName||'').trim().toLowerCase();
+
   async function refreshFromCloud(origLoad){
     if(!window.supabaseClientV1) return origLoad();
     const snapshot=JSON.parse(JSON.stringify(db));
+    // Lesson logs are the one thing a refresh must never throw away.
+    // A log only reaches the cloud if the database accepts the write; when
+    // it refuses — a permissions problem, say — the teacher's words exist
+    // ONLY on their device. Replacing the device's copy with the cloud's
+    // would erase work that took a real person real time, and they would
+    // have no idea until someone asked why the log was empty.
+    const rescueLogs=(snapshot.lessonLogs||[]).filter(l=>logHasWriting(l)
+      && !(typeof logIsBeforeCutoff==='function' && logIsBeforeCutoff(l)));
     try{
       ['students','lessons','lessonLogs','waitingList','practiceSessions','notes','resources',
        'expenses','otherRevenue','refunds','teacherAbsences','products','sales'].forEach(k=>{ db[k]=[]; });
@@ -24456,7 +24488,25 @@ function renderRevenueTrendChart(){
         && (!(snapshot.students||[]).length || (db.students||[]).length>0)
         && (!(snapshot.lessons||[]).length  || (db.lessons||[]).length>0);
       if(!ok) throw new Error('download incomplete');
+
+      // Put back any written log the cloud still doesn't have, and push it
+      // again. Nothing a teacher typed is lost to a refresh.
+      let restored=0;
+      if(rescueLogs.length){
+        const have=new Map((db.lessonLogs||[]).map(l=>[logKey(l), l]));
+        rescueLogs.forEach(mine=>{
+          const theirs=have.get(logKey(mine));
+          if(theirs && logHasWriting(theirs)) return;      // the cloud has it
+          if(theirs){ Object.assign(theirs, mine); } else { (db.lessonLogs=db.lessonLogs||[]).push(mine); }
+          restored++;
+          if(typeof syncLessonLogToSupabase==='function'){ try{ syncLessonLogToSupabase(mine); }catch(_){} }
+        });
+        if(restored) console.warn(restored+' lesson log(s) written on this device are still missing from the cloud — kept and re-queued.');
+      }
       save();
+      if(restored && typeof showToast==='function'){
+        showToast(restored+' lesson log(s) on this device have not reached the cloud yet — kept and retrying.');
+      }
     }catch(err){
       console.warn('Cloud-first refresh failed — keeping this device\'s copy:', err && err.message);
       db=snapshot; save();
