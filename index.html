@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-293</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-295</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -2725,6 +2725,22 @@ function logMatchesLessonStudent(log, lesson){
   const b=String(lesson.student||lesson.student_name||'').trim().toLowerCase();
   if(!a) return true;          // no name on the log yet — it takes the lesson's
   return a===b;
+}
+
+// Has a teacher actually written anything in this log?
+//
+// Opening a lesson creates an empty log automatically, so a log EXISTING
+// proves nothing. A log left at "Not rated" with every field blank is not
+// a logged lesson: it must still show as one to do — in the teacher's own
+// list and in the admin report alike, so the two can never disagree.
+function lessonLogHasWriting(lg){
+  if(!lg) return false;
+  const text=['topicCovered','teacherNotes','lessonNotes','nextLessonGoal','nextLessonFocus','homework']
+    .some(k=>String(lg[k]||'').trim().length>0);
+  if(text) return true;
+  const rating=(lg.performance && lg.performance.rating!=null) ? lg.performance.rating : lg.performanceRating;
+  if(rating!=null && rating!=='' && Number(rating)>0) return true;
+  return Array.isArray(lg.repertoire) && lg.repertoire.length>0;
 }
 
 function logEffectiveDate(log){
@@ -15800,7 +15816,11 @@ function renderTeacherWorkspace(){
       // no log record at all).
       const unlogged=byStudent[name].filter(l=>{
         const lg=logByLessonId[String(l.id)];
-        return !lg || (!(lg.topicCovered||'').trim() && !lg.performanceRating);
+        // Same test as the admin report: nothing written = still to log.
+        // Also ignores a log belonging to another student, which renumbered
+        // lessons can leave pointing at this one.
+        if(lg && typeof logMatchesLessonStudent==='function' && !logMatchesLessonStudent(lg, l)) return true;
+        return !lessonLogHasWriting(lg);
       }).length;
       const needsBadge = unlogged>0
         ? ` <span class="badge badge-amber" style="font-size:10px">${unlogged} to log</span>`
@@ -16097,7 +16117,7 @@ function saveTeacherLessonLog(logId){
    Promise.resolve(syncLessonLogToSupabase(log)).then(()=>{
      const err=window.__lastLogSyncError;
      showToast(err
-       ? '⚠ Saved on this device, but NOT in the cloud: '+err+' — it will keep retrying. Please tell Mario.'
+       ? '⚠ Saved on this device, but NOT in the cloud: '+err+' — it will keep retrying. Please send us this message on WhatsApp.'
        : 'Lesson log saved ✓');
    });
 }
@@ -16599,6 +16619,7 @@ window.lessonLogCoverage=function(monthKey){
   // auto-created log therefore looked written, and every teacher showed
   // 100%, including one who has never opened the app.
   const hasContent=lg=>{
+    if(typeof lessonLogHasWriting==='function') return lessonLogHasWriting(lg);
     if(!lg) return false;
     const textWritten=['lessonNotes','topicCovered','homework',
                        'nextLessonFocus','nextLessonGoal','teacherNotes']
