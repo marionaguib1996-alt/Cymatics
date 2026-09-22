@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-298</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-299</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -15855,6 +15855,10 @@ function renderTeacherWorkspace(){
       // topic covered nor a performance rating (including sessions with
       // no log record at all).
       const unlogged=byStudent[name].filter(l=>{
+        // Sessions before the cut-off aren't listed and can't be logged,
+        // so counting them told a teacher they owed four logs while the
+        // list showed nothing to do — the badge and the list have to agree.
+        if(String(l.date||l.lesson_date||'')<LOG_PURGE_BEFORE) return false;
         const lg=logByLessonId[String(l.id)];
         // Same test as the admin report: nothing written = still to log.
         // Also ignores a log belonging to another student, which renumbered
