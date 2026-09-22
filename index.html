@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-291</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-292</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1182,7 +1182,7 @@ input::placeholder{color:var(--text-dim)}
        repair tools — far enough down that it simply wasn't found. -->
   <div class="card" style="border-color:var(--gold)">
     <div class="card-title" style="margin-bottom:10px">☁️ Use Cloud Data Only</div>
-    <small style="display:block;margin-bottom:10px;color:var(--text-muted)">Replaces <b>this device's</b> data with the cloud copy. Use it first on any phone or laptop that opens showing old or unexpected students. <b>Do this instead of clearing site data</b> — clearing also wipes the record of what this device already knows, so the next sync treats its leftovers as brand-new and uploads them. Nothing in the cloud changes, and other devices are unaffected.</small>
+    <small style="display:block;margin-bottom:10px;color:var(--text-muted)">Every device now refreshes itself from the cloud automatically when it opens — old data on it can't upload, and changes older than 24 hours that never reached the cloud are shown to you for review first. You only need this button to force a refresh again right now. Nothing in the cloud changes, and other devices are unaffected.</small>
     <button class="btn btn-gold" style="width:100%" onclick="useCloudDataOnly()">Replace this device's data with the cloud</button>
   </div>
 
@@ -12654,7 +12654,21 @@ try{
    if(typeof navigator!=='undefined' && navigator.onLine===false) return;
    let items=loadOutbox();
    if(!items.length) return;
+   // Changes older than 24 hours are NEVER sent automatically — not at
+   // startup, not by the 20-second timer, not when the connection returns.
+   // They could be pre-edit versions or long-deleted records, and sending
+   // them silently is how old data used to overwrite new. They wait in the
+   // queue until someone reviews them (see "Changes that never reached the
+   // cloud"). An item with no timestamp has an unknown age, so it waits too.
+   // __cfBypass is set only while sending items a person has just ticked.
+   const heldBack = window.__cfBypass ? [] :
+     items.filter(it=>!(it && it.ts && (Date.now()-it.ts)<=24*60*60*1000));
+   if(heldBack.length){
+     items=items.filter(it=>heldBack.indexOf(it)===-1);
+     if(!items.length) return;
+   }
    flushingOutbox=true;
+   window.__outboxBusy=true;
    try{
      // Fresh auth: the anon key plus, if a user is signed in, their token.
      let authHeaders={
@@ -12699,11 +12713,13 @@ try{
          remaining.push(item); // still offline — keep
        }
      }
-     saveOutbox(remaining);
+     // Put the held-back old items back — they were only set aside, never dropped.
+     saveOutbox([...heldBack, ...remaining]);
      if(items.length!==remaining.length && typeof window.stampLastSync==='function') window.stampLastSync('queued edits synced');
      if(typeof updateSyncFailureBadge==='function') updateSyncFailureBadge();
    } finally {
      flushingOutbox=false;
+     window.__outboxBusy=false;
    }
  }
  window.flushOutbox=flushOutbox;
@@ -24203,6 +24219,275 @@ function renderRevenueTrendChart(){
     oldRenderReportsPhase28();
     renderRevenueTrendChart();
   };
+})();
+</script>
+
+<script>
+// ════════════════════════════════════════════════════════════════════════
+// CLOUD-FIRST OPEN — every device becomes a copy of the cloud when it opens
+// ════════════════════════════════════════════════════════════════════════
+// Until now a device was treated as a PARTNER of the cloud: on every sync
+// the two were merged and the app guessed which side was right. A phone
+// left alone for a month would come back and its leftovers — deleted
+// students, pre-edit versions — could be taken for new work and uploaded.
+//
+// Now, on the first sync of every visit:
+//   1. Changes queued in the last 24 hours are sent automatically — the
+//      real case of an edit made outside with no signal.
+//   2. Anything OLDER is never sent on its own. It is listed, checked
+//      against the cloud, and flagged where it would overwrite newer data.
+//      Nothing is selected by default; the person decides.
+//   3. When nothing is left unsent, the device's copy is replaced by a
+//      fresh download from the cloud — old data is gone BEFORE it gets any
+//      chance to upload.
+//   4. If anything is still unsent, or the download fails, nothing is
+//      replaced: the device keeps its copy and says so. It never wipes
+//      first and hopes.
+(function(){
+  const OUTBOX='cymatics_sync_outbox_v1';
+  const RECENT_MS=24*60*60*1000;
+
+  const readQ =()=>{ try{ return JSON.parse(localStorage.getItem(OUTBOX)||'[]'); }catch(_){ return []; } };
+  const writeQ=q =>{ try{ localStorage.setItem(OUTBOX, JSON.stringify(q)); }catch(_){}
+                     if(typeof updateSyncFailureBadge==='function'){ try{ updateSyncFailureBadge(); }catch(_){} } };
+
+  // ── pure helpers (tested directly) ─────────────────────────────────────
+  // An item with no timestamp has an unknown age, so it is treated as old:
+  // never sent without being seen.
+  function splitByAge(items, now){
+    const recent=[], old=[];
+    items.forEach(it=>{ (it && it.ts && (now-it.ts)<=RECENT_MS ? recent : old).push(it); });
+    return {recent, old};
+  }
+
+  const TABLES={students:'Student',lessons:'Lesson',lesson_updates:'Lesson log',payments:'Payment',
+    payment_amounts:'Payment amount',teachers:'Teacher',expenses:'Expense',waiting_list:'Waiting list',
+    practice_sessions:'Practice session',products:'Product',sales:'Sale',refunds:'Refund',notes:'Note',
+    other_revenue:'Other revenue',teacher_absences:'Teacher absence',deletion_log:'Deletion log',
+    teacher_paid:'Payroll',reminders_sent:'Reminder',renewals_dismissed:'Renewal',wishlists:'Wishlist',
+    app_meta:'App setting',instruments:'Instrument',resources:'Resource'};
+
+  // Which record a queued write targets, read from its own URL and body.
+  function parseTarget(item){
+    let u; try{ u=new URL(item.url, location.origin); }catch(_){ return null; }
+    const m=u.pathname.match(/\/rest\/v1\/([a-z_]+)/); if(!m) return null;
+    const table=m[1], method=String(item.method||'POST').toUpperCase();
+    let body=null; try{ body=item.body?JSON.parse(item.body):null; }catch(_){}
+    if(Array.isArray(body)) body=body[0]||null;
+    let col=null, val=null;
+    u.searchParams.forEach((v,k)=>{ if(!col && /^eq\./.test(v)){ col=k; val=v.slice(3); } });
+    if(!col){
+      const oc=u.searchParams.get('on_conflict');
+      if(oc && body && body[oc]!=null){ col=oc; val=String(body[oc]); }
+    }
+    return {table, method, body, col, val};
+  }
+
+  const same=(a,b)=>{
+    const n=v=>(v===null||v===undefined||v==='')?'':(typeof v==='object'?JSON.stringify(v):String(v).trim());
+    return n(a)===n(b);
+  };
+  // Fields where this device's version differs from what the cloud holds now.
+  function diffFields(body, row){
+    if(!body || !row) return [];
+    const skip=new Set(['id','created_at','updated_at']);
+    return Object.keys(body).filter(k=>!skip.has(k) && body[k]!==undefined && (k in row) && !same(body[k], row[k]))
+      .map(k=>({field:k.replace(/_/g,' '), cloud:row[k], device:body[k]}));
+  }
+
+  function labelOf(t, row){
+    const src=Object.assign({}, row||{}, t.body||{});
+    const who=[src.first_name, src.last_name].filter(Boolean).join(' ')
+      || src.name || src.student_name || src.product_name || src.description || src.title || '';
+    const when=src.lesson_date || src.date || src.session_date || src.month || '';
+    return [who, when].filter(Boolean).join(' · ') || (t.col ? t.col+' '+t.val : 'record');
+  }
+
+  const ago=ts=>{
+    if(!ts) return 'unknown age';
+    const d=Math.floor((Date.now()-ts)/86400000);
+    if(d<1) return 'today'; if(d===1) return 'yesterday'; return d+' days ago';
+  };
+
+  // ── checking each old item against the cloud ───────────────────────────
+  async function describe(item){
+    const t=parseTarget(item);
+    const kind=t ? (TABLES[t.table]||t.table) : 'Change';
+    const out={item, kind, label:'', action:'', age:ago(item.ts), overwrite:false, diffs:[], note:''};
+    if(!t){ out.label='unrecognised change'; out.action='Unknown'; return out; }
+    let row=null, checked=false;
+    if(t.col && window.supabaseClientV1){
+      try{
+        const {data,error}=await window.supabaseClientV1.from(t.table).select('*').eq(t.col, t.val).limit(1);
+        if(!error){ checked=true; row=(data&&data[0])||null; }
+      }catch(_){}
+    }
+    out.label=labelOf(t, row);
+    if(t.method==='DELETE'){
+      out.action='Delete';
+      if(row){ out.overwrite=true; out.note='Removes a record that still exists in the cloud.'; }
+      else if(checked) out.note='Already gone from the cloud — nothing to remove.';
+    } else if(row){
+      out.action = t.method==='PATCH' ? 'Update' : 'Save';
+      out.diffs=diffFields(t.body, row);
+      out.overwrite=out.diffs.length>0;
+      if(!out.overwrite) out.note='The cloud already matches — sending changes nothing.';
+    } else {
+      out.action='Add';
+      out.note = checked ? 'Not in the cloud now — it may have been deleted since.' : 'Could not check the cloud.';
+    }
+    if(!checked && t.col) out.note='Could not check the cloud — treat with care.';
+    return out;
+  }
+
+  // ── the review list ─────────────────────────────────────────────────────
+  let pendingResolve=null;
+  const origClose=window.closeModal;
+  window.closeModal=function(){
+    const r=pendingResolve; pendingResolve=null;
+    const res=origClose ? origClose.apply(this, arguments) : undefined;
+    if(r) r({choice:'later'});     // closing without choosing = decide later; nothing sent, nothing lost
+    return res;
+  };
+
+  function fmt(v){ const s=(v===null||v===undefined||v==='')?'—':(typeof v==='object'?JSON.stringify(v):String(v));
+                   return escapeHtml(s.length>40?s.slice(0,40)+'…':s); }
+
+  function reviewOld(described){
+    return new Promise(resolve=>{
+      pendingResolve=resolve;
+      const rows=described.map((d,i)=>`
+        <label style="display:flex;gap:12px;align-items:flex-start;padding:14px 12px;border:1px solid ${d.overwrite?'rgba(226,196,122,0.55)':'var(--border)'};border-radius:10px;margin-bottom:10px;cursor:pointer;min-height:56px;background:${d.overwrite?'rgba(226,196,122,0.07)':'transparent'}">
+          <input type="checkbox" class="cf-pick" data-i="${i}" style="width:22px;height:22px;flex:0 0 22px;margin-top:2px">
+          <span style="flex:1;min-width:0">
+            <span style="display:block;font-size:15px;font-weight:700;line-height:1.35">${escapeHtml(d.action)} · ${escapeHtml(d.kind)}</span>
+            <span style="display:block;font-size:14px;line-height:1.35;word-break:break-word">${escapeHtml(d.label)}</span>
+            <span style="display:block;font-size:12px;color:var(--text-muted);margin-top:2px">queued ${escapeHtml(d.age)}</span>
+            ${d.overwrite?`<span style="display:block;margin-top:8px;font-size:13px;color:#e2c47a;font-weight:700">⚠ Would overwrite the cloud</span>`:''}
+            ${d.diffs.slice(0,4).map(x=>`<span style="display:block;font-size:12.5px;margin-top:3px;word-break:break-word"><b>${escapeHtml(x.field)}</b>: cloud ${fmt(x.cloud)} → this device ${fmt(x.device)}</span>`).join('')}
+            ${d.diffs.length>4?`<span style="display:block;font-size:12px;color:var(--text-muted)">+${d.diffs.length-4} more field(s)</span>`:''}
+            ${d.note?`<span style="display:block;font-size:12.5px;color:var(--text-muted);margin-top:4px">${escapeHtml(d.note)}</span>`:''}
+          </span>
+        </label>`).join('');
+      openModal('Changes that never reached the cloud', `
+        <div style="font-size:14px;line-height:1.45;margin-bottom:12px">
+          This device has <b>${described.length}</b> change${described.length===1?'':'s'} older than 24 hours that never reached the cloud.
+          Nothing is sent unless you tick it. Anything left unticked is discarded.
+        </div>
+        <button type="button" class="btn" style="width:100%;min-height:44px;margin-bottom:12px" onclick="document.querySelectorAll('.cf-pick').forEach(c=>c.checked=!Array.from(document.querySelectorAll('.cf-pick')).every(x=>x.checked))">Select / clear all</button>
+        <div style="max-height:52vh;overflow-y:auto;-webkit-overflow-scrolling:touch">${rows}</div>
+        <div style="display:flex;flex-direction:column;gap:10px;margin-top:14px">
+          <button type="button" class="btn btn-gold" style="width:100%;min-height:48px;font-size:15px" onclick="window.__cfDecide('send')">Send ticked · discard the rest</button>
+          <button type="button" class="btn" style="width:100%;min-height:44px" onclick="window.__cfDecide('later')">Decide later (keep them, don't refresh yet)</button>
+        </div>`);
+      window.__cfDecide=(choice)=>{
+        const picked=Array.from(document.querySelectorAll('.cf-pick')).filter(c=>c.checked).map(c=>Number(c.dataset.i));
+        const r=pendingResolve; pendingResolve=null;
+        if(origClose) origClose();
+        if(r) r({choice, picked});
+      };
+    });
+  }
+
+  function banner(n){
+    let el=document.getElementById('cf-banner');
+    if(!n){ if(el) el.remove(); return; }
+    if(!el){ el=document.createElement('div'); el.id='cf-banner'; document.body.appendChild(el); }
+    el.style.cssText='position:fixed;left:0;right:0;bottom:0;z-index:9999;background:#3a2f12;color:#f3dfa6;padding:12px 14px calc(12px + env(safe-area-inset-bottom,0px));display:flex;gap:10px;align-items:center;font-size:14px;border-top:1px solid #e2c47a';
+    el.innerHTML=`<span style="flex:1">This device has <b>${n}</b> unsent change${n===1?'':'s'} — it has not been refreshed from the cloud yet.</span>
+      <button class="btn btn-gold" style="min-height:40px" onclick="window.cloudFirstReview()">Review</button>`;
+  }
+
+  // ── the flow ────────────────────────────────────────────────────────────
+  // Waits for any running flush, so the queue is never rewritten from a
+  // copy that a flush in progress is about to overwrite (or has already sent).
+  async function waitIdle(){
+    let n=0; while(window.__outboxBusy && n++<100) await new Promise(r=>setTimeout(r,150));
+  }
+  const sig=it=>(it&&it.ts)+'|'+(it&&it.method)+'|'+(it&&it.url)+'|'+((it&&it.body)||'');
+  const isOld=it=>!(it && it.ts && (Date.now()-it.ts)<=RECENT_MS);
+
+  async function triageAndMaybeRefresh(origLoad){
+    // 1. recent changes go out; the gate inside flushOutbox holds old ones back
+    if(typeof window.flushOutbox==='function'){ await waitIdle(); try{ await window.flushOutbox(); }catch(_){} }
+
+    // 2. old changes only with consent
+    const stillOld=readQ().filter(isOld);
+    if(stillOld.length){
+      const described=[];
+      for(const it of stillOld) described.push(await describe(it));
+      const res=await reviewOld(described);
+      if(res.choice==='send'){
+        const picked=new Set((res.picked||[]).map(i=>sig(described[i].item)));
+        const reviewed=new Set(stillOld.map(sig));
+        await waitIdle();
+        // Synchronous from here to the flush starting — nothing can interleave.
+        writeQ(readQ().filter(it=>!reviewed.has(sig(it)) || picked.has(sig(it))));   // unticked = discarded
+        if(picked.size && typeof window.flushOutbox==='function'){
+          window.__cfBypass=true;                     // ticked by a person — let them through
+          const p=window.flushOutbox();
+          try{ await p; }catch(_){} finally{ window.__cfBypass=false; }
+        }
+      }
+      // "decide later": the queue is left exactly as it is
+    }
+
+    // 3/4. refresh only from a clean slate
+    const unsent=readQ().length;
+    if(unsent){ banner(unsent); return origLoad(); }
+    banner(0);
+    return refreshFromCloud(origLoad);
+  }
+
+  async function refreshFromCloud(origLoad){
+    if(!window.supabaseClientV1) return origLoad();
+    const snapshot=JSON.parse(JSON.stringify(db));
+    try{
+      ['students','lessons','lessonLogs','waitingList','practiceSessions','notes','resources',
+       'expenses','otherRevenue','refunds','teacherAbsences','products','sales'].forEach(k=>{ db[k]=[]; });
+      ['payments','paymentMethods','paymentAmounts','paymentStudentNames','payrollPaid',
+       'remindersSent','renewalsDismissed','wishlists'].forEach(k=>{ db[k]={}; });
+      window.__loadedFromCloudThisSession=false;
+      await origLoad();
+      // Only accept the fresh copy if the download genuinely completed and
+      // didn't come back empty where this device had data — an empty result
+      // is far more likely a failed download than an academy with no students.
+      const ok = window.__loadedFromCloudThisSession===true
+        && (!(snapshot.students||[]).length || (db.students||[]).length>0)
+        && (!(snapshot.lessons||[]).length  || (db.lessons||[]).length>0);
+      if(!ok) throw new Error('download incomplete');
+      save();
+    }catch(err){
+      console.warn('Cloud-first refresh failed — keeping this device\'s copy:', err && err.message);
+      db=snapshot; save();
+      if(typeof showToast==='function') showToast('Could not refresh from the cloud — kept this device\'s copy. It will retry next time.');
+    }
+    ['renderStudents','renderLessons','renderOverview','renderTeachers','renderWaitingList','renderProducts',
+     'renderExpenses','renderNotesPage','renderTeacherWorkspace','renderCalendarPage']
+      .forEach(fn=>{ if(typeof window[fn]==='function'){ try{ window[fn](); }catch(_){} } });
+  }
+
+  // Manual entry point from the banner.
+  window.cloudFirstReview=async function(){
+    window.__cloudFirstDone=false;
+    if(typeof window.autoLoadFromCloud==='function') return window.autoLoadFromCloud();
+  };
+
+  // Wrap the outermost autoLoadFromCloud; only the FIRST signed-in sync of a
+  // visit runs the flow — the regular 20-second syncs pass straight through.
+  const prior=window.autoLoadFromCloud;
+  if(typeof prior==='function'){
+    window.autoLoadFromCloud=async function(){
+      const signedIn=(typeof session!=='undefined' && session && session.role);
+      if(!signedIn || window.__cloudFirstDone || window.__cloudFirstRunning) return prior.apply(this, arguments);
+      window.__cloudFirstRunning=true;
+      try{ await triageAndMaybeRefresh(()=>prior.apply(this, arguments)); window.__cloudFirstDone=true; }
+      finally{ window.__cloudFirstRunning=false; }
+    };
+  }
+
+  // exposed for tests
+  window.__cloudFirst={splitByAge, parseTarget, diffFields, labelOf, describe, triageAndMaybeRefresh, refreshFromCloud};
 })();
 </script>
 
