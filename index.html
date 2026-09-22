@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-297</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-298</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -12700,6 +12700,29 @@ try{
    // just mean their writing sits on a phone for no reason. Teachers send,
    // whatever the age.
    const adminSession = (typeof session!=='undefined' && session && session.role==='admin');
+
+   // A queued write for a lesson log from before the cut-off is DROPPED
+   // outright, for every role and even when a person has ticked it. Those
+   // logs were cleared deliberately; replaying an old queued write would
+   // put them straight back in the cloud. Teachers bypass the age hold
+   // below so their own logs always send, which is exactly why this has to
+   // be a separate, unconditional rule.
+   const beforeCut=(it)=>{
+     if(!it || !/lesson_updates/.test(String(it.url||''))) return false;
+     try{
+       const body=JSON.parse(it.body||'null');
+       const rows=Array.isArray(body)?body:[body];
+       return rows.some(r=>r && r.lesson_date && String(r.lesson_date)<LOG_PURGE_BEFORE);
+     }catch(_){ return false; }
+   };
+   const dropped=items.filter(beforeCut);
+   if(dropped.length){
+     items=items.filter(it=>dropped.indexOf(it)===-1);
+     saveOutbox(items);
+     console.warn('Dropped '+dropped.length+' queued log write(s) from before '+LOG_PURGE_BEFORE+' — those logs were cleared.');
+     if(!items.length) return;
+   }
+
    const heldBack = (window.__cfBypass || !adminSession) ? [] :
      items.filter(it=>!(it && it.ts && (Date.now()-it.ts)<=24*60*60*1000));
    if(heldBack.length){
@@ -16019,6 +16042,13 @@ function openTeacherLogsForStudent(studentName){
     if(String(l.status||'')!=='attended') return false;
     if((l.student||l.student_name||'Student')!==studentName) return false;
     if(String(l.teacher||'').trim().toLowerCase()!==scopeName) return false;
+    // Sessions before the cut-off are not listed here. Their logs were
+    // cleared for good, so a row saying "To log" with a "Log it" button is
+    // an invitation to write something that would be refused and thrown
+    // away. This hides the ROW ONLY — the lesson itself still counts
+    // everywhere it should: payable lessons, make-ups owed, attendance and
+    // every total.
+    if(String(l.date||l.lesson_date||'')<LOG_PURGE_BEFORE) return false;
     const d=String(l.date||l.lesson_date||'').slice(0,10);
     return (typeof isLessonInPayrollPeriod==='function')
       ? isLessonInPayrollPeriod({date:d}, logsMonthKey)
