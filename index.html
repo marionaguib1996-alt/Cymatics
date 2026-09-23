@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-299</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-300</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -15822,9 +15822,14 @@ function renderTeacherWorkspace(){
       if(String(l.status||'')!=='attended') return false;
       if(String(l.teacher||'').trim().toLowerCase()!==String(data.teacherName||session.name||'').trim().toLowerCase()) return false;
       const d=String(l.date||l.lesson_date||'').slice(0,10);
-      return (typeof isLessonInPayrollPeriod==='function')
-        ? isLessonInPayrollPeriod({date:d}, logsMonthKey)
-        : d.slice(0,7)===logsMonthKey;
+      // Plain calendar month, 1st to the last day. The 25th-to-24th window
+      // exists for PAYROLL — it decides which lessons a teacher is paid for
+      // in a given payslip. Logging has nothing to do with pay, and students
+      // are billed by calendar month, so borrowing the payroll window here
+      // put late-August sessions under September and made the counts look
+      // wrong against every other screen.
+      if(d<LOG_PURGE_BEFORE) return false;
+      return d.slice(0,7)===logsMonthKey;
     });
     const logByLessonId={};
     (data.logs||[]).forEach(lg=>{ if(lg.lessonId!=null) logByLessonId[String(lg.lessonId)]=lg; });
@@ -16054,9 +16059,8 @@ function openTeacherLogsForStudent(studentName){
     // every total.
     if(String(l.date||l.lesson_date||'')<LOG_PURGE_BEFORE) return false;
     const d=String(l.date||l.lesson_date||'').slice(0,10);
-    return (typeof isLessonInPayrollPeriod==='function')
-      ? isLessonInPayrollPeriod({date:d}, logsMonthKey)
-      : d.slice(0,7)===logsMonthKey;
+    // Calendar month — see the note on the student list above.
+    return d.slice(0,7)===logsMonthKey;
   }).sort((a,b)=>String(a.date||'').localeCompare(String(b.date||'')));
 
   const rows=sessions.map((l,i)=>{
@@ -16169,8 +16173,13 @@ function saveTeacherLessonLog(logId){
      const err=window.__lastLogSyncError;
      // Short enough to read on a phone. The reason is kept because it is
      // the one thing that lets the problem be fixed.
-     showToast(err ? '⚠ Saved here, not in cloud — retrying. WhatsApp us: '+err
-                   : 'Log saved ✓');
+     // A log with nothing in it is deliberately not sent — there is nothing
+     // to send. Saying "saved" then is how a teacher walks away believing a
+     // lesson was logged when nothing was recorded at all.
+     const wroteSomething=(typeof lessonLogHasWriting==='function') && lessonLogHasWriting(log);
+     showToast(!wroteSomething ? '⚠ Nothing written — nothing saved. Add a topic, note or rating.'
+       : err ? '⚠ Saved here, not in cloud — retrying. WhatsApp us: '+err
+       : 'Log saved ✓');
    });
 }
 
@@ -16689,7 +16698,10 @@ window.lessonLogCoverage=function(monthKey){
   (db.lessons||[]).forEach(l=>{
     if((l.status_record||'active')==='archived') return;
     if(l.status!=='attended') return;
-    const lm=String(l.month || l.date || '').slice(0,7);
+    // The lesson's own DATE decides its month. `l.month` is written at
+    // various points and can hold a payroll month, which would drag a late
+    // August lesson into September and disagree with every other log screen.
+    const lm=String(l.date || l.month || '').slice(0,7);
     if(lm!==String(m)) return;
     // Lessons before the log cut-off can't be logged any more, so counting
     // them would show permanent gaps no teacher could ever close.
@@ -16774,7 +16786,7 @@ window.showTeacherLogs=function(teacherName){
     l.status==='attended' &&
     (l.status_record||'active')!=='archived' &&
     String(l.date||'')>=LOG_PURGE_BEFORE &&
-    String(l.month || l.date || '').slice(0,7)===String(month)
+    String(l.date || l.month || '').slice(0,7)===String(month)
   ).sort((a,b)=>String(b.date||'').localeCompare(String(a.date||'')));
 
   if(!lessons.length){
@@ -16805,44 +16817,60 @@ window.showTeacherLogs=function(teacherName){
     return out.filter(([,v])=>String(v||'').trim().length>0);
   };
 
-  const body=lessons.map(l=>{
+  // One collapsed line per lesson, opened on tap. Twenty written logs as
+  // full blocks is a wall of text nobody reads; the summary line carries
+  // enough (date, student, rating, the first words of the topic) to find
+  // the one you want, and everything else stays out of the way until asked
+  // for. Unwritten lessons are grouped at the bottom instead of being
+  // repeated between the ones that matter.
+  const written=[], blank=[], missing=[];
+  lessons.forEach(l=>{
+    // logForLesson, not a raw lookup: the index holds every log filed under
+    // a lesson id, and only the one written for THIS student counts.
     const lg=logForLesson(logsByLesson, l);
-    const filled=lg
-      ? FIELDS.filter(([k])=>String(lg[k]||'').trim().length>0).map(([k,label])=>[label, String(lg[k])])
-          .concat(extraBits(lg))
-      : [];
-    let inner;
-    if(!lg){
-      inner='<div style="color:#e06c6c;font-size:12px">No log written for this lesson.</div>';
-    } else if(!filled.length){
-      inner='<div style="color:var(--gold);font-size:12px">A log was saved, but every field is empty.</div>';
-    } else {
-      inner=filled.map(([label,value])=>
-        `<div style="margin-top:6px"><span style="color:var(--text-muted);font-size:11px">${escapeHtml(label)}</span>`
-        +`<div style="font-size:13px;white-space:pre-wrap">${escapeHtml(value)}</div></div>`
-      ).join('');
-      if(lg.homework && lg.homeworkCompleted){
-        inner+='<div style="margin-top:6px"><span class="badge badge-green" style="font-size:10px">homework marked done</span></div>';
-      }
-    }
-    return `<div style="padding:10px 0;border-bottom:1px solid var(--border)">
-      <div style="font-weight:700;font-size:13px">${escapeHtml(formatLedgerDate(l.date))} ${escapeHtml(formatTime12h(l.time||''))}
-        — ${escapeHtml(l.student||'?')}
-        <span style="color:var(--text-muted);font-weight:400">${escapeHtml(l.instrument||'')}</span></div>
-      ${inner}
-    </div>`;
-  }).join('');
+    if(!lg) missing.push({l});
+    else if(FIELDS.some(([k])=>String(lg[k]||'').trim().length>0) || extraBits(lg).length) written.push({l, lg});
+    else blank.push({l});
+  });
 
-  const written=lessons.filter(l=>{
-    const lg=logForLesson(logsByLesson, l);
-    if(!lg) return false;
-    return FIELDS.some(([k])=>String(lg[k]||'').trim().length>0) || extraBits(lg).length>0;
-  }).length;
+  const when=l=>escapeHtml(formatLedgerDate(l.date))+' '+escapeHtml(formatTime12h(l.time||''));
+  const stars=lg=>{
+    const r=(lg.performance && lg.performance.rating!=null) ? lg.performance.rating : lg.performanceRating;
+    return (r!=null && r!=='' && Number(r)>0) ? ' <span style="color:var(--gold)">'+('★'.repeat(Number(r)))+'</span>' : '';
+  };
+  const gist=lg=>{
+    const t=String(lg.topicCovered||lg.teacherNotes||lg.homework||'').trim().replace(/\s+/g,' ');
+    return t ? '<span style="color:var(--text-muted)"> · '+escapeHtml(t.length>46?t.slice(0,46)+'…':t)+'</span>' : '';
+  };
+
+  const detail=(lg)=>FIELDS.filter(([k])=>String(lg[k]||'').trim().length>0)
+      .map(([k,label])=>[label, String(lg[k])]).concat(extraBits(lg))
+      .map(([label,value])=>`<div style="margin-top:8px"><div style="color:var(--text-muted);font-size:11px">${escapeHtml(label)}</div>
+         <div style="font-size:13.5px;white-space:pre-wrap">${escapeHtml(value)}</div></div>`).join('')
+    + (lg.homework && lg.homeworkCompleted ? '<div style="margin-top:8px"><span class="badge badge-green" style="font-size:10px">homework marked done</span></div>' : '');
+
+  const writtenHtml=written.map(({l,lg})=>`
+    <details style="border-bottom:1px solid var(--border)">
+      <summary style="padding:11px 4px;cursor:pointer;font-size:13.5px;line-height:1.4;list-style:none">
+        <b>${when(l)}</b> — ${escapeHtml(l.student||'?')}${stars(lg)}${gist(lg)}
+      </summary>
+      <div style="padding:2px 4px 12px 4px">${detail(lg)}</div>
+    </details>`).join('');
+
+  const notWritten=blank.concat(missing);
+  const notWrittenHtml=notWritten.length ? `
+    <details style="margin-top:12px;border:1px solid var(--border);border-radius:8px">
+      <summary style="padding:11px 12px;cursor:pointer;font-size:13.5px;color:var(--gold)">${notWritten.length} lesson(s) with nothing written</summary>
+      <div style="padding:0 12px 12px">${notWritten.map(({l})=>`<div style="padding:6px 0;border-top:1px solid var(--border);font-size:13px">
+        ${when(l)} — ${escapeHtml(l.student||'?')}</div>`).join('')}</div>
+    </details>` : '';
 
   openModal('Lesson logs — '+escapeHtml(teacherName), `
-    <div style="margin-bottom:10px;color:var(--text-muted)">${written} of ${lessons.length} attended lessons this month have something written. Newest first.</div>
-    <div style="max-height:420px;overflow-y:auto">${body}</div>
-  `);
+    <div style="margin-bottom:10px;color:var(--text-muted);font-size:13px">${written.length} of ${lessons.length} attended lessons this month have something written · tap a line to read it</div>
+    <div style="max-height:56vh;overflow-y:auto;-webkit-overflow-scrolling:touch">
+      ${writtenHtml || '<div style="color:var(--text-muted);font-size:13px">Nothing written yet this month.</div>'}
+      ${notWrittenHtml}
+    </div>`);
 }
 
 // Merging duplicate lesson logs.
