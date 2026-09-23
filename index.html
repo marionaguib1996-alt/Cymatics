@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-300</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-302</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -19744,10 +19744,22 @@ function sendSlotOffer(entryId){
   const chosen=Array.from(document.querySelectorAll('.offer-slot-check'))
     .filter(c=>c.checked).map(c=>all[Number(c.dataset.idx)]).filter(Boolean);
   if(!chosen.length){ showToast('Tick at least one slot.'); return; }
-  const lines=chosen.map(m=>'• '+m.day+' at '+formatTime12h(m.time)+' with '+m.teacher).join('\n');
-  const msg='Hi '+(e.name||'')+'! Good news — '+(chosen.length===1?'a':'some')+' '+(e.instrument||'')+
-            ' slot'+(chosen.length===1?' has':'s have')+' opened up at Cymatics:\n\n'+lines+
-            '\n\nWould '+(chosen.length===1?'that':'any of those')+' work for you?';
+  // First name only — a full name reads like a form letter in a WhatsApp
+  // message. The teacher's name is left out on purpose: the parent asked
+  // about a time, not a person, and naming a teacher invites a
+  // conversation about who teaches it before the slot is even agreed.
+  const firstName=String(e.name||'').trim().split(/\s+/)[0]||'';
+  const one=chosen.length===1;
+  // One slot reads as a sentence. Several are listed day-then-time on their
+  // own lines — a long comma-separated sentence is hard to scan on a phone,
+  // and these are options someone has to compare against their week.
+  const msg=one
+    ? 'Hi '+firstName+'! About your inquiry for '+(e.instrument||'')+' slots\n'+
+      'There is an available slot on '+chosen[0].day+' at '+formatTime12h(chosen[0].time)+', is it suitable?'
+    : 'Hi '+firstName+'! About your inquiry for '+(e.instrument||'')+' slots\n'+
+      'There are new available slots:\n'+
+      chosen.map(m=>m.day+'\n'+formatTime12h(m.time)).join('\n')+
+      '\n\nWould any of them suit you?';
   const win=window.open(whatsAppSendUrl(e.phone||'', msg), '_blank');
   if(!win){ showToast('Your browser blocked the WhatsApp popup — allow popups, then try again.'); return; }
   // Recorded so the same family isn't chased twice, and so a quiet reply
