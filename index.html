@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-305</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-306</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -23967,7 +23967,7 @@ function generateTeacherSchedulePhoto(teacherName, dayName, silent){
   // than a flat 45 — this is the actual fix requested: a Group session
   // shifts every slot after it to its real available time, not a wasted
   // extra 45-minute block.
-  const allSlotInfo=effectiveSlots.map(slot=>{
+  let allSlotInfo=effectiveSlots.map(slot=>{
     const slotEnd=addSlotMinutes(slot.time, slot.duration);
     const activeLessons=(db.lessons||[]).filter(l=>
       l.date===targetDate &&
@@ -24068,6 +24068,32 @@ function generateTeacherSchedulePhoto(teacherName, dayName, silent){
     }
   });
   if(recoveredAny) allSlotInfo.sort((a,b)=>a.time.localeCompare(b.time));
+
+  // Any row spanning an exact number of normal slots becomes that many
+  // rows. A 90-minute double session printed as one "5:45PM-7:15PM" line
+  // is accurate but reads as a single odd booking; two 45-minute lines
+  // with the same name read the way the day is actually taught.
+  //
+  // Done here, at the end, because a long row can arrive from either
+  // source — a slot whose own duration was stretched by the lesson, or a
+  // lesson recovered from outside the configured slots. Splitting in one
+  // place covers both, and a duplicate produced by the continuation row is
+  // dropped by the key check.
+  const seenRow=new Set();
+  allSlotInfo=allSlotInfo.reduce((out,r)=>{
+    const span=(r.time && r.timeEnd) ? (timeToMinutes(r.timeEnd)-timeToMinutes(r.time)) : 0;
+    const parts=(r.occupied && span>SESSION_DURATION_MINUTES && span%SESSION_DURATION_MINUTES===0)
+      ? span/SESSION_DURATION_MINUTES : 1;
+    for(let i=0;i<parts;i++){
+      const start=(parts>1) ? addSlotMinutes(r.time, i*SESSION_DURATION_MINUTES) : r.time;
+      const end=(parts>1) ? addSlotMinutes(start, SESSION_DURATION_MINUTES) : r.timeEnd;
+      const key=start+'|'+(r.studentName||'');
+      if(r.occupied && seenRow.has(key)) continue;
+      if(r.occupied) seenRow.add(key);
+      out.push(Object.assign({}, r, {time:start, timeEnd:end}));
+    }
+    return out;
+  }, []).sort((a,b)=>String(a.time).localeCompare(String(b.time)));
 
   const firstOccupied2=allSlotInfo.findIndex(s=>s.occupied);
   const lastOccupied2=allSlotInfo.length-1-[...allSlotInfo].reverse().findIndex(s=>s.occupied);
