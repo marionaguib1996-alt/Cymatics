@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-302</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-304</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -6356,6 +6356,48 @@ function finishAddLesson(s, date, status, res){
    unpaid: res.charge>0 ? !res.paid : undefined
  });
  const lesson=db.lessons[db.lessons.length-1];
+
+ // If this sits directly before or after another of their lessons that
+ // day, the two are really one 90-minute session: the teacher is in the
+ // room for both slots, and there is one thing to write about afterwards.
+ //
+ // The EXISTING lesson is the one kept. It is the plan session — it carries
+ // their history and payment — so the plan still consumes that one session,
+ // and the session just added is charged separately through the amount
+ // entered a moment ago. The teacher is paid 2x automatically because the
+ // kept lesson is now a double.
+ const neighbour=(db.lessons||[]).find(x=>
+   x!==lesson &&
+   lessonBelongsToStudent(x, s) &&
+   x.date===lesson.date &&
+   (x.status_record||'active')!=='archived' &&
+   String(x.teacher||'')===String(lesson.teacher||'') &&
+   !x.isDoubleSession && !lesson.isDoubleSession &&
+   x.time && lesson.time &&
+   Math.abs(timeToMinutes(x.time)-timeToMinutes(lesson.time))===SESSION_DURATION_MINUTES
+ );
+ if(neighbour){
+   const earlier = timeToMinutes(neighbour.time)<=timeToMinutes(lesson.time) ? neighbour.time : lesson.time;
+   neighbour.time=earlier;
+   neighbour.isDoubleSession=true;
+   neighbour.isExtendedDuration=true;   // occupies 90 minutes everywhere
+   neighbour.timeOverridden=true;
+   if(lesson.status==='attended' || lesson.status==='absent_paid') neighbour.status=lesson.status;
+   // Carry the charge across so the money follows the surviving lesson.
+   if(lesson.extraCharge!=null){ neighbour.extraCharge=lesson.extraCharge; neighbour.unpaid=lesson.unpaid; }
+   // One session, one log: drop the one just created for the absorbed half.
+   db.lessonLogs=(db.lessonLogs||[]).filter(lg=>String(lg.lessonId)!==String(lesson.id));
+   db.lessons=(db.lessons||[]).filter(x=>x!==lesson);
+   if(typeof logRecordDeletion==='function'){ try{ logRecordDeletion('lesson', lesson, 'merged into a double session'); }catch(_){} }
+   if(typeof deleteLessonFromSupabase==='function'){ try{ deleteLessonFromSupabase(lesson.id); }catch(_){} }
+   if(typeof syncLessonUpdateToSupabase==='function'){ try{ syncLessonUpdateToSupabase(neighbour); }catch(_){} }
+   save();
+   ['renderLessons','renderTeachers','renderOverview','renderCalendarPage','renderStudents']
+     .forEach(fn=>{ if(typeof window[fn]==='function'){ try{ window[fn](); }catch(_){} } });
+   showToast('Joined with their '+formatTime12h(earlier)+' lesson — one 90-minute double session (teacher paid 2×). Undo from Edit Lesson.');
+   return;
+ }
+
   const newLog=createLessonLog(s,lesson);
   save();
  renderLessons();
@@ -12743,6 +12785,20 @@ try{
          authHeaders['Authorization']='Bearer '+data.session.access_token;
        }
      }catch(e){}
+
+     // Nothing goes out without a signed-in token.
+     //
+     // Sending with the anonymous key alone means every write to a table
+     // that requires a real user is refused, and the queue retries it
+     // every 20 seconds — dozens of "row-level security" failures that
+     // look alarming and say nothing about the real problem, which is
+     // simply that the sign-in hadn't finished restoring yet. The items
+     // stay queued and go out on the next attempt, when the session is
+     // ready.
+     if(!/^Bearer /.test(authHeaders['Authorization']||'') || authHeaders['Authorization']===authHeaders['apikey'] ||
+        authHeaders['Authorization']==='Bearer '+authHeaders['apikey']){
+       return;
+     }
 
      const remaining=[];
      for(const item of items){
