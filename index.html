@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-306</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-307</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -4746,14 +4746,29 @@ function openEditTeacherRate(name){
   const todayKey=new Date().toISOString().slice(0,10);
   const hist=(Array.isArray(p.rateHistory)?p.rateHistory:[]).slice()
     .sort((a,b)=>String(a.from||'').localeCompare(String(b.from||'')));
+  // Each past change is editable. A rate set from the wrong date — noticed
+  // a day later, after the lessons in between were already counted at the
+  // old rate — used to be permanent: the entry could only be added, never
+  // corrected. Payslips are rebuilt from this list, so fixing the date here
+  // recounts those lessons at the right rate.
   const histHtml=hist.length
-    ? '<div style="background:var(--bg-alt,#1a1a1a);border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:12px">'
-      +'<div style="font-size:12px;color:var(--text-muted);margin-bottom:6px">Rate history</div>'
-      + hist.map(e=>'<div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0">'
-          +'<span>'+(e.from==='1900-01-01'?'Originally':'From '+escapeHtml(formatDateDMY(e.from)))+'</span>'
-          +'<span style="font-weight:600">'+egp(Number(e.rate)||0)+'</span></div>').join('')
+    ? '<div style="border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:12px">'
+      +'<div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">Rate history — edit a date or amount, then Save changes</div>'
+      + hist.map((e,i)=>{
+          const original=e.from==='1900-01-01';
+          return '<div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">'
+            +(original
+               ? '<span style="flex:1;font-size:13px;color:var(--text-muted)">Originally</span>'
+               : '<input class="trh-from" data-i="'+i+'" type="text" maxlength="10" placeholder="dd/mm/yyyy" oninput="maskDateInput(this)" value="'+escapeAttr(isoToDmy(e.from))+'" style="flex:1;min-width:0">')
+            +'<input class="trh-rate" data-i="'+i+'" type="number" min="0" value="'+(Number(e.rate)||0)+'" style="width:96px">'
+            +(original ? '<span style="width:34px"></span>'
+                       : '<button type="button" class="btn btn-sm btn-danger" onclick="removeTeacherRateEntry(\''+jsString(p.name)+'\','+i+')" title="Remove this change">✕</button>')
+            +'</div>';
+        }).join('')
+      +'<button type="button" class="btn btn-sm btn-gold" style="width:100%;margin-top:4px" onclick="saveTeacherRateHistory(\''+jsString(p.name)+'\')">Save changes to history</button>'
       +'</div>'
     : '';
+
   openModal('Pay Rate — '+escapeHtml(p.name), `
     <div style="margin-bottom:12px;color:var(--text-muted)">Current rate: <b style="color:var(--gold)">${egp(Number(p.rate)||0)}</b> per session</div>
     ${histHtml}
@@ -4762,6 +4777,66 @@ function openEditTeacherRate(name){
     <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px">Lessons before this date keep the old rate. Group sessions still pay 1.5× whichever rate applied then.</div>
     <div style="text-align:right"><button class="btn btn-gold" onclick="confirmEditTeacherRate('${jsString(p.name)}')">Save rate</button></div>
   `);
+}
+
+// Rewrites the whole history from the edited rows. The current rate is
+// then whichever entry applies today — so correcting a date can move the
+// current rate too, which is the point.
+function saveTeacherRateHistory(name){
+  const p=(db.teacherProfiles||[]).find(t=>t.name===name);
+  if(!p) return;
+  const hist=(Array.isArray(p.rateHistory)?p.rateHistory:[]).slice()
+    .sort((a,b)=>String(a.from||'').localeCompare(String(b.from||'')));
+  const fromInputs=[...document.querySelectorAll('.trh-from')];
+  const rateInputs=[...document.querySelectorAll('.trh-rate')];
+  const next=hist.map((e,i)=>({from:e.from, rate:e.rate}));
+  let bad='';
+  rateInputs.forEach(inp=>{
+    const i=Number(inp.dataset.i); const v=Number(inp.value||0);
+    if(!(v>0)){ bad='Every rate must be above zero.'; return; }
+    if(next[i]) next[i].rate=v;
+  });
+  fromInputs.forEach(inp=>{
+    const i=Number(inp.dataset.i); const iso=dmyToIso(inp.value||'');
+    if(!iso){ bad='Enter each date as dd/mm/yyyy.'; return; }
+    if(next[i]) next[i].from=iso;
+  });
+  if(bad){ showToast(bad); return; }
+  const dates=next.map(e=>e.from);
+  if(new Set(dates).size!==dates.length){ showToast('Two changes share the same date — give each one its own.'); return; }
+
+  next.sort((a,b)=>String(a.from).localeCompare(String(b.from)));
+  p.rateHistory=next;
+  // Today's rate is the latest entry that has already started.
+  const todayKey=new Date().toISOString().slice(0,10);
+  const applies=next.filter(e=>String(e.from)<=todayKey);
+  p.rate=Number((applies.length?applies[applies.length-1]:next[0]).rate)||Number(p.rate)||0;
+  save();
+  if(typeof syncTeacherUpdateToSupabase==='function'){ try{ syncTeacherUpdateToSupabase(p); }catch(_){} }
+  closeModal();
+  ['renderTeachers','renderOverview','renderPayroll'].forEach(fn=>{ if(typeof window[fn]==='function'){ try{ window[fn](); }catch(_){} } });
+  showToast(p.name+'\u2019s rate history updated — payslips now use these dates');
+}
+
+function removeTeacherRateEntry(name, index){
+  const p=(db.teacherProfiles||[]).find(t=>t.name===name);
+  if(!p) return;
+  const hist=(Array.isArray(p.rateHistory)?p.rateHistory:[]).slice()
+    .sort((a,b)=>String(a.from||'').localeCompare(String(b.from||'')));
+  const e=hist[index];
+  if(!e || e.from==='1900-01-01'){ showToast('The original rate can\'t be removed.'); return; }
+  if(!confirm('Remove the change to '+(Number(e.rate)||0)+' EGP from '+formatDateDMY(e.from)+'?\n\n'+
+              'Lessons on or after that date go back to the rate before it.')) return;
+  hist.splice(index,1);
+  p.rateHistory=hist;
+  const todayKey=new Date().toISOString().slice(0,10);
+  const applies=hist.filter(x=>String(x.from)<=todayKey);
+  p.rate=Number((applies.length?applies[applies.length-1]:hist[0]||{}).rate)||Number(p.rate)||0;
+  save();
+  if(typeof syncTeacherUpdateToSupabase==='function'){ try{ syncTeacherUpdateToSupabase(p); }catch(_){} }
+  closeModal();
+  ['renderTeachers','renderOverview','renderPayroll'].forEach(fn=>{ if(typeof window[fn]==='function'){ try{ window[fn](); }catch(_){} } });
+  showToast('Rate change removed');
 }
 
 function confirmEditTeacherRate(name){
