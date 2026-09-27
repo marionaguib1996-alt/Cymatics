@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-307</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-309</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1200,12 +1200,22 @@ input::placeholder{color:var(--text-dim)}
     <small style="display:block;margin-top:8px;color:var(--text-muted)">Push to Cloud sends everything currently in this browser up to Supabase — use it after Restore Academy to make a recovered backup durable, or any time you suspect the cloud has fallen out of sync. It never deletes anything from the cloud. Create Logins for Everyone sets up a login for every current student and teacher with an email set — their own email, and their ID as the password — safe to click more than once, already-created logins are updated in place. Admins are managed separately below.</small>
 
     <div style="border-top:1px solid var(--border);margin:20px 0 16px;"></div>
+    <div class="card-title" style="margin-bottom:10px">Change My Password</div>
+    <div class="form-grid">
+      <div class="form-field"><label for="my-current-password">Current password</label><input id="my-current-password" type="password" autocomplete="current-password"></div>
+      <div class="form-field"><label for="my-new-password">New password</label><input id="my-new-password" type="password" autocomplete="new-password"></div>
+      <div class="form-field"><label for="my-new-password-again">New password again</label><input id="my-new-password-again" type="password" autocomplete="new-password"></div>
+    </div>
+    <button class="btn btn-gold" onclick="changeMyAdminPassword()">Change My Password</button>
+    <small style="display:block;margin-top:8px;color:var(--text-muted)">Changes the password of the administrator signed in on this device. At least 10 characters. Takes effect on every device straight away.</small>
+
+    <div style="border-top:1px solid var(--border);margin:20px 0 16px;"></div>
     <div class="card-title" style="margin-bottom:10px">Add Administrator</div>
     <div class="form-grid">
       <div class="form-field"><label for="new-admin-email">Email</label><input id="new-admin-email" type="email" placeholder="colleague@example.com"></div>
     </div>
     <button class="btn btn-gold" onclick="addNewAdmin()">+ Add Administrator</button>
-    <small style="display:block;margin-top:8px;color:var(--text-muted)">Creates a real login for a new administrator — they'll sign in with this email and the shared admin password.</small>
+    <small style="display:block;margin-top:8px;color:var(--text-muted)">Creates a real login for a new administrator, with a one-off password shown once for you to give them. They should then set their own under Change My Password.</small>
 
     <div style="border-top:1px solid var(--border);margin:20px 0 16px;"></div>
     <div class="card-title" style="margin-bottom:10px">Migrate Existing Staff Login</div>
@@ -1213,7 +1223,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="form-field"><label for="migrate-staff-email">Email</label><input id="migrate-staff-email" type="email" placeholder="colleague@example.com"></div>
     </div>
     <button class="btn" onclick="migrateExistingStaffLogin()">Switch This Account to Email-Only</button>
-    <small style="display:block;margin-top:8px;color:var(--text-muted)">For an admin or teacher who already had a login before this scheme — resets their account to the current one (admin: shared admin password; teacher: their own ID as the password). Safe to run again if unsure whether it already happened.</small>
+    <small style="display:block;margin-top:8px;color:var(--text-muted)">For an admin or teacher who already had a login before this scheme — resets their account to the current one (admin: a new one-off password, shown once; teacher: their own ID as the password). For an admin this also works as a password reset — their old password stops working immediately.</small>
 
     <div style="border-top:1px solid var(--border);margin:20px 0 16px;"></div>
     <div class="card-title" style="margin-bottom:10px">Clean Up Redundant Multi-Course Logins</div>
@@ -3496,7 +3506,7 @@ async function findLinkedRecordWithRetry(role, linkedId){
 // with their own real email plus a password. Password meaning differs by
 // role but that's entirely handled server-side by how each account was
 // created: a student or teacher's password is their own public ID, an
-// admin's is the fixed shared password. This function just signs in and
+// admin's is their own (see changeMyAdminPassword). This function just signs in and
 // routes to the correct role's view.
 async function realLogin(email, password){
   showRealLoginError(null);
@@ -7831,10 +7841,99 @@ const SUPABASE_KEY='sb_publishable__oGaCB9QMgIe5uf-jTbXSg_BSEmtL_f';
 // getClient() removed — it created a second, separate Supabase client instance.
 // All cloud operations now go through the single shared window.supabaseClientV1.
 
-// Fixed password shared by every admin account — a deliberate choice,
-// not an oversight. The tradeoff (anyone who knows this one password
-// gets into every admin account, not just one) was raised and accepted.
-const ADMIN_SHARED_PASSWORD='admin0000';
+// Admin passwords are individual and never written in this file. This
+// page's source is readable by anyone with the link, students included,
+// so a password stored here is not a secret — the old shared admin
+// password was stored here AND was the real login for every admin.
+//
+// A new admin account (or an admin reset through "Migrate Existing Staff
+// Login") gets a random one-off password, shown once to the admin who
+// made it and stored nowhere. The new admin then picks their own with
+// "Change My Password". No readable-from-source fallback exists: if the
+// browser has no secure random source, the action is refused.
+const ADMIN_TEMP_PASSWORD_CHARS='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+function generateAdminTempPassword(length=16){
+  const c=(typeof window!=='undefined' && window.crypto) || (typeof globalThis!=='undefined' && globalThis.crypto);
+  if(!c || typeof c.getRandomValues!=='function') return null;
+  const bytes=new Uint32Array(length);
+  c.getRandomValues(bytes);
+  let out='';
+  for(let i=0;i<length;i++) out+=ADMIN_TEMP_PASSWORD_CHARS[bytes[i]%ADMIN_TEMP_PASSWORD_CHARS.length];
+  return out;
+}
+
+// Shows a one-off admin password exactly once. The character set above
+// contains nothing HTML-special, so only the email needs escaping.
+function showAdminTempPassword(email, password, headline){
+  const safeEmail=escapeHtml(email);
+  openModal(headline,
+    '<p style="margin-bottom:10px">One-off password for <b>'+safeEmail+'</b>:</p>'+
+    '<input id="admin-temp-password" readonly value="'+password+'" style="font-family:monospace;font-size:16px;width:100%" onclick="this.select()">'+
+    '<button class="btn" style="margin-top:8px" onclick="(function(){const el=document.getElementById(\'admin-temp-password\');el.select();if(navigator.clipboard)navigator.clipboard.writeText(el.value).then(()=>showToast(\'Copied\'),()=>{});})()">Copy</button>'+
+    '<p style="margin-top:12px;color:var(--text-muted)">Give it to them privately. It is shown only this once and isn\'t stored anywhere — if it\'s lost, reset it again with Migrate Existing Staff Login. After signing in they should set their own under Cloud → Change My Password.</p>');
+}
+
+// Checks a password against Supabase WITHOUT touching this device's
+// session: a failed signInWithPassword could sign the admin out
+// mid-work, so the check goes to the auth endpoint directly and the
+// throwaway session it opens is closed again straight away.
+async function verifyPasswordWithoutSignIn(email, password){
+  try{
+    const r=await fetch(SUPABASE_URL+'/auth/v1/token?grant_type=password', {
+      method:'POST',
+      headers:{'Content-Type':'application/json', apikey:SUPABASE_KEY},
+      body:JSON.stringify({email, password})
+    });
+    if(r.status===400 || r.status===401) return {ok:false, wrong:true};
+    if(r.status===429) return {ok:false, error:'Too many attempts — wait a few minutes and try again.'};
+    if(!r.ok) return {ok:false, error:'HTTP '+r.status};
+    const body=await r.json().catch(()=>({}));
+    if(body.access_token){
+      fetch(SUPABASE_URL+'/auth/v1/logout?scope=local', {
+        method:'POST', headers:{apikey:SUPABASE_KEY, Authorization:'Bearer '+body.access_token}
+      }).catch(()=>{});
+    }
+    return {ok:true};
+  }catch(err){
+    return {ok:false, error:err.message};
+  }
+}
+
+// "Change My Password" (Cloud tab) — for the admin signed in on this
+// device only. Asks for the current password first, so an unlocked
+// laptop isn't enough to lock the real admin out of their own account.
+async function changeMyAdminPassword(){
+  const val=id=>document.getElementById(id)?.value||'';
+  const current=val('my-current-password'), next=val('my-new-password'), again=val('my-new-password-again');
+  if(!window.supabaseClientV1){ alert('Supabase not connected.'); return; }
+  if(!session || session.role!=='admin'){ alert('Only an administrator can change their password here.'); return; }
+  if(!current || !next || !again){ alert('Please fill in all three password fields.'); return; }
+  if(next!==again){ alert('The two new passwords don\'t match.'); return; }
+  if(next.length<10){ alert('The new password must be at least 10 characters.'); return; }
+  if(next===current){ alert('The new password must be different from the current one.'); return; }
+
+  const {data}=await window.supabaseClientV1.auth.getSession();
+  const email=data?.session?.user?.email;
+  if(!email){ alert('Not signed in — please sign in again first.'); return; }
+
+  const check=await verifyPasswordWithoutSignIn(email, current);
+  if(!check.ok){
+    alert(check.wrong ? 'Your current password is incorrect. Nothing was changed.' : 'Could not check your current password: '+check.error+'\n\nNothing was changed.');
+    return;
+  }
+
+  const {error}=await window.supabaseClientV1.auth.updateUser({password:next});
+  if(error){
+    const msg=error.message||String(error);
+    const reauth=error.code==='reauthentication_needed' || /reauthenticat/i.test(msg);
+    alert('Password not changed. '+(reauth
+      ? 'Supabase wants a fresh sign-in first: sign out, sign back in, then change it straight away.'
+      : msg));
+    return;
+  }
+  ['my-current-password','my-new-password','my-new-password-again'].forEach(id=>{const el=document.getElementById(id); if(el) el.value='';});
+  alert('Password changed for '+email+'. Use the new one from now on, on every device — the old one no longer works.');
+}
 
 // ── Admin authentication for privileged Edge Functions ──────────────────
 // Previously: both create-login and create-admin checked a shared secret
@@ -10467,12 +10566,15 @@ async function cleanupRedundantLinkedLogins(){
 async function migrateExistingStaffLogin(){
   const email=(document.getElementById('migrate-staff-email')?.value||'').trim().toLowerCase();
   if(!email){ alert('Please enter an email.'); return; }
+  if(!confirm('If '+email+' is an administrator, their password is replaced now with a new one-off password, shown on the next screen — their current password stops working immediately. If it\'s a teacher, their login is reset to their ID as before. Continue?')) return;
 
   // Try as an existing admin first
-  const adminResult=await callCreateAdminFunction(email, ADMIN_SHARED_PASSWORD, true);
+  const tempPassword=generateAdminTempPassword();
+  if(!tempPassword){ alert('This browser can\'t generate a secure password. Nothing was changed — try a current version of Chrome, Safari or Edge.'); return; }
+  const adminResult=await callCreateAdminFunction(email, tempPassword, true);
   if(adminResult.success){
     document.getElementById('migrate-staff-email').value='';
-    alert('Done — '+email+' can now log in with this email and the shared admin password.');
+    showAdminTempPassword(email, tempPassword, 'Admin password reset');
     return;
   }
 
@@ -10500,15 +10602,17 @@ async function migrateExistingStaffLogin(){
 async function addNewAdmin(){
   const email=(document.getElementById('new-admin-email')?.value||'').trim();
   if(!email){ alert('Please enter an email.'); return; }
-  if(!confirm('Create a new administrator account for '+email+'? They will have full access to everything — the same as your own account. They will log in with this email and the shared admin password.')) return;
+  if(!confirm('Create a new administrator account for '+email+'? They will have full access to everything — the same as your own account. A one-off password is shown on the next screen for you to give them.')) return;
 
-  const result=await callCreateAdminFunction(email, ADMIN_SHARED_PASSWORD);
+  const tempPassword=generateAdminTempPassword();
+  if(!tempPassword){ alert('This browser can\'t generate a secure password. Nothing was created — try a current version of Chrome, Safari or Edge.'); return; }
+  const result=await callCreateAdminFunction(email, tempPassword);
   if(!result.success){
     alert('Failed to create administrator: '+result.error);
     return;
   }
   document.getElementById('new-admin-email').value='';
-  alert('Administrator account created for '+result.email+'. They log in with this email and the shared admin password.');
+  showAdminTempPassword(result.email||email, tempPassword, 'Administrator created');
 }
 
 async function createLoginForRecord(id, role, linkedId, options={}){
@@ -19289,9 +19393,10 @@ function getTeacherBookingsByTime(teacherName, dayName, targetDate, excludeStude
   // renewed has no lessons booked — so their long-standing slot would
   // instantly read as free and could be given away while they're still
   // deciding. Their slot is HELD (shown with their name, not bookable)
-  // up to and including what would have been their first session of the
-  // new month. Once that date passes without a renewal, the hold expires
-  // and the slot genuinely frees up.
+  // for RENEWAL_SLOT_HOLD_DAYS after their last lesson, counted from
+  // TODAY. Once that passes without a renewal, the hold expires and the
+  // slot genuinely frees up. (Mario's rule: hold the slot 3 days, keep
+  // them in Renewals Due for 6, then archive.)
   (db.students||[]).filter(s=>
     (s.status||'active')!=='archived' && !s.frozen &&
     s.teacher===teacherName && s.lesson_day===dayName && s.lessonTime &&
@@ -19306,8 +19411,6 @@ function getTeacherBookingsByTime(teacherName, dayName, targetDate, excludeStude
     (typeof studentHasPendingRenewal==='function' && studentHasPendingRenewal(s))
   ).forEach(s=>{
     if(bookingsByTime[s.lessonTime]) return;
-    // The hold runs until their first session day of the month FOLLOWING
-    // their last lesson — the date they'd have started had they renewed.
     const own=(db.lessons||[]).filter(l=>
       lessonBelongsToStudent(l, s) &&
       (l.status_record||'active')!=='archived'
@@ -19319,7 +19422,10 @@ function getTeacherBookingsByTime(teacherName, dayName, targetDate, excludeStude
     // a slot to sit idle while someone on the waiting list wants it.
     const holdUntil=(typeof addDaysToDateString==='function')
       ? addDaysToDateString(lastDate, RENEWAL_SLOT_HOLD_DAYS) : null;
-    if(!holdUntil || targetDate>holdUntil) return; // hold expired — slot is free
+    // Compared with TODAY, not with the date being booked. The booked date
+    // is the student's own weekday — always 7 days after their last lesson
+    // — so comparing it to a 3-day window meant the hold never applied.
+    if(!holdUntil || getLocalTodayKey()>holdUntil) return; // hold expired — slot is free
     const duration=isGroupPlan(s.plan) ? GROUP_SESSION_DURATION_MINUTES : SESSION_DURATION_MINUTES;
     bookingsByTime[s.lessonTime]={
       label:(s.name||'Reserved'),
