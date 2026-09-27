@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-309</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-310</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -2892,7 +2892,7 @@ function createLessonLog(student,lesson){
   studentId:student.public_id||student.id,
   teacherId:student.teacher_id||null,
   studentName:student.name,
-  teacherName:student.teacher,
+  teacherName:lesson.teacher||student.teacher,
   instrument:student.instrument,
   lessonDate:lesson.date,
   month:lesson.month || String(lesson.date||'').slice(0,7) || currentMonth(),
@@ -3353,6 +3353,11 @@ function applyRoleView(){
   if(admin) admin.style.display=session.role==='admin'?'block':'none';
   if(teacher) teacher.style.display=session.role==='teacher'?'block':'none';
   if(student) student.style.display=session.role==='student'?'block':'none';
+  // The backup banner is admin-only, but it's a fixed element on <body>:
+  // one shown during an admin session stayed on screen after a teacher
+  // signed in on the same device, because it was only re-checked on a
+  // backup or a cloud load. Every role switch comes through here.
+  if(typeof updateBackupReminderBanner==='function') updateBackupReminderBanner();
 }
 
 function openModal(title,html){
@@ -5705,7 +5710,8 @@ function sendFamilyRenewalReminder(memberIdsCsv){
       '\n'+
       'Can\'t wait to see them at the next session! '+eSparkle+
       absenceNotes+
-      deductionNotes;
+      deductionNotes+
+      perStudent.map(p=>makeupsLeftNote(p.courses, p.firstName)).join('');
 
     const win=window.open(whatsAppSendUrl(phone, message), '_blank');
     if(!win){
@@ -6060,6 +6066,25 @@ function computeRenewalCourseDetails(student){
   return {month, monthName, lessonCount, dateList, amount, absenceNote, deductionNoteBlock};
 }
 
+// Closing line for renewal reminders: make-ups still owed from EXCUSED
+// absences (teacher absences are the academy's to arrange, so they're not
+// mentioned). Counts only this student's own lessons, via
+// lessonBelongsToStudent, so a two-course student's courses stay apart.
+function excusedMakeupsLeft(student){
+  if(!student) return 0;
+  return (db.lessons||[]).filter(l=>
+    (l.status_record||'active')!=='archived' &&
+    l.status==='absent_excused' &&
+    typeof isMakeupOwed==='function' && isMakeupOwed(l) &&
+    lessonBelongsToStudent(l, student)
+  ).length;
+}
+function makeupsLeftNote(students, forName){
+  const n=(students||[]).reduce((sum,st)=>sum+excusedMakeupsLeft(st),0);
+  if(!n) return '';
+  return '\n\nKindly note that we have '+n+' session'+(n===1?'':'s')+' left to make up'+(forName?' for '+forName:'')+'.';
+}
+
 function sendRenewalReminder(studentId){
   try{
     const student=(db.students||[]).find(s=>s.id===studentId);
@@ -6088,7 +6113,8 @@ function sendRenewalReminder(studentId){
       const amount=(typeof getStudentPlanAmount==='function') ? getStudentPlanAmount(student) : def.price;
       const eMusicNote=String.fromCodePoint(0x1F3B6);
       const msg='Hi! Hope you enjoyed your '+def.label+' plan '+eMusicNote+'\n\n'
-        +'Ready for another round? The '+def.label+' plan is '+Math.round(amount)+' EGP for '+def.sessions+' lessons — just send the payment to lock in your next batch.';
+        +'Ready for another round? The '+def.label+' plan is '+Math.round(amount)+' EGP for '+def.sessions+' lessons — just send the payment to lock in your next batch.'
+        +makeupsLeftNote([student]);
       const url=(typeof whatsAppSendUrl==='function') ? whatsAppSendUrl(phone, msg) : ('https://wa.me/'+phone+'?text='+encodeURIComponent(msg));
       window.open(url, '_blank');
       db.remindersSent=db.remindersSent||{};
@@ -6142,7 +6168,8 @@ function sendRenewalReminder(studentId){
       '\n'+
       'Can\'t wait to see you at the next session! '+eSparkle+
       absenceNote+
-      deductionNoteBlock;
+      deductionNoteBlock+
+      makeupsLeftNote([student]);
 
     // See whatsAppSendUrl: web.whatsapp.com avoids both the "open the app"
     // interstitial and the wa.me redirect that mangles some emoji.
@@ -6212,7 +6239,8 @@ function sendConsolidatedRenewalReminder(primary, linkedPending, phone){
       '\n'+
       'Can\'t wait to see you at the next session! '+eSparkle+
       absenceNotes+
-      deductionNotes;
+      deductionNotes+
+      makeupsLeftNote(allCourses);
 
     const win=window.open(whatsAppSendUrl(phone, message), '_blank');
     if(!win){
@@ -16246,6 +16274,8 @@ function openTeacherLessonLogEditor(logId){
       </div>`);
     return;
   }
+  const prevHw=findPreviousHomeworkLog(log, lesson);
+  const prevHwText=prevHw ? String(prevHw.homework).trim() : '';
   openModal('Lesson Log - '+(log.studentName||'Student'),`
     <div class="teacher-log-editor">
       <div class="teacher-log-grid">
@@ -16256,13 +16286,14 @@ function openTeacherLessonLogEditor(logId){
         <div class="form-field wide"><label for="tw-topic">Topic Covered</label><input id="tw-topic" value="${escapeAttr(log.topicCovered)}"></div>
         <div class="form-field wide"><label for="tw-notes">Teacher Notes</label><textarea id="tw-notes" placeholder="e.g. Chord changes are getting cleaner, but still rushing the strumming pattern. Confidence noticeably up from last week. Struggled with the F barre chord — worth revisiting slowly next session.">${escapeHtml(log.teacherNotes)}</textarea></div>
         <div class="form-field wide"><label for="tw-goal">Next Lesson Goal</label><input id="tw-goal" value="${escapeAttr(log.nextLessonGoal)}"></div>
-        <div class="form-field wide"><label for="tw-homework">Homework Task</label><textarea id="tw-homework" placeholder="e.g. Practice C major scale, 10 minutes daily">${escapeHtml(log.homework)}</textarea></div>
-        <div class="form-field" style="display:flex;align-items:flex-end;padding-bottom:8px">
+        ${prevHw ? `<div class="form-field wide">
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:normal">
-            <input id="tw-homework-done" type="checkbox" style="width:auto" ${log.homeworkCompleted?'checked':''}>
-            Done
+            <input id="tw-last-hw-done" type="checkbox" style="width:auto" ${prevHw.homeworkCompleted?'checked':''}>
+            Last HW done?
           </label>
-        </div>
+          <small style="color:var(--text-muted)">${escapeHtml(formatTeacherLessonDate(prevHw.lessonDate))}: ${escapeHtml(prevHwText.length>90 ? prevHwText.slice(0,87)+'…' : prevHwText)}</small>
+        </div>` : ''}
+        <div class="form-field wide"><label for="tw-homework">Homework Task</label><textarea id="tw-homework" placeholder="e.g. Practice C major scale, 10 minutes daily">${escapeHtml(log.homework)}</textarea></div>
       </div>
       <div style="text-align:right;margin-top:14px"><button class="btn btn-gold" onclick="saveTeacherLessonLog('${jsString(log.id)}')">Save Lesson Log</button></div>
     </div>`);
@@ -16357,6 +16388,38 @@ function homeworkDatesValid(assigned,due){
   return due>=assigned;
 }
 
+// The homework checked at this session: the most recent EARLIER session
+// with the same student AND the same teacher that set homework. Matched
+// through lessonBelongsToStudent, never by name alone, so a two-course
+// student's other course is never mixed in. Same teacher only: the cloud
+// refuses a teacher's write to another teacher's log.
+function findPreviousHomeworkLog(log, lesson){
+  if(!lesson) return null;
+  const student=(db.students||[]).find(s=>String(s.id)===String(lesson.studentId))
+    || (db.students||[]).find(s=>lessonBelongsToStudent(lesson, s));
+  if(!student) return null;
+  const teacher=String(lesson.teacher||'').trim().toLowerCase();
+  const date=String(lesson.date||'');
+  const logsByLesson={};
+  (db.lessonLogs||[]).forEach(lg=>{
+    if(lg===log || lg.lessonId==null || !String(lg.homework||'').trim()) return;
+    (logsByLesson[String(lg.lessonId)]=logsByLesson[String(lg.lessonId)]||[]).push(lg);
+  });
+  const earlier=(db.lessons||[]).filter(l=>
+    String(l.id)!==String(lesson.id) &&
+    (l.status_record||'active')!=='archived' &&
+    String(l.date||'')<date &&
+    String(l.teacher||'').trim().toLowerCase()===teacher &&
+    lessonBelongsToStudent(l, student)
+  ).sort((a,b)=>String(b.date||'').localeCompare(String(a.date||''))||String(b.time||'').localeCompare(String(a.time||'')));
+  for(const l of earlier){
+    const found=(logsByLesson[String(l.id)]||[]).find(lg=>
+      typeof logMatchesLessonStudent!=='function' || logMatchesLessonStudent(lg, l));
+    if(found) return found;
+  }
+  return null;
+}
+
 function saveTeacherLessonLog(logId){
   const log=(db.lessonLogs||[]).find(l=>String(l.id)===String(logId));
   if(!log) return;
@@ -16378,9 +16441,21 @@ function saveTeacherLessonLog(logId){
   log.homework=document.getElementById('tw-homework')?.value||'';
   log.homeworkAssignedDate=homeworkAssigned;
   log.homeworkDueDate=homeworkDue;
-  log.homeworkCompleted=!!document.getElementById('tw-homework-done')?.checked;
+  // This session's homework is checked at the NEXT session, so its done
+  // state is left alone here. The tick on this form is "Last HW done?" —
+  // the previous session's homework (see findPreviousHomeworkLog).
+  log.homeworkCompleted=!!log.homeworkCompleted;
   log.homeworkStatus=log.homework ? (log.homeworkCompleted?'Completed':'Assigned') : '';
+  if(lesson && lesson.teacher) log.teacherName=lesson.teacher;
   normalizeLessonLog(log,lesson);
+  const lastHwBox=document.getElementById('tw-last-hw-done');
+  const prevHw=lastHwBox ? findPreviousHomeworkLog(log, lesson) : null;
+  if(prevHw && !!prevHw.homeworkCompleted!==!!lastHwBox.checked){
+    prevHw.homeworkCompleted=!!lastHwBox.checked;
+    prevHw.homeworkStatus=prevHw.homeworkCompleted ? 'Completed' : 'Assigned';
+    normalizeLessonLog(prevHw, (db.lessons||[]).find(l=>l.id==prevHw.lessonId));
+    if(typeof syncLessonLogToSupabase==='function') syncLessonLogToSupabase(prevHw);
+  }
   save();
   closeModal();
   renderTeacherWorkspace();
@@ -16432,7 +16507,12 @@ async function syncLessonLogToSupabase(log){
     if(typeof logIsBeforeCutoff==='function' && logIsBeforeCutoff(log)) return;
     // The lesson's teacher is only trusted if it is this student's lesson.
     const ownLesson=(linkedLesson && logMatchesLessonStudent(log, linkedLesson)) ? linkedLesson : null;
-    const teacherId=(log.teacherName||ownLesson?.teacher||linkedStudent?.teacher||'').trim();
+    // The lesson's own teacher comes FIRST. The cloud only accepts a log
+    // whose teacher_id is the signed-in teacher, and the teacher who
+    // taught the lesson is the one logging it. log.teacherName used to be
+    // copied from the student's regular teacher, so any lesson taught by
+    // someone else (a make-up, a cover, a teacher change) was refused.
+    const teacherId=(ownLesson?.teacher||log.teacherName||linkedStudent?.teacher||'').trim();
     const payload={
       lesson_id: log.lessonId,
       student_id: String(log.studentId||''),
@@ -21982,6 +22062,7 @@ function openScheduleMakeup(missedLessonId){
       <button type="button" class="btn ms-path-btn" id="ms-path-btn-double" onclick="switchMakeupPath('double',${missedLessonId})">💠 Double Session</button>
       <button type="button" class="btn ms-path-btn" id="ms-path-btn-separate" onclick="switchMakeupPath('separate',${missedLessonId})">📅 Separate Day</button>
       <button type="button" class="btn ms-path-btn" id="ms-path-btn-done" onclick="switchMakeupPath('done',${missedLessonId})">✅ Already Made Up</button>
+      ${missed.status==='teacher_absent' && missed.time ? `<button type="button" class="btn" id="ms-same-time-next-week" onclick="makeupSameTimeNextWeek(${missedLessonId})">⏭ Same Time Next Week</button>` : ''}
     </div>
 
     <div id="ms-panel-double" class="ms-path-panel">
@@ -22171,6 +22252,43 @@ function confirmMakeupAlreadyDone(missedLessonId){
   if(typeof renderCalendarPage==='function') renderCalendarPage();
   if(window.syncLessonUpdateToSupabase) syncLessonUpdateToSupabase(l);
   showToast('Marked as made up');
+}
+
+// Teacher-absence shortcut: fills the Separate Day form with the missed
+// lesson's teacher and time, one week after the missed date (or the next
+// such weekday if that has already passed). It only SELECTS the time if
+// it is genuinely free — a weekly student usually has their own regular
+// lesson then, and booking over it is exactly what must not happen.
+function makeupSameTimeNextWeek(missedLessonId){
+  const missed=(db.lessons||[]).find(l=>l.id===missedLessonId);
+  if(!missed || !missed.date || !missed.time) return;
+  let date=addDaysToDateString(missed.date, 7);
+  const today=getLocalTodayKey();
+  while(date<today) date=addDaysToDateString(date, 7);
+  switchMakeupPath('separate', missedLessonId);
+  const dateEl=document.getElementById('ms-date');
+  const teacherEl=document.getElementById('ms-teacher');
+  const timeEl=document.getElementById('ms-time');
+  const noteEl=document.getElementById('ms-capacity-note');
+  if(!dateEl || !teacherEl || !timeEl) return;
+  dateEl.value=formatDateDMY(date);
+  if([...teacherEl.options].some(o=>o.value===missed.teacher)) teacherEl.value=missed.teacher;
+  updateMakeupSeparateDaySlots(missedLessonId);
+  const free=[...timeEl.options].some(o=>o.value===missed.time && !o.disabled);
+  const when=formatLedgerDate(date)+' at '+formatTime12h(missed.time);
+  if(free){
+    timeEl.value=missed.time;
+    if(noteEl) noteEl.textContent='Same time next week: '+when+' with '+(missed.teacher||'the same teacher')+'.';
+  } else {
+    timeEl.value='';
+    const ownLesson=(db.lessons||[]).some(l=>l.id!==missed.id && l.date===date && l.time===missed.time &&
+      l.status==='scheduled' && (l.status_record||'active')!=='archived' &&
+      (String(l.studentId)===String(missed.studentId) || l.student===missed.student));
+    if(noteEl) noteEl.textContent=when+' is not free — '+(ownLesson
+      ? (missed.student||'the student')+' already has their regular lesson then. Use Double Session to combine them, or pick another time.'
+      : 'the teacher or the rooms are booked then. Pick another time.');
+  }
+  if(typeof updateMakeupPreview==='function') updateMakeupPreview(missedLessonId);
 }
 
 function updateMakeupSeparateDaySlots(missedLessonId){
