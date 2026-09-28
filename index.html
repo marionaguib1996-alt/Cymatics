@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-310</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-312</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -3099,7 +3099,7 @@ const MONTHLY_AUTO_ARCHIVE_DAYS = 6;
 // day five and keep them, even though the slot is already back on offer.
 const RENEWAL_SLOT_HOLD_DAYS = 3;
 function autoArchiveStaleTrials(){
-  const todayKey=new Date().toISOString().slice(0,10);
+  const todayKey=(typeof getLocalTodayKey==='function') ? getLocalTodayKey() : new Date().toISOString().slice(0,10);
   const archived=[];
   (db.students||[]).forEach(s=>{
     if((s.status||'active')==='archived' || s.frozen) return;
@@ -3150,7 +3150,16 @@ function autoArchiveStaleTrials(){
       !lessonBelongsToStudent(l, s)
     );
     if(nameOrphans.length) return;
-    const last=attended[attended.length-1];
+    // Mario's rule: archive 6 days after their LAST lesson on the calendar —
+    // the last monthly session, or a make-up held after the month ended if
+    // there is one — whatever happened in it. An excused or teacher-absent
+    // last session used to be skipped, so a student whose lessons ended two
+    // days ago was measured from the session before and archived early.
+    // (These only ever move the date LATER; they never archive on their own
+    // — a booked make-up still blocks the archive above, as "scheduled".)
+    const lastLessons=own.filter(l=>['attended','absent_paid','absent_excused','teacher_absent'].includes(l.status) && l.date)
+      .map(l=>l.date).sort();
+    const last=lastLessons[lastLessons.length-1];
     const daysSince=Math.floor((new Date(todayKey)-new Date(last))/86400000);
     if(daysSince<=days) return;
     s.status='archived';
@@ -4696,6 +4705,29 @@ function convertTrial(id){
  window._renewCustomStudentId=id;
 }
 
+// A teacher's rate history as loaded from the cloud. An EMPTY cloud history
+// never means "deleted" — the original rate can't be removed, so a history,
+// once it exists, is never empty. Empty in the cloud while this device has
+// one means it never got there, so this device's copy is kept (and the
+// teacher's name added to `resend` so it can be sent up again). Both cloud
+// loads use this; the automatic one used to drop the history altogether,
+// which is how every new version erased the date of a rate change.
+function cloudRateHistoryOr(t, existing, resend){
+  if(Array.isArray(t && t.rate_history) && t.rate_history.length) return t.rate_history;
+  if(existing && Array.isArray(existing.rateHistory) && existing.rateHistory.length){
+    if(Array.isArray(resend)) resend.push((t && t.name) || existing.name);
+    return existing.rateHistory;
+  }
+  return [];
+}
+
+// The "changed" badge belongs to the month a new rate took effect only.
+function rateChangedInMonth(profile, month){
+  const m=String(month||'').slice(0,7);
+  return !!m && (Array.isArray(profile && profile.rateHistory) ? profile.rateHistory : [])
+    .some(e=>e && e.from && e.from!=='1900-01-01' && String(e.from).slice(0,7)===m);
+}
+
 function renderTeachers(){
  const tb=document.getElementById('teachers-tbody');
  const profiles=(db.teacherProfiles||[]).filter(p=>(p.status||'active')!=='archived');
@@ -4740,7 +4772,7 @@ function renderTeachers(){
    return `<tr>
       <td>${escapeHtml(p.name)}</td>
       <td>${escapeHtml((Array.isArray(p.instruments)?p.instruments:(p.instruments?[p.instruments]:[])).join(', '))}</td>
-      <td>${egp(Number(p.rate)||0)}${(Array.isArray(p.rateHistory)&&p.rateHistory.length>1)?` <span class="badge badge-blue" style="font-size:10px;cursor:help" title="${escapeAttr(p.rateHistory.slice().sort((a,b)=>String(a.from).localeCompare(String(b.from))).map(e=>(e.from==='1900-01-01'?'originally':'from '+e.from)+': '+(Number(e.rate)||0)+' EGP').join('\n'))}">↗ changed</span>`:''}
+      <td>${egp(Number(p.rate)||0)}${rateChangedInMonth(p, month)?` <span class="badge badge-blue" style="font-size:10px;cursor:help" title="${escapeAttr(p.rateHistory.slice().sort((a,b)=>String(a.from).localeCompare(String(b.from))).map(e=>(e.from==='1900-01-01'?'originally':'from '+e.from)+': '+(Number(e.rate)||0)+' EGP').join('\n'))}">↗ changed</span>`:''}
         <button class="btn btn-sm" style="margin-left:6px;padding:1px 6px;font-size:11px" onclick="openEditTeacherRate('${jsString(p.name)}')" title="Change this teacher's per-session rate from a chosen date onward. Past lessons keep the rate they were earned at.">✎</button></td>
       <td>${payable}${archivedNote}</td>
       <td>${egp(total)}${overrideNote}</td>
@@ -12411,6 +12443,7 @@ async function _autoLoadFromCloudImpl(){
 
    if(teachers && teachers.length){
      const merged = [];
+     const resendRateHistory = [];
      teachers.forEach(t=>{
        // Match by Supabase id first (survives name changes), fall back to name
        const existing = (db.teacherProfiles||[]).find(p=>
@@ -12428,10 +12461,18 @@ async function _autoLoadFromCloudImpl(){
          days: Array.isArray(t.available_days) ? t.available_days : (existing?.days||[]),
          // time_slots from Supabase takes priority; fall back to locally saved copy
          timeSlots: (t.time_slots && Object.keys(t.time_slots).length) ? t.time_slots : (existing?.timeSlots||{}),
+         // These two were missing here, so every automatic load (every
+         // reload, every new version) dropped them: the dates of rate
+         // changes, and the days a teacher is closed to new students.
+         rateHistory: cloudRateHistoryOr(t, existing, resendRateHistory),
+         closedDays: Array.isArray(t.closed_days) ? t.closed_days : (existing?.closedDays||[]),
          status: t.status||'active'
        });
      });
      db.teacherProfiles = merged;
+     if(resendRateHistory.length && session.role==='admin' && typeof syncTeacherUpdateToSupabase==='function'){
+       resendRateHistory.forEach(n=>{ const p=merged.find(x=>x.name===n); if(p){ try{ syncTeacherUpdateToSupabase(p); }catch(_){} } });
+     }
    }
 
    if(lessons && lessons.length){
@@ -13690,7 +13731,9 @@ async function syncTeacherToSupabase(profile){
       // rate and no record of when it changed — so every past lesson
       // would silently be repriced at the new rate, restating payslips
       // that have already been handed over.
-      rate_history: Array.isArray(profile.rateHistory) ? profile.rateHistory : [],
+      // Only sent when this device HAS a history: a device without one
+      // must never blank the cloud's copy.
+      ...((Array.isArray(profile.rateHistory) && profile.rateHistory.length) ? {rate_history: profile.rateHistory} : {}),
       // Which days this teacher is closed to new students. Without this in
       // the cloud the setting lives on one device, and every other one keeps
       // offering slots you have deliberately closed.
@@ -13787,6 +13830,8 @@ window.downloadCloud = async function(){
       return;
     }
 
+    // Teachers whose history the cloud is missing — re-sent below.
+    const resendRateHistory=[];
     db.teacherProfiles = (data || []).map(t=>{
       const existing=(db.teacherProfiles||[]).find(p=>(p.supabase_id&&p.supabase_id===t.id)||p.name===t.name);
       return {
@@ -13799,7 +13844,13 @@ window.downloadCloud = async function(){
         rate: t.rate || 0,
         // Read the rate history back, falling back to whatever this device
         // already had so a cloud row predating the column doesn't wipe it.
-        rateHistory: Array.isArray(t.rate_history) ? t.rate_history : (existing?.rateHistory||[]),
+        // An EMPTY cloud history never means "deleted": the original rate
+        // can't be removed, so a history, once it exists, is never empty.
+        // Empty in the cloud while this device has one means it never got
+        // there (a failed upload, or a device without it overwrote it) —
+        // replacing it is how a reload erased the date of a rate change.
+        // Keep this device's copy and send it up again.
+        rateHistory: cloudRateHistoryOr(t, existing, resendRateHistory),
         closedDays: Array.isArray(t.closed_days) ? t.closed_days : (existing?.closedDays||[]),
         instruments: t.instruments || [],
         days: t.available_days || [],
@@ -13809,6 +13860,9 @@ window.downloadCloud = async function(){
     });
 
     save();
+    if(resendRateHistory.length && session.role==='admin' && typeof syncTeacherUpdateToSupabase==='function'){
+      resendRateHistory.forEach(n=>{ const p=db.teacherProfiles.find(x=>x.name===n); if(p) syncTeacherUpdateToSupabase(p); });
+    }
 
     if(typeof renderProfiles==='function') renderProfiles();
     if(typeof renderTeachers==='function') renderTeachers();
@@ -13838,7 +13892,9 @@ async function syncTeacherUpdateToSupabase(profile){
       // rate and no record of when it changed — so every past lesson
       // would silently be repriced at the new rate, restating payslips
       // that have already been handed over.
-      rate_history: Array.isArray(profile.rateHistory) ? profile.rateHistory : [],
+      // Only sent when this device HAS a history: a device without one
+      // must never blank the cloud's copy.
+      ...((Array.isArray(profile.rateHistory) && profile.rateHistory.length) ? {rate_history: profile.rateHistory} : {}),
       // Which days this teacher is closed to new students. Without this in
       // the cloud the setting lives on one device, and every other one keeps
       // offering slots you have deliberately closed.
@@ -13856,7 +13912,13 @@ async function syncTeacherUpdateToSupabase(profile){
       .eq(matchCol, matchVal)
       .select()
       .single();
-    if(error){ console.warn('Teacher update failed:', error.message); return; }
+    if(error){
+      console.warn('Teacher update failed:', error.message);
+      // Said on screen: a silent failure here is how a rate change stayed
+      // on one laptop and was lost on the next reload.
+      if(session.role==='admin' && typeof showToast==='function') showToast('⚠ '+(profile.name||'Teacher')+' not saved to the cloud: '+error.message);
+      return;
+    }
     if(data && !profile.supabase_id){ profile.supabase_id=data.id; save(); }
   }catch(err){
     console.warn('Teacher update failed:', err.message);
@@ -16295,7 +16357,7 @@ function openTeacherLessonLogEditor(logId){
         </div>` : ''}
         <div class="form-field wide"><label for="tw-homework">Homework Task</label><textarea id="tw-homework" placeholder="e.g. Practice C major scale, 10 minutes daily">${escapeHtml(log.homework)}</textarea></div>
       </div>
-      <div style="text-align:right;margin-top:14px"><button class="btn btn-gold" onclick="saveTeacherLessonLog('${jsString(log.id)}')">Save Lesson Log</button></div>
+      <div style="text-align:right;margin-top:14px"><button class="btn btn-gold" onclick="saveTeacherLessonLog('${jsString(log.id)}','${jsString(String(log.lessonId??''))}','${jsString(log.studentName||'')}')">Save Lesson Log</button></div>
     </div>`);
 }
 
@@ -16420,9 +16482,46 @@ function findPreviousHomeworkLog(log, lesson){
   return null;
 }
 
-function saveTeacherLessonLog(logId){
-  const log=(db.lessonLogs||[]).find(l=>String(l.id)===String(logId));
-  if(!log) return;
+// A refresh from the cloud can replace this device's logs while the editor
+// is open. The log created when the editor opened is EMPTY, empty logs are
+// never sent to the cloud, so the refresh dropped it — and Save found
+// nothing and silently did nothing. The teacher's words are in the form,
+// so: find the log again by lesson + student, or make it again.
+function findLogForSave(logId, lessonIdHint, studentNameHint){
+  const logs=db.lessonLogs=db.lessonLogs||[];
+  let log=logs.find(l=>String(l.id)===String(logId));
+  if(log) return log;
+  if(lessonIdHint==null || lessonIdHint==='') return null;
+  const name=String(studentNameHint||'').trim().toLowerCase();
+  log=logs.find(l=>String(l.lessonId)===String(lessonIdHint) && String(l.studentName||'').trim().toLowerCase()===name);
+  if(log) return log;
+  const lesson=(db.lessons||[]).find(l=>String(l.id)===String(lessonIdHint));
+  if(!lesson) return null;
+  const lessonName=String(lesson.student||lesson.student_name||'').trim().toLowerCase();
+  if(name && lessonName && lessonName!==name) return null;   // never onto someone else's lesson
+  const student=(db.students||[]).find(s=>String(s.id)===String(lesson.studentId))
+    || (db.students||[]).find(s=>lessonBelongsToStudent(lesson, s));
+  if(!student) return null;
+  return createLessonLog(student, lesson);
+}
+
+// Save must never do nothing. Any failure is said on screen, and the
+// editor stays open so the teacher's words are still there.
+function saveTeacherLessonLog(logId, lessonIdHint, studentNameHint){
+  try{
+    return saveTeacherLessonLogNow(logId, lessonIdHint, studentNameHint);
+  }catch(err){
+    console.error('saveTeacherLessonLog failed:', err);
+    showToast('⚠ Not saved: '+((err&&err.message)||'error')+'. Your text is still here — WhatsApp us this.');
+  }
+}
+
+function saveTeacherLessonLogNow(logId, lessonIdHint, studentNameHint){
+  const log=findLogForSave(logId, lessonIdHint, studentNameHint);
+  if(!log){
+    showToast('⚠ Not saved — lesson not found. Refresh the app; your text is still here.');
+    return;
+  }
   const lesson=db.lessons.find(l=>l.id==log.lessonId);
   const homeworkAssigned=log.homeworkAssignedDate||lesson?.date||'';
   // Due Date field removed from the form — preserve whatever was already
