@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-313</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-314</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1342,6 +1342,12 @@ input::placeholder{color:var(--text-dim)}
     <small style="display:block;margin-bottom:8px;color:var(--text-muted)">Finds same-name students taking genuinely different courses who aren't connected — so they count as two people in your student total and don't show the "Course 1 of 2" badge. Only the connection changes; lessons, payments and payroll are untouched.</small>
     <button class="btn" onclick="previewLinkUnlinkedCourses()">🔍 Preview (changes nothing)</button>
     <div id="unlinked-courses-results" style="margin-top:14px"></div>
+
+    <div style="border-top:1px solid var(--border);margin:20px 0 16px;"></div>
+    <div class="card-title" style="margin-bottom:10px">Repair Broken Course Links</div>
+    <small style="display:block;margin-bottom:8px;color:var(--text-muted)">For a person whose courses are linked to a record that no longer exists (Data Health: "linked to missing …"). Their earliest remaining course becomes the main record and the others link to it. Lessons, payments and payroll are not touched.</small>
+    <button class="btn" onclick="previewRepairBrokenCourseLinks()">🔍 Preview (changes nothing)</button>
+    <div id="broken-links-results" style="margin-top:14px"></div>
 
     <div style="border-top:1px solid var(--border);margin:20px 0 16px;"></div>
 
@@ -8245,6 +8251,64 @@ function applyFixCourseFields(){
 // show the "Course 1 of 2" badge. Distinct from the existing duplicate
 // tools: those merge identical records; this LINKS genuinely different
 // courses, changing nothing except the connection between them.
+// Courses linked to a record that no longer exists (e.g. the person's first
+// course was deleted). getLinkedCourses still pairs them with each other,
+// but everything that looks up the ROOT record — shared contact details,
+// logins, "Course 1 of 2" — finds nothing, so the person behaves as two.
+// The name-based link tools skip them, because they already share a root.
+// Repair: the earliest-joined remaining course (active preferred) becomes
+// the root, and every other record of that person links to it.
+function findBrokenCourseLinkGroups(){
+  const all=db.students||[];
+  const publicIds=new Set(all.map(s=>s.public_id).filter(Boolean));
+  const byMissing={};
+  all.forEach(s=>{
+    if(!s.linkedPersonId || publicIds.has(s.linkedPersonId)) return;
+    (byMissing[s.linkedPersonId]=byMissing[s.linkedPersonId]||[]).push(s);
+  });
+  return Object.keys(byMissing).map(missing=>{
+    const rows=byMissing[missing].slice().sort((a,b)=>
+      (((a.status||'active')==='archived')-((b.status||'active')==='archived')) ||
+      String(a.joined_date||'9999').localeCompare(String(b.joined_date||'9999')) ||
+      String(a.public_id||'').localeCompare(String(b.public_id||'')));
+    return {missing, root:rows[0], others:rows.slice(1)};
+  }).filter(g=>g.root && g.root.public_id);
+}
+
+function previewRepairBrokenCourseLinks(){
+  const el=document.getElementById('broken-links-results');
+  const groups=findBrokenCourseLinkGroups();
+  if(!el) return;
+  if(!groups.length){ el.innerHTML='<div style="color:var(--text-muted)">No broken course links found.</div>'; return; }
+  el.innerHTML=groups.map(g=>
+    '<div style="margin-bottom:8px"><b>'+escapeHtml(g.root.name||'')+'</b> — linked to missing "'+escapeHtml(g.missing)+'".<br>'
+    +'Main record: '+escapeHtml(g.root.public_id)+' ('+escapeHtml(g.root.instrument||'?')+' · '+escapeHtml(g.root.teacher||'?')+')'
+    +(g.others.length ? '<br>Linked to it: '+g.others.map(o=>escapeHtml(o.public_id)+' ('+escapeHtml(o.instrument||'?')+' · '+escapeHtml(o.teacher||'?')+')').join(', ') : '')
+    +'</div>').join('')
+    +'<button class="btn btn-gold" style="margin-top:8px" onclick="applyRepairBrokenCourseLinks()">Repair these '+groups.length+' person(s)</button>';
+}
+
+function applyRepairBrokenCourseLinks(){
+  const groups=findBrokenCourseLinkGroups();
+  if(!groups.length){ showToast('No broken course links found.'); return; }
+  let changed=0;
+  groups.forEach(g=>{
+    g.root.linkedPersonId='';
+    if(typeof syncStudentUpdateToSupabase==='function'){ try{ syncStudentUpdateToSupabase(g.root); }catch(_){} }
+    changed++;
+    g.others.forEach(o=>{
+      o.linkedPersonId=g.root.public_id;
+      if(typeof syncStudentUpdateToSupabase==='function'){ try{ syncStudentUpdateToSupabase(o); }catch(_){} }
+      changed++;
+    });
+  });
+  save();
+  if(typeof renderStudents==='function'){ try{ renderStudents(); }catch(_){} }
+  const el=document.getElementById('broken-links-results');
+  if(el) el.innerHTML='<div style="color:var(--green,#2e7d32)">Repaired '+groups.length+' person(s) — '+changed+' record(s) updated.</div>';
+  showToast('Repaired '+groups.length+' broken course link(s).');
+}
+
 function findUnlinkedSameNameCourses(){
   const active=(db.students||[]).filter(s=>(s.status||'active')!=='archived');
   const byName={};
