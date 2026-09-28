@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-312</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-313</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -19559,7 +19559,17 @@ function getTeacherBookingsByTime(teacherName, dayName, targetDate, excludeStude
       ).map(l=>l.date).filter(Boolean);
       if(!ownScheduled.length) return false;
       const latestKnown=ownScheduled.reduce((a,b)=>a>b?a:b);
-      return targetDate>latestKnown;
+      if(!(targetDate>latestKnown)) return false;
+      // A lesson MOVED to another day (Sunday → the Friday before) is still
+      // that week's session. It became their latest known date, so the
+      // Sunday two days later looked like "the next week" and they were
+      // projected straight back onto it ("Teacher Busy — with …" on a slot
+      // they are not coming to). A new weekly occurrence is at least 7 days
+      // after their latest lesson of any kind.
+      const latestAny=(db.lessons||[]).filter(l=>
+        lessonBelongsToStudent(l, s) && (l.status_record||'active')!=='archived' && !l.makeupForLessonId && l.date
+      ).map(l=>l.date).reduce((a,b)=>a>b?a:b, '');
+      return !latestAny || targetDate>=addDaysToDateString(latestAny, 7);
     })()
   ).forEach(s=>{
     if(!s.lessonTime || bookingsByTime[s.lessonTime]) return;
@@ -24389,14 +24399,20 @@ function generateTeacherSchedulePhoto(teacherName, dayName, silent){
     return {
       time:slot.time,
       timeEnd:slotEnd,
-      studentName:shown?shown.student:(slot.occupiedBy||null),
+      // REAL lessons only, like the Calendar. slot.occupiedBy comes from the
+      // booking-availability view — a student's regular weekly slot
+      // projected forward, a slot HELD for someone who hasn't renewed, or
+      // a "not taking new students" marker — none of which is a lesson on
+      // this date. Printing it put a student whose Sunday lesson had been
+      // moved to the Friday before straight back onto Sunday's photo.
+      studentName:shown?shown.student:null,
       instrument:shown ? (shown.instrument||matchedStudent?.instrument||'') : '',
       paid:shown ? paidSet.has(String(matchedStudent?matchedStudent.id:shown.studentId)) : false,
       isWeekly:!!(matchedStudent && typeof isWeeklyPlan==='function' && isWeeklyPlan(matchedStudent.plan)),
       isTrial:!!(matchedStudent && matchedStudent.plan==='trial'),
       isGroup:!!(matchedStudent && isGroupPlan(matchedStudent.plan)),
       isMakeup:!!(shown && shown.makeupForLessonId),
-      occupied:!!(shown || slot.occupiedBy),
+      occupied:!!shown,
       // True when this row is only covered by a session that started
       // earlier — it's already shown on that earlier row, so repeating it
       // here would just duplicate the same booking.
