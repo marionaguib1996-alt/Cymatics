@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-314</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-315</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -3871,6 +3871,27 @@ function syncLessonPaidFlags(studentId, monthKey, isPaid){
   return changed;
 }
 
+// A renewal's payment snapshot = what was actually charged for it, split
+// across the months its sessions fall in (by session count; any rounding
+// remainder goes to the first month).
+function recordChargedAmount(studentId, months, dates, amount){
+  const total=Math.max(0, Math.round(Number(amount)||0));
+  const ms=(months||[]).slice().sort();
+  if(!ms.length) return;
+  const counts=ms.map(m=>(dates||[]).filter(d=>String(d).slice(0,7)===m).length||0);
+  const n=counts.reduce((a,b)=>a+b,0)||ms.length;
+  const shares=ms.map((m,i)=>Math.floor(total*(counts[i]||(n===ms.length?1:0))/n));
+  shares[0]+=total-shares.reduce((a,b)=>a+b,0);
+  const st=(db.students||[]).find(x=>String(x.id)===String(studentId));
+  ms.forEach((m,i)=>{
+    const key=studentId+'_'+m;
+    db.paymentAmounts=db.paymentAmounts||{}; db.paymentStudentNames=db.paymentStudentNames||{};
+    db.paymentAmounts[key]=shares[i];
+    if(st) db.paymentStudentNames[key]=st.name||'';
+    if(typeof syncPaymentAmountToSupabase==='function'){ try{ syncPaymentAmountToSupabase(key, shares[i], st?st.name:''); }catch(_){} }
+  });
+}
+
 function recordPaymentSnapshot(studentId, monthKey, isPaid){
   const key=studentId+'_'+monthKey;
   db.paymentAmounts=db.paymentAmounts||{};
@@ -4612,9 +4633,17 @@ function saveEditStudent(id){
  // editing just a student's instrument leaves their upcoming lessons showing
  // the old one until a manual rebuild.
  (db.lessons||[]).forEach(l=>{
-   const isThisStudent=(String(l.studentId)===String(s.id) || l.student===oldName);
-   if(!isThisStudent) return;
-   if((l.status||'')==='scheduled' && (l.date||'')>=todayKey){
+   // THIS course's lessons: by id. A name match only for legacy lessons with
+   // no id, and only when the person has no other course that name could
+   // mean — "or the same name" rewrote a two-course student's OTHER course
+   // (Youssef Bakry's E-Guitar lessons became Mariam / Vocals).
+   const hasId=l.studentId!=null && l.studentId!=='';
+   const linkedIds=new Set(((typeof getLinkedCourses==='function') ? getLinkedCourses(s) : []).map(c=>String(c.id)));
+   const ownCourse=hasId ? String(l.studentId)===String(s.id) : (l.student===oldName && !linkedIds.size);
+   // Same person's other courses carry the same name, so a rename follows.
+   const samePerson=ownCourse || (hasId && linkedIds.has(String(l.studentId)));
+   if(!samePerson) return;
+   if(ownCourse && (l.status||'')==='scheduled' && (l.date||'')>=todayKey){
      l.instrument=s.instrument;
      l.teacher=s.teacher;
    }
@@ -5557,26 +5586,52 @@ function upcomingAbsenceWhenLabel(dateKey){
 
 // One note line per deducted session, worded by whether the missed
 // session is still upcoming or already passed.
-function buildDeductionNotes(student, deductions){
-  const eSmile=String.fromCodePoint(0x263A);
-  const todayKey=new Date().toISOString().slice(0,10);
-  return (deductions||[]).map(l=>{
-    if((l.date||'')>=todayKey){
-      const teacherName=l.teacher||student.teacher||'';
-      const prof=(db.teacherProfiles||[]).find(p=>p.name===teacherName);
-      const title=prof?.title||'Mr';
-      const first=String(teacherName).trim().split(' ')[0]||teacherName;
-      return 'Kindly note that the payment is deducted as '+title+' '+first+' won\'t be available '+upcomingAbsenceWhenLabel(l.date)+' to give a session '+eSmile;
-    }
-    return 'Kindly note that the payment is deducted as The session on '+dateWithMonthLabel(l.date)+' wasn\'t made-up '+eSmile;
+// "7th & 14th of September", "28th of August & 7th of September".
+function joinDatesByMonth(dates){
+  const byMonth=[];
+  Array.from(new Set((dates||[]).filter(Boolean))).sort().forEach(d=>{
+    const m=d.slice(0,7), last=byMonth[byMonth.length-1];
+    if(last && last.m===m) last.days.push(Number(d.slice(8,10))); else byMonth.push({m, days:[Number(d.slice(8,10))]});
   });
+  const and=list=>list.length<2 ? (list[0]||'') : list.slice(0,-1).join(', ')+' & '+list[list.length-1];
+  return and(byMonth.map(g=>and(g.days.map(ordinalDay))+' of '+formatMonthName(g.m)));
 }
 
-// Hides a student (and all their linked courses) from Renewals Due
-// without touching their record — for someone who has said they're not
-// continuing, so the list stays a genuine to-do rather than accumulating
-// people you've already dealt with. Scoped to the billing month, so if
-// they later renew or a new cycle comes round they reappear normally.
+// Deduction lines for a renewal message, COMBINED: one line for all the
+// missed sessions that weren't made up (whatever their dates), and one per
+// teacher for sessions they won't be available for. One line per session
+// repeated the same sentence ("…the session on 7th of September…" twice).
+// opts.forName names the child in a family message.
+function buildDeductionNotes(student, deductions, opts){
+  const o=opts||{};
+  const eSmile=String.fromCodePoint(0x263A);
+  const todayKey=new Date().toISOString().slice(0,10);
+  const forWho=o.forName ? ' for '+o.forName : '';
+  const sessions=n=>n+' session'+(n===1?'':'s');
+  const list=deductions||[];
+  const notes=[];
+  const past=list.filter(l=>(l.date||'')<todayKey);
+  if(past.length){
+    notes.push('Kindly note that a payment of '+sessions(past.length)+' is deducted'+forWho+' as the session'+(past.length===1?'':'s')
+      +' on '+joinDatesByMonth(past.map(l=>l.date))+(past.length===1?' wasn\'t':' weren\'t')+' made-up '+eSmile);
+  }
+  const upcomingByTeacher={};
+  list.filter(l=>(l.date||'')>=todayKey).forEach(l=>{
+    const t=l.teacher||student.teacher||'';
+    (upcomingByTeacher[t]=upcomingByTeacher[t]||[]).push(l);
+  });
+  Object.keys(upcomingByTeacher).forEach(teacherName=>{
+    const ls=upcomingByTeacher[teacherName].slice().sort((a,b)=>String(a.date).localeCompare(String(b.date)));
+    const prof=(db.teacherProfiles||[]).find(p=>p.name===teacherName);
+    const title=prof?.title||'Mr';
+    const first=String(teacherName).trim().split(' ')[0]||teacherName;
+    const when=Array.from(new Set(ls.map(l=>upcomingAbsenceWhenLabel(l.date)))).join(' & ');
+    notes.push('Kindly note that a payment of '+sessions(ls.length)+' is deducted'+forWho+' as '+title+' '+first
+      +' won\'t be available '+when+' to give the session'+(ls.length===1?'':'s')+' '+eSmile);
+  });
+  return notes;
+}
+
 function dismissFromRenewalsDue(idsCsv){
   const ids=String(idsCsv||'').split(',').filter(Boolean);
   if(!ids.length) return;
@@ -5636,13 +5691,47 @@ function normalizeParentPhone(raw){
 // bundle renewal and a monthly renewal are different modals with
 // different pricing, and summing them produces a total that matches
 // neither.
+// The number a family shares: the one found on the most members (as a
+// parent phone OR a student's own phone), parent phones winning ties.
+function familySharedPhone(members){
+  const count={}, raw={};
+  (members||[]).forEach(m=>{
+    [[m.phone2,2],[m.phone1,1]].forEach(([ph,w])=>{
+      const k=normalizeParentPhone(ph); if(!k) return;
+      count[k]=(count[k]||0)+10+w; if(!raw[k]) raw[k]=String(ph).trim();
+    });
+  });
+  const best=Object.keys(count).sort((a,b)=>count[b]-count[a])[0];
+  return best ? raw[best] : '';
+}
+
 function groupRenewalsByFamily(rows){
   const out=[];
   const byPhone={};
+  // Rows join a family when a parent phone matches another row's parent
+  // phone OR that student's own phone (a parent who is also a student, or
+  // an older sibling whose number is the family's). Union-find, so chains
+  // of matches end up in one family.
+  const eligible=rows.filter(row=>!(row.isBundleRow || row.needsLessonDay));
+  const parent=eligible.map((_,i)=>i);
+  const find=i=>parent[i]===i ? i : (parent[i]=find(parent[i]));
+  const byNumber={};
+  eligible.forEach((row,i)=>{
+    const parentPh=normalizeParentPhone(row.s && row.s.phone2);
+    const ownPh=normalizeParentPhone(row.s && row.s.phone1);
+    if(parentPh) (byNumber['p'+parentPh]=byNumber['p'+parentPh]||[]).push(i);
+    if(ownPh) (byNumber['o'+ownPh]=byNumber['o'+ownPh]||[]).push(i);
+  });
+  Object.keys(byNumber).forEach(k=>{
+    if(k[0]!=='p') return;
+    const idx=byNumber[k].concat(byNumber['o'+k.slice(1)]||[]);
+    idx.forEach(i=>{ parent[find(i)]=find(idx[0]); });
+  });
   rows.forEach(row=>{
-    const key=(row.isBundleRow || row.needsLessonDay)
-      ? '' : normalizeParentPhone(row.s && row.s.phone2);
-    if(!key){ out.push({...row, members:[row]}); return; }
+    const i=eligible.indexOf(row);
+    const grouped=i>=0 && eligible.some((_,j)=>j!==i && find(j)===find(i));
+    if(!grouped){ out.push({...row, members:[row]}); return; }
+    const key='f'+find(i);
     (byPhone[key]=byPhone[key]||[]).push(row);
   });
   Object.keys(byPhone).forEach(key=>{
@@ -5651,7 +5740,7 @@ function groupRenewalsByFamily(rows){
     out.push({
       s:members[0].s,
       isFamily:true,
-      familyPhone:key,
+      familyPhone:familySharedPhone(members.map(m=>m.s)),
       members,
       courses:members.reduce((acc,m)=>acc.concat(m.courses||[m.s]), []),
       lessonCount:members.reduce((sum,m)=>sum+(m.lessonCount||0), 0),
@@ -5679,7 +5768,7 @@ function sendFamilyRenewalReminder(memberIdsCsv){
     const members=ids.map(id=>(db.students||[]).find(s=>String(s.id)===String(id))).filter(Boolean);
     if(!members.length){ showToast('Could not find those students.'); return; }
 
-    const phone=String(members[0].phone2||'').trim();
+    const phone=familySharedPhone(members);
     if(!phone){ showToast('No parent phone on file.'); return; }
 
     // One clause per COURSE, grouped under each student's name, so a
@@ -5689,8 +5778,8 @@ function sendFamilyRenewalReminder(memberIdsCsv){
         (typeof getLinkedCourses==='function' ? getLinkedCourses(st) : [])
           .filter(c=>c.lesson_day && (typeof studentHasPendingRenewal!=='function' || studentHasPendingRenewal(c)))
       );
-      const details=courses.map(c=>computeRenewalCourseDetails(c));
       const firstName=st.first_name||String(st.name||'').split(' ')[0]||st.name;
+      const details=courses.map(c=>computeRenewalCourseDetails(c, {forName:firstName}));
       return {student:st, courses, details, firstName,
               amount:details.reduce((sum,d)=>sum+d.amount, 0)};
     });
@@ -5722,7 +5811,8 @@ function sendFamilyRenewalReminder(memberIdsCsv){
     }
 
     const absenceNotes=perStudent.map(p=>p.details.map(d=>d.absenceNote).join('')).join('');
-    const deductionNotes=perStudent.map(p=>p.details.map(d=>d.deductionNoteBlock).join('')).join('');
+    const deductionNotes=perStudent.map(p=>buildDeductionNotes(p.student, p.details.reduce((a,d)=>a.concat(d.deductions||[]),[]), {forName:p.firstName})
+      .map(n=>'\n\n'+n).join('')).join('');
 
     // Already-reminded guard, same intent as the single-student path: the
     // message covers everyone, so a previous send to ANY member means the
@@ -6032,7 +6122,8 @@ function renderRenewalsDue(){
 // month, lesson count/dates, price, and any absence/deduction notes.
 // Shared by the normal single-course reminder and the consolidated
 // multi-course one, so both always agree on the numbers.
-function computeRenewalCourseDetails(student){
+function computeRenewalCourseDetails(student, opts){
+  const o=opts||{};
   const month=(typeof studentNextBillingMonth==='function') ? studentNextBillingMonth(student) : getNextMonthString();
   const monthName=formatMonthName(month);
   const allDayNumbers=getWeekdayDatesInMonth(month, student.lesson_day);
@@ -6093,15 +6184,19 @@ function computeRenewalCourseDetails(student){
     const teacherFirstName=(student.teacher||'').trim().split(' ')[0]||student.teacher;
     const excludedDateList=excludedDays.map(ordinalDay).join(', ');
     const eSmile=String.fromCodePoint(0x263A);
+    // In a combined message the line must say WHOSE session: the child's
+    // name in a family message, the course in one person's multi-course one.
+    const course=o.courseLabel ? o.courseLabel+' ' : '';
+    const forWho=o.forName ? ' for '+o.forName : '';
     absenceNote = excludedDays.length===1
-      ? '\n\nKindly note that there is no session on '+excludedDateList+' as '+teacherTitle+' '+teacherFirstName+' won\'t be available to give the session at the time '+eSmile
-      : '\n\nKindly note that there are no sessions on '+excludedDateList+' as '+teacherTitle+' '+teacherFirstName+' won\'t be available to give the session at the time '+eSmile;
+      ? '\n\nKindly note that there is no '+course+'session'+forWho+' on '+excludedDateList+' as '+teacherTitle+' '+teacherFirstName+' won\'t be available to give the session at the time '+eSmile
+      : '\n\nKindly note that there are no '+course+'sessions'+forWho+' on '+excludedDateList+' as '+teacherTitle+' '+teacherFirstName+' won\'t be available to give the sessions at the time '+eSmile;
   }
 
-  const deductionNotes=(typeof buildDeductionNotes==='function') ? buildDeductionNotes(student, deductions) : [];
+  const deductionNotes=(typeof buildDeductionNotes==='function') ? buildDeductionNotes(student, deductions, {forName:o.forName}) : [];
   const deductionNoteBlock=deductionNotes.map(n=>'\n\n'+n).join('');
 
-  return {month, monthName, lessonCount, dateList, amount, absenceNote, deductionNoteBlock};
+  return {month, monthName, lessonCount, dateList, amount, absenceNote, deductionNoteBlock, deductions};
 }
 
 // Closing line for renewal reminders: make-ups still owed from EXCUSED
@@ -6120,7 +6215,7 @@ function excusedMakeupsLeft(student){
 function makeupsLeftNote(students, forName){
   const n=(students||[]).reduce((sum,st)=>sum+excusedMakeupsLeft(st),0);
   if(!n) return '';
-  return '\n\nKindly note that we have '+n+' session'+(n===1?'':'s')+' left to make up'+(forName?' for '+forName:'')+'.';
+  return '\n\nKindly note that we still have '+n+' make-up session'+(n===1?'':'s')+' left'+(forName?' for '+forName:'')+'.';
 }
 
 function sendRenewalReminder(studentId){
@@ -6242,7 +6337,7 @@ function sendConsolidatedRenewalReminder(primary, linkedPending, phone){
     allCourses.forEach(c=>{ instrumentCounts[c.instrument||'']=(instrumentCounts[c.instrument||'']||0)+1; });
 
     const courseDetails=allCourses.map(c=>{
-      const details=computeRenewalCourseDetails(c);
+      const details=computeRenewalCourseDetails(c, allCourses.length>1 ? {courseLabel:c.instrument||''} : {});
       const label=(instrumentCounts[c.instrument||'']>1) ? c.lesson_day : (c.instrument||c.lesson_day);
       return {...details, label, student:c};
     });
@@ -6258,7 +6353,8 @@ function sendConsolidatedRenewalReminder(primary, linkedPending, phone){
       ? clauseTexts.slice(0,-1).join('\n')+'\n& '+clauseTexts[clauseTexts.length-1]
       : clauseTexts[0];
     const absenceNotes=courseDetails.map(c=>c.absenceNote).join('');
-    const deductionNotes=courseDetails.map(c=>c.deductionNoteBlock).join('');
+    const deductionNotes=buildDeductionNotes(primary, courseDetails.reduce((a,c)=>a.concat(c.deductions||[]),[]))
+      .map(n=>'\n\n'+n).join('');
 
     const usingParentNumber=!String(primary.phone1||'').trim() && !!String(primary.phone2||'').trim();
     const firstName=usingParentNumber
@@ -11211,6 +11307,8 @@ function saveRenameInstrument(idx){
    (db.lessons||[]).forEach(l=>{
      if(l.instrument===oldName) l.instrument=newName;
    });
+   (db.lessonLogs||[]).forEach(g=>{ if(g.instrument===oldName) g.instrument=newName; });
+   (db.waitingList||[]).forEach(e=>{ if(e.instrument===oldName) e.instrument=newName; });
  }
 
  inst.name=newName;
@@ -11225,6 +11323,19 @@ function saveRenameInstrument(idx){
    window.supabaseClientV1.from('instruments').update({name:newName, quantity:newQuantity}).eq('name', oldName)
      .then(({error})=>{ if(error) console.warn('Instrument update sync failed:', error.message); });
  }
+ // Everything renamed above goes to the cloud as well. Changed only on this
+ // device, the next reload brought the old instrument name back from the
+ // cloud onto students, lessons and teachers — mislinked data.
+ if(nameChanged) pushInstrumentRename(newName);
+}
+
+function pushInstrumentRename(newName){
+  const safe=(fn,x)=>{ if(typeof fn==='function'){ try{ fn(x); }catch(_){} } };
+  (db.students||[]).filter(x=>x.instrument===newName).forEach(x=>safe(window.syncStudentUpdateToSupabase||syncStudentUpdateToSupabase, x));
+  (db.lessons||[]).filter(x=>x.instrument===newName).forEach(x=>safe(window.syncLessonUpdateToSupabase, x));
+  (db.teacherProfiles||[]).filter(p=>(p.instruments||[]).includes(newName)).forEach(p=>safe(typeof syncTeacherUpdateToSupabase==='function'?syncTeacherUpdateToSupabase:null, p));
+  (db.lessonLogs||[]).filter(g=>g.instrument===newName).forEach(g=>safe(typeof syncLessonLogToSupabase==='function'?syncLessonLogToSupabase:null, g));
+  (db.waitingList||[]).filter(e=>e.instrument===newName).forEach(e=>safe(typeof syncWaitingEntryToSupabase==='function'?syncWaitingEntryToSupabase:null, e));
 }
 
 function deleteInstrument(idx){
@@ -11237,10 +11348,15 @@ function deleteInstrument(idx){
  if(!confirm(`${inst.name} is used by ${studentCount} students and ${teacherCount} teachers. Delete anyway?`)) return;
 
  const instName=inst.name;
- (db.students||[]).forEach(s=>{ if(s.instrument===instName) s.instrument=''; });
+ const clearedStudents=[], trimmedProfiles=[];
+ (db.students||[]).forEach(s=>{ if(s.instrument===instName){ s.instrument=''; clearedStudents.push(s); } });
  (db.teacherProfiles||[]).forEach(p=>{
+   if((p.instruments||[]).includes(instName)) trimmedProfiles.push(p);
    p.instruments=(p.instruments||[]).filter(x=>x!==instName);
  });
+ // Sent to the cloud, or the next reload restores the deleted instrument.
+ clearedStudents.forEach(x=>{ if(typeof syncStudentUpdateToSupabase==='function'){ try{ syncStudentUpdateToSupabase(x); }catch(_){} } });
+ trimmedProfiles.forEach(p=>{ if(typeof syncTeacherUpdateToSupabase==='function'){ try{ syncTeacherUpdateToSupabase(p); }catch(_){} } });
 
  db.instruments.splice(idx,1);
  save();
@@ -11626,7 +11742,18 @@ function saveEditProfile(i){
    affectedStudents.forEach(s=>{ s.teacher=name; });
    affectedLessons=(db.lessons||[]).filter(l=>l.teacher===oldName);
    affectedLessons.forEach(l=>{ l.teacher=name; });
-   (db.lessonLogs||[]).forEach(log=>{ if(log.teacherName===oldName) log.teacherName=name; });
+   // Logs, absences and waiting-list entries follow the rename — IN THE
+   // CLOUD too. The cloud accepts a teacher's log only under their own
+   // name, so logs left under the old name locked the renamed teacher out
+   // of their own history.
+   var renamedLogs=[];
+   (db.lessonLogs||[]).forEach(log=>{ if(log.teacherName===oldName){ log.teacherName=name; renamedLogs.push(log); } });
+   (db.teacherAbsences||[]).forEach(a=>{
+     if(a.teacher===oldName){ a.teacher=name; if(typeof syncTeacherAbsenceToSupabase==='function'){ try{ syncTeacherAbsenceToSupabase(a); }catch(_){} } }
+   });
+   (db.waitingList||[]).forEach(e=>{
+     if(e.teacher===oldName){ e.teacher=name; if(typeof syncWaitingEntryToSupabase==='function'){ try{ syncWaitingEntryToSupabase(e); }catch(_){} } }
+   });
 
    // Migrate payroll-paid records keyed by teacher name + month
    const oldPrefix=oldName+'_';
@@ -11648,6 +11775,12 @@ function saveEditProfile(i){
  if(name!==oldName && oldName){
    affectedStudents.forEach(s=>{ if(typeof syncStudentUpdateToSupabase==='function') syncStudentUpdateToSupabase(s); });
    affectedLessons.forEach(l=>{ if(typeof syncLessonUpdateToSupabase==='function') syncLessonUpdateToSupabase(l); });
+   (typeof renamedLogs!=='undefined' ? renamedLogs : []).forEach(log=>{ if(typeof syncLessonLogToSupabase==='function'){ try{ syncLessonLogToSupabase(log); }catch(_){} } });
+   // Rows only in the cloud (never downloaded here) are moved too.
+   if(window.supabaseClientV1){
+     window.supabaseClientV1.from('lesson_updates').update({teacher_id:name}).eq('teacher_id', oldName)
+       .then(({error})=>{ if(error) console.warn('Log teacher-name migration failed:', error.message); });
+   }
    if(window.supabaseClientV1){
      window.supabaseClientV1.from('teacher_paid').update({teacher_name:name}).eq('teacher_name', oldName)
        .then(({error})=>{ if(error) console.warn('Payroll teacher-name migration failed:', error.message); });
@@ -16383,10 +16516,21 @@ function openTeacherLessonLogForLesson(lessonId){
   if(log) openTeacherLessonLogEditor(log.id);
 }
 
+// A teacher writes logs for THEIR OWN lessons only. The lists already show
+// only their lessons; this makes it a rule, so no other path (a stale
+// screen, a re-found log after a refresh) can put words on another
+// teacher's log. Admins are not limited.
+function teacherOwnsLesson(lesson){
+  if(!session || session.role!=='teacher') return true;
+  const me=String(session.name||'').trim().toLowerCase();
+  return !!lesson && !!me && String(lesson.teacher||'').trim().toLowerCase()===me;
+}
+
 function openTeacherLessonLogEditor(logId){
   const log=(db.lessonLogs||[]).find(l=>String(l.id)===String(logId));
   if(!log) return;
   const lesson=db.lessons.find(l=>l.id==log.lessonId);
+  if(!teacherOwnsLesson(lesson)){ showToast('This lesson belongs to another teacher.'); return; }
   normalizeLessonLog(log,lesson);
   const lessonStatus=String(lesson?.status||log.attendance||'').trim().toLowerCase();
   if(lessonStatus!=='attended'){
@@ -16587,6 +16731,10 @@ function saveTeacherLessonLogNow(logId, lessonIdHint, studentNameHint){
     return;
   }
   const lesson=db.lessons.find(l=>l.id==log.lessonId);
+  if(!teacherOwnsLesson(lesson)){
+    showToast('⚠ Not saved — this lesson belongs to another teacher.');
+    return;
+  }
   const homeworkAssigned=log.homeworkAssignedDate||lesson?.date||'';
   // Due Date field removed from the form — preserve whatever was already
   // stored so historical logs keep their value rather than being wiped.
@@ -18468,6 +18616,7 @@ function confirmRenewal(id){
   // someone unpaid who did pay.
   const markPaid=!!document.getElementById('rn-mark-paid')?.checked;
   const paymentMethod=window._renewPaymentMethod||'InstaPay';
+  const chargedPricing=(typeof computeRenewalPrice==='function') ? computeRenewalPrice(student, created||count) : null;
 
   if(created){
     const coveredMonths=new Set();
@@ -18486,6 +18635,10 @@ function confirmRenewal(id){
       if(typeof syncLessonPaidFlags==='function') syncLessonPaidFlags(student.id, m, markPaid);
       if(typeof syncPaymentToggleToSupabase==='function') syncPaymentToggleToSupabase(student.id, m, markPaid, markPaid?paymentMethod:null);
     });
+    if(markPaid && chargedPricing){
+      const newDates=[]; for(let i=0;i<count;i++){ const d=addDaysToDateString(firstNewDate, i*7); if(d) newDates.push(d); }
+      recordChargedAmount(student.id, Array.from(coveredMonths), newDates, chargedPricing.amount);
+    }
     // Custom Pay is a one-time override for THIS renewal only — clear it
     // now that the renewal has actually been processed, so it doesn't
     // silently carry forward and apply to a future cycle too.
@@ -18514,10 +18667,10 @@ function confirmRenewal(id){
   // on the Ledger's default "this week" view, and can look identical to
   // nothing having been scheduled at all. Only jumps if there's actually
   // something new to jump to.
-  if(created){
-    if(typeof getFridayWeekStart==='function'){
-      ledgerWeekAnchor=getFridayWeekStart(firstNewDate);
-    }
+  // Mario: renewing must NOT move the month selector or the ledger week —
+  // the view stays where he was working. (It used to jump to wherever the
+  // new lessons landed.)
+  if(false){
     const newLessonMonth=String(firstNewDate||'').slice(0,7);
     const monthSel=document.getElementById('global-month');
     if(monthSel && newLessonMonth && monthSel.value!==newLessonMonth && [...monthSel.options].some(o=>o.value===newLessonMonth)){
@@ -18694,6 +18847,19 @@ function confirmRenewalCustomDates(id, student){
     if(typeof syncLessonPaidFlags==='function') syncLessonPaidFlags(student.id, m, markPaid);
     if(typeof syncPaymentToggleToSupabase==='function') syncPaymentToggleToSupabase(student.id, m, markPaid, markPaid?paymentMethod:null);
   });
+  // Record what was actually CHARGED (deductions, discount, Custom Pay
+  // included) — the snapshot re-derived the full plan price instead.
+  if(markPaid) recordChargedAmount(student.id, Array.from(coveredMonths), dates, pricing.amount);
+  // The teacher-absence credit was deducted from this renewal's price, so
+  // it's settled — exactly as a regular renewal does. Without this the
+  // same credit stayed open and was deducted again next time.
+  if(typeof teacherAbsenceDeductions==='function' && !(student.customPay!=null && student.customPay!=='')){
+    teacherAbsenceDeductions(student).forEach(l=>{
+      l.makeupResolved=true;
+      if(window.syncLessonUpdateToSupabase) syncLessonUpdateToSupabase(l);
+    });
+  }
+  if(student.customPay!=null) student.customPay=null;
   if(student.customPay!=null) student.customPay=null;
 
   save();
@@ -19193,6 +19359,18 @@ function isRoomFull(dayName, time, excludeStudentId){
 // who starts in three weeks was told about clashes happening this week —
 // "Teacher Busy — with Taleen" for a Taleen lesson that doesn't exist on
 // the chosen start date. The answer was about the wrong Saturday.
+// Why a slot can't be booked, worded honestly. A renewal HOLD is not a
+// lesson ("Held for …"), and a closed day is not a person — both used to
+// read "Teacher Busy — with …", which is how a slot that is free on the
+// Calendar looked taken in Add Student.
+function slotBusySuffix(slotInfo){
+  const sl=slotInfo||{};
+  if(sl.closedToNew) return ' (closed to new students)';
+  if(!sl.busyWith) return '';
+  if(sl.heldForRenewal) return ' (Held for '+sl.busyWith+' — awaiting renewal)';
+  return ' (Teacher Busy — with '+sl.busyWith+')';
+}
+
 function getAvailableSlotsWithCapacity(teacherName, dayName, excludeStudentId, forDoubleSession, forDate){
   // Use the requested date when it genuinely falls on this weekday;
   // otherwise fall back to the next occurrence, so a mismatched pair
@@ -19289,12 +19467,13 @@ window.updateStudentTimeSlotOptions=function(){
   }
   const slots=getAvailableSlotsWithCapacity(teacherName, dayName, null, isGroupPlan(plan), startDate);
   if(!slots.length){ timeSel.innerHTML='<option value="">No available slots for this day</option><option value="__custom__">✏️ Custom time...</option>'; return; }
-  timeSel.innerHTML=slots.map(({time,full,shiftedFrom,actualStart,shortWindow,busyWith})=>{
+  timeSel.innerHTML=slots.map((slotInfo)=>{ const {time,full,shiftedFrom,actualStart,shortWindow,busyWith}=slotInfo;
     const bookValue=full ? '' : (actualStart||time);
     let label=formatTime12h(actualStart||time);
     if(actualStart && actualStart!==time) label+=' (room frees then)';
     else if(shortWindow) label+=' (45 min)';
-    if(busyWith) label+=' (Teacher Busy — with '+busyWith+')';
+    const busySuffix=slotBusySuffix(slotInfo);
+    if(busySuffix) label+=busySuffix;
     else if(full) label+=' (Rooms Full)';
     return `<option value="${bookValue}" ${full?'disabled':''}>${escapeHtml(label)}</option>`;
   }).join('') + '<option value="__custom__">✏️ Custom time...</option>';
@@ -19348,12 +19527,13 @@ window.onEditStudentDayChange=function(studentId){
   if(!timeSel) return;
   const slots=getAvailableSlotsWithCapacity(teacherName, dayName, studentId, isGroupPlan(plan));
   timeSel.innerHTML=slots.length
-    ? slots.map(({time,full,shiftedFrom,actualStart,shortWindow,busyWith})=>{
+    ? slots.map((slotInfo)=>{ const {time,full,shiftedFrom,actualStart,shortWindow,busyWith}=slotInfo;
         const bookValue=full ? '' : (actualStart||time);
         let label=formatTime12h(actualStart||time);
         if(actualStart && actualStart!==time) label+=' (room frees then)';
         else if(shortWindow) label+=' (45 min)';
-        if(busyWith) label+=' (Teacher Busy — with '+busyWith+')';
+        const busySuffix=slotBusySuffix(slotInfo);
+        if(busySuffix) label+=busySuffix;
         else if(full) label+=' (Rooms Full)';
         return `<option value="${bookValue}" ${full?'disabled':''}>${escapeHtml(label)}</option>`;
       }).join('')
