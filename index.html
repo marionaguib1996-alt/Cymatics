@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-315</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-318</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -2712,8 +2712,8 @@ function stampLastSync(label){
   setTimeout(()=>{ if(typeof renderStaleDeviceBanner==='function') renderStaleDeviceBanner(); }, 0);
   const el=document.getElementById('last-sync');
   if(el) el.textContent='Last Sync: '+new Date().toLocaleString()+(label?' ('+label+')':'');
-  // Persisted, not just displayed: the age of this device's copy is what
-  // decides whether it may write to the cloud at all.
+  // Persisted, not just displayed: when this device last synced (display only —
+  // the time-based write block that once used it was removed).
   db._lastCloudSyncAt = Date.now();
   try{ save(); }catch(_){}
 }
@@ -12185,6 +12185,48 @@ async function fetchAllRows(supabaseClient, table, columns, orderCol, ascending)
 async function _autoLoadFromCloudImpl(){
  // Reuse the already-initialized client — avoids multiple GoTrueClient instances
  const client = window.supabaseClientV1;
+  // Is anyone signed in? This load runs as the page opens — BEFORE the
+  // sign-in is restored or entered. Signed out, every write it makes goes
+  // out as an anonymous visitor and is refused (401 "row-level security"
+  // in Sync Issues), and on a rarely-used device those writes are this
+  // device's OLD copy trying to put itself back. So signed out, this load
+  // only READS; the load that runs right after signing in does the rest.
+  const autoLoadSignedIn = await (async()=>{
+    try{ const {data}=await client.auth.getSession(); return !!(data && data.session && data.session.access_token); }
+    catch(_){ return false; }
+  })();
+  // STALE-DEVICE RULE (Mario, 30 Sep 2026: "I want it back so we don't suffer").
+  // A device that hasn't synced for 3+ days (or never has) must not push
+  // its OLD copy back: anything it holds that the cloud doesn't is treated
+  // as out of date and the CLOUD wins — students, logs, waiting-list
+  // entries — and nothing is logged as "vanished". Anything created or
+  // changed on this device AFTER its last sync is genuine new work and is
+  // still sent. Normal edits are never blocked (the old rule blocked ALL
+  // writes, probably why it was removed). "Away" is decided ONCE when the
+  // page opens — a signed-out first load may stamp a fresh sync time before
+  // the signed-in load that actually applies this runs.
+  if(window.__cymAwayAtOpen===undefined){
+    const last=Number(db._lastCloudSyncAt||0);
+    window.__cymAwayAtOpen={away: !last || (Date.now()-last)>3*24*60*60*1000, lastSync:last};
+  }
+  const awayLastSync=window.__cymAwayAtOpen.lastSync;
+  const applyAwayRule=autoLoadSignedIn && window.__cymAwayAtOpen.away;
+  if(applyAwayRule) window.__cymAwayAtOpen.away=false;   // applied once, by the first signed-in load
+  const madeHereSinceSync=x=>{
+    if(!x) return false;
+    const t=Math.max(Number(x._localModifiedAt||0), (typeof x.id==='number' && x.id>1e12) ? x.id : 0, Date.parse(x.addedAt||'')||0);
+    return t>awayLastSync;
+  };
+  const staleLeftovers={students:0, logs:0, waiting:0};
+  const reportStale=()=>{
+    if(reportStale.done) return; reportStale.done=true;
+    setTimeout(()=>{
+      const names={students:['student','students'], logs:['log','logs'], waiting:['waiting-list entry','waiting-list entries']};
+      const parts=Object.keys(names).filter(k=>staleLeftovers[k]).map(k=>staleLeftovers[k]+' '+names[k][staleLeftovers[k]===1?0:1]);
+      if(parts.length && typeof showToast==='function') showToast('This device was out of date — updated to the cloud copy. Not re-sent: '+parts.join(', ')+'.');
+      console.warn('Stale-device rule: kept the cloud copy; not re-sent', staleLeftovers);
+    },0);
+  };
  if(!client){
    console.warn('Supabase not ready — skipping auto-load.');
    return;
@@ -12357,7 +12399,7 @@ async function _autoLoadFromCloudImpl(){
        if(wasEstablished && typeof logStudentDeletion==='function'){
          db.deletionLog=db.deletionLog||[];
          const alreadyLogged=db.deletionLog.some(e=>String(e.studentId)===String(ls.id) && e.reason.indexOf('vanished from cloud')===0);
-         if(!alreadyLogged) logStudentDeletion(ls, 'vanished from cloud (restored automatically from this device)');
+         if(!alreadyLogged && autoLoadSignedIn && !(applyAwayRule && !madeHereSinceSync(ls))) logStudentDeletion(ls, 'vanished from cloud (restored automatically from this device)');
        }
      });
      db.students=merged;
@@ -12374,7 +12416,7 @@ async function _autoLoadFromCloudImpl(){
            // and once the 60s guard expired the next download overwrote the
            // local fix and undid it. That is the reported loop: restore a
            // student, they come back as archived again on the next update.
-           if((s.id!=null || s.student_code) && typeof syncStudentUpdateToSupabase==='function'){ try{ syncStudentUpdateToSupabase(s); }catch(e){} }
+           if(autoLoadSignedIn && (s.id!=null || s.student_code) && typeof syncStudentUpdateToSupabase==='function'){ try{ syncStudentUpdateToSupabase(s); }catch(e){} }
          } else {
            delete s._localModifiedAt; // guard window passed; stop treating as dirty
          }
@@ -12396,7 +12438,16 @@ async function _autoLoadFromCloudImpl(){
      // uploads silently as before, and a large one stops and asks, because
      // guessing wrong in either direction is worse than a question.
      const STALE_DEVICE_THRESHOLD = 5;
-     if(pendingReupload.length){
+     if(applyAwayRule && pendingReupload.length){
+        const old=pendingReupload.filter(x=>!madeHereSinceSync(x));
+        if(old.length){
+          const drop=new Set(old);
+          for(let i=merged.length-1;i>=0;i--) if(drop.has(merged[i])) merged.splice(i,1);
+          for(let i=pendingReupload.length-1;i>=0;i--) if(drop.has(pendingReupload[i])) pendingReupload.splice(i,1);
+          staleLeftovers.students+=old.length; reportStale();
+        }
+      }
+      if(pendingReupload.length && autoLoadSignedIn){
        const doUpload=()=>{
          pendingReupload.forEach(s=>{
            try{
@@ -12633,7 +12684,21 @@ async function _autoLoadFromCloudImpl(){
      });
      db.lessonLogs=merged;
      // Re-queue any preserved local logs for upload (fire-and-forget).
-     if(pendingReupload.length && typeof syncLessonLogToSupabase==='function'){
+     if(applyAwayRule && pendingReupload.length){
+       // (merged IS db.lessonLogs — same array — so edits here land there.)
+       const oldKeys=new Set(pendingReupload.filter(l=>!madeHereSinceSync(l)).map(l=>keyOf(l)));
+       if(oldKeys.size){
+         for(let i=merged.length-1;i>=0;i--){
+           const k=keyOf(merged[i]);
+           if(!oldKeys.has(k)) continue;
+           const c=cloudByKey.get(k);
+           if(c) merged[i]=c; else merged.splice(i,1);
+         }
+         for(let i=pendingReupload.length-1;i>=0;i--) if(oldKeys.has(keyOf(pendingReupload[i]))) pendingReupload.splice(i,1);
+         staleLeftovers.logs+=oldKeys.size; reportStale();
+       }
+     }
+     if(pendingReupload.length && autoLoadSignedIn && typeof syncLessonLogToSupabase==='function'){
        pendingReupload.forEach(l=>{ try{ syncLessonLogToSupabase(l); }catch(e){} });
      }
    }
@@ -12827,6 +12892,7 @@ async function _autoLoadFromCloudImpl(){
          const k=String(e.id);
          if(seen.has(k)) return;            // already represented by an active cloud row
          if(tombstonedKeys.has(k)) return;  // deleted elsewhere — drop it, never re-upload
+         if(applyAwayRule && !madeHereSinceSync(e)){ staleLeftovers.waiting++; reportStale(); return; }   // old copy on an away device
          merged.push(e);                    // genuinely new local entry — keep locally
          // Only an ADMIN uploads it. waiting_list is admin-only server-side,
          // so a teacher's device was firing a write it could never complete
@@ -12836,7 +12902,7 @@ async function _autoLoadFromCloudImpl(){
          // The entry is still kept locally, so nothing the teacher can see
          // disappears; it simply isn't pushed by someone without the right
          // to push it.
-         if(session.role==='admin' && typeof syncWaitingEntryToSupabase==='function'){
+         if(autoLoadSignedIn && session.role==='admin' && typeof syncWaitingEntryToSupabase==='function'){
            try{ syncWaitingEntryToSupabase(e); }catch(_){}
          }
        });
@@ -16745,6 +16811,7 @@ function saveTeacherLessonLogNow(logId, lessonIdHint, studentNameHint){
   }
   log.performanceRating=Number(document.getElementById('tw-rating')?.value||0)||null;
   log.topicCovered=document.getElementById('tw-topic')?.value||'';
+  log._localModifiedAt=Date.now();   // "changed here" — see the stale-device rule
   log.teacherNotes=document.getElementById('tw-notes')?.value||'';
   log.lessonNotes=log.teacherNotes;
   log.nextLessonGoal=document.getElementById('tw-goal')?.value||'';
@@ -16763,6 +16830,7 @@ function saveTeacherLessonLogNow(logId, lessonIdHint, studentNameHint){
   const prevHw=lastHwBox ? findPreviousHomeworkLog(log, lesson) : null;
   if(prevHw && !!prevHw.homeworkCompleted!==!!lastHwBox.checked){
     prevHw.homeworkCompleted=!!lastHwBox.checked;
+    prevHw._localModifiedAt=Date.now();
     prevHw.homeworkStatus=prevHw.homeworkCompleted ? 'Completed' : 'Assigned';
     normalizeLessonLog(prevHw, (db.lessons||[]).find(l=>l.id==prevHw.lessonId));
     if(typeof syncLessonLogToSupabase==='function') syncLessonLogToSupabase(prevHw);
@@ -19906,6 +19974,7 @@ function getEffectiveTeacherDaySlots(teacherName, dayName, excludeStudentId, tar
       time:t,
       occupiedBy:'not taking new students',
       closedToNew:true,
+      duration:SESSION_DURATION_MINUTES,   // the field every other slot uses — without it the photo got "NaN" end times
       durationMinutes:SESSION_DURATION_MINUTES
     }));
   }
@@ -24620,7 +24689,13 @@ function generateTeacherSchedulePhoto(teacherName, dayName, silent){
   // shifts every slot after it to its real available time, not a wasted
   // extra 45-minute block.
   let allSlotInfo=effectiveSlots.map(slot=>{
-    const slotEnd=addSlotMinutes(slot.time, slot.duration);
+    // Times compared as MINUTES, never as text. A slot without a duration
+    // (closed-to-new days) ended at "NaN:NaN", and as text "16:15" < "NaN:NaN"
+    // — so every such slot "contained" the next lesson of the day: Lara Saeed
+    // printed four times on Youssef Sherif's Friday photo.
+    const slotDur=Number(slot.duration||slot.durationMinutes)||SESSION_DURATION_MINUTES;
+    const slotEnd=addSlotMinutes(slot.time, slotDur);
+    const slotStartMin=timeToMinutes(slot.time), slotEndMin=slotStartMin+slotDur;
     const activeLessons=(db.lessons||[]).filter(l=>
       l.date===targetDate &&
       l.teacher===teacherName &&
@@ -24628,15 +24703,15 @@ function generateTeacherSchedulePhoto(teacherName, dayName, silent){
       l.status!=='absent_excused' && l.status!=='teacher_absent' && l.status!=='absent_paid'
     );
     // A lesson that STARTS inside this slot owns it.
-    const lesson=activeLessons.find(l=>l.time>=slot.time && l.time<slotEnd);
+    const lesson=activeLessons.find(l=>{ const m=timeToMinutes(l.time); return m>=slotStartMin && m<slotEndMin; });
     // Otherwise, a longer lesson that began in an EARLIER slot may still
     // be running through this one — the teacher is busy, so this slot
     // must not render as free. (A 60-minute group session at 6:00pm
     // covers the 6:15pm slot entirely.)
     const continuing = lesson ? null : activeLessons.find(l=>{
-      if(l.time>=slot.time) return false;
+      if(timeToMinutes(l.time)>=slotStartMin) return false;
       const endMin=timeToMinutes(l.time)+getLessonDurationMinutes(l);
-      return endMin>timeToMinutes(slot.time);
+      return endMin>slotStartMin;
     });
     const shown=lesson||continuing;
     const matchedStudent=shown ? (db.students||[]).find(s=>lessonBelongsToStudent(shown, s)) : null;
