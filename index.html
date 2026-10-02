@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-318</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-322</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -9951,6 +9951,13 @@ function previewMissingStudentRebuild(){
     </div>`;
 }
 
+// The next CYM number: one above the highest code on any student (archived
+// too), never below this device's old counter. See addStudent.
+function nextStudentCodeNumber(){
+  const usedNums=(db.students||[]).map(x=>parseInt(String(x.student_code||'').replace(/\D/g,''),10)).filter(n=>n>0);
+  return Math.max(usedNums.length ? Math.max(...usedNums) : 0, (db.nextStudentId||1)-1)+1;
+}
+
 function applyMissingStudentRebuild(){
   const groups=findMissingStudentRebuilds();
   if(!groups.length){ showToast('Nothing to rebuild.'); return; }
@@ -11577,7 +11584,12 @@ addStudent=function(){
    }
  }
 
- const nextId=(db.nextStudentId||1);
+ // Next code = one above the highest code on ANY student (archived too —
+ // codes are never reused), from the shared data rather than a counter
+ // kept on this device: two devices each counting for themselves handed
+ // out the same CYM number. The old counter stays a floor, so a number
+ // this device already used is never issued again.
+ const nextId=nextStudentCodeNumber();
  db.nextStudentId=nextId+1;
  db.students.push({
    id:Date.now(),
@@ -13186,6 +13198,14 @@ try{
      });
    }
    if(window.syncFailures.length>20) window.syncFailures.length=20;
+   // STEP 3 ("saved means saved"): a write the cloud REFUSED is never
+   // retried — it is simply not in the cloud. Count it so the sync badge
+   // can't say "Synced", and say so at once. (Network errors are queued
+   // and retried, so they show as "pending", not here.)
+   if(/^(POST|PATCH|PUT|DELETE)$/.test(String(method||'')) && !/^Network error/.test(String(detail||''))){
+     window.__notSavedCount=(window.__notSavedCount||0)+1;
+     if(typeof noteNotSaved==='function'){ try{ noteNotSaved(table, detail); }catch(_){} }
+   }
    if(typeof updateSyncFailureBadge==='function') updateSyncFailureBadge();
  };
 
@@ -13392,10 +13412,19 @@ function updateSyncHealthBadge(){
   let pending=0;
   try{ pending=(typeof window.getOutboxCount==='function') ? window.getOutboxCount() : 0; }catch(e){ pending=0; }
 
-  if(!online){
+  const notSaved=window.__notSavedCount||0, inFlight=window.__writesInFlight||0;
+  if(notSaved>0){
+    dot.style.background='#d9534f';
+    text.textContent='⚠ Not saved'+(notSaved>1?' ('+notSaved+')':'');
+    badge.title=notSaved+' change'+(notSaved===1?' was':'s were')+' REFUSED by the cloud and '+(notSaved===1?'is':'are')+' not saved — click to see what';
+  } else if(!online){
     dot.style.background='#8a8680';
     text.textContent='Offline';
-    badge.title='No connection — changes are saved locally and will upload when you\'re back online';
+    badge.title='No connection — changes wait on this device and are sent when you\'re back online. Other devices won\'t see them until then.';
+  } else if(inFlight>0){
+    dot.style.background='#d4a017';
+    text.textContent='Saving…';
+    badge.title='Sending your change to the cloud';
   } else if(pending>0){
     dot.style.background='#d4a017';
     text.textContent=pending+' pending';
@@ -13410,6 +13439,8 @@ function updateSyncHealthBadge(){
 // Clicking the badge forces an immediate flush of pending writes and a
 // fresh download, then refreshes the badge.
 function syncHealthClick(){
+  // Red "Not saved": show what was refused first — that's what needs action.
+  if((window.__notSavedCount||0)>0 && typeof showSyncFailurePanel==='function'){ showSyncFailurePanel(); return; }
   if(typeof window.flushOutbox==='function') Promise.resolve(window.flushOutbox()).then(()=>{
     if(typeof autoLoadFromCloud==='function') return autoLoadFromCloud();
   }).finally(updateSyncHealthBadge);
@@ -13426,6 +13457,7 @@ function syncHealthClick(){
   if(typeof announceWaitingMatchesOnce==='function') announceWaitingMatchesOnce();
 }
 
+ window.recordSyncFailure=recordSyncFailure;   // reachable from tests / other blocks
  const keepaliveFetch=async(...args)=>{
    const [url,options={}]=args;
    const isAuthRequest=String(url).includes('/auth/v1/');
@@ -13436,6 +13468,7 @@ function syncHealthClick(){
    // site — the path that caused the damage was precisely the one nobody
    // thought to guard. Reads still go through, since downloading is how a
    // device stops being stale.
+   if(isTableWrite){ window.__writesInFlight=(window.__writesInFlight||0)+1; try{ updateSyncHealthBadge(); }catch(_){} }
    try{
      const response=await fetch(url, {...options, keepalive:true});
      if(!isAuthRequest && response.status>=400 && response.status!==406){
@@ -13456,6 +13489,7 @@ function syncHealthClick(){
        if(!isBenignCodeProbe) recordSyncFailure(url, options, detail);
      } else if(!isAuthRequest && response.ok){
        if(isTableWrite && typeof window.stampLastSync==='function') window.stampLastSync('saved');
+       if(isTableWrite && typeof window.__noteOwnWrite==='function') window.__noteOwnWrite();
      }
      return response;
    }catch(err){
@@ -13466,6 +13500,8 @@ function syncHealthClick(){
      // the flusher can replay it once connectivity returns.
      if(isTableWrite) enqueueOutboxWrite(url, options);
      throw err;
+   } finally {
+     if(isTableWrite){ window.__writesInFlight=Math.max(0,(window.__writesInFlight||1)-1); try{ updateSyncHealthBadge(); }catch(_){} }
    }
  };
  // Creating the client is wrapped in a function that retries until the
@@ -13502,6 +13538,23 @@ function syncHealthClick(){
  }
 }catch(e){ console.warn('Supabase (V1) init failed:',e); }
 
+// Says, the moment it happens, that a change did NOT reach the cloud.
+// Admins only — a teacher's log save already reports its own outcome.
+const NOT_SAVED_LABELS={students:'a student',lessons:'a lesson',lesson_updates:'a lesson log',payments:'a payment',
+  payment_amounts:'a payment amount',teachers:'a teacher',teacher_paid:'a payroll record',teacher_absences:'a teacher absence',
+  expenses:'an expense',other_revenue:'other revenue',refunds:'a refund',waiting_list:'a waiting-list entry',
+  practice_sessions:'a practice session',deletion_log:'a deletion record',notes:'a note',resources:'a resource',
+  sales:'a sale',products:'a product',instruments:'an instrument',wishlists:'a wishlist',
+  reminders_sent:'a reminder record',renewals_dismissed:'a renewal dismissal'};
+function noteNotSaved(table, detail){
+  if(typeof updateSyncHealthBadge==='function'){ try{ updateSyncHealthBadge(); }catch(_){} }
+  if(!(typeof session!=='undefined' && session && session.role==='admin')) return;
+  const now=Date.now();
+  if(window.__lastNotSavedToastAt && now-window.__lastNotSavedToastAt<4000) return;
+  window.__lastNotSavedToastAt=now;
+  if(typeof showToast==='function') showToast('⚠ NOT saved to the cloud: '+(NOT_SAVED_LABELS[table]||table)+'. Tap the red "Not saved" badge for details.');
+}
+
 function updateSyncFailureBadge(){
   const badge=document.getElementById('sync-failure-badge');
   const countEl=document.getElementById('sync-failure-count');
@@ -13533,7 +13586,7 @@ function showSyncFailurePanel(){
       <tbody>${rows}</tbody>
     </table></div>` : '<p>No sync issues recorded this session.</p>'}
     <div style="text-align:right;margin-top:14px">
-      <button class="btn btn-danger" onclick="window.syncFailures=[];updateSyncFailureBadge();closeModal();">Clear</button>
+      <button class="btn btn-danger" onclick="window.syncFailures=[];window.__notSavedCount=0;updateSyncFailureBadge();if(typeof updateSyncHealthBadge==='function')updateSyncHealthBadge();closeModal();">Clear</button>
     </div>
   `);
 }
@@ -16867,7 +16920,9 @@ function saveTeacherLessonLogNow(logId, lessonIdHint, studentNameHint){
      // lesson was logged when nothing was recorded at all.
      const wroteSomething=(typeof lessonLogHasWriting==='function') && lessonLogHasWriting(log);
      showToast(!wroteSomething ? '⚠ Nothing written — nothing saved. Add a topic, note or rating.'
-       : err ? '⚠ Saved here, not in cloud — retrying. WhatsApp us: '+err
+       : err ? (/network|failed to fetch|load failed/i.test(String(err))
+           ? '⚠ No connection — kept on this phone and sent when you\'re back online.'
+           : '⚠ NOT saved to the cloud: '+err+' — WhatsApp us this message.')
        : 'Log saved ✓');
    });
 }
@@ -25396,6 +25451,10 @@ function renderRevenueTrendChart(){
     // all goes, and they are never shown a list to decide about.
     const isAdminSession=(typeof session!=='undefined' && session && session.role==='admin');
     const stillOld=isAdminSession ? readQ().filter(isOld) : [];
+    // A background refresh (back to the tab / every few minutes) never pops
+    // the review dialog — that's for when the page opens. It just leaves the
+    // banner up and does an ordinary load until the old changes are reviewed.
+    if(stillOld.length && window.__cfQuiet){ banner(readQ().length); return origLoad(); }
     if(stillOld.length){
       const described=[];
       for(const it of stillOld) described.push(await describe(it));
@@ -25506,7 +25565,96 @@ function renderRevenueTrendChart(){
   }
 
   // exposed for tests
-  window.__cloudFirst={splitByAge, parseTarget, diffFields, labelOf, describe, triageAndMaybeRefresh, refreshFromCloud};
+  // ── STEP 2: every device shows what the CLOUD has (Mario, 30 Sep 2026) ──
+  // The full cloud refresh above (send the queue, then replace this
+  // device's copy) used to run once per page open; a laptop left open all
+  // day then only merged, and drifted from what other devices showed. Now
+  // it also runs when you come BACK to the tab after a minute or more away,
+  // and every 10 minutes while the app is on screen. Never mid-edit: with a
+  // dialog open or someone typing, it waits for the next chance.
+  const REFRESH_EVERY_MS=10*60*1000, BACK_AFTER_MS=60*1000, MIN_GAP_MS=60*1000;
+  let hiddenAt=0, lastRefreshAt=Date.now();
+  function busyEditing(){
+    const m=document.getElementById('app-modal');
+    if(m && m.style.display==='flex') return true;
+    const a=document.activeElement;
+    return !!(a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName||''));
+  }
+  async function refreshNow(opts){
+    const gap=(opts && opts.minGap!=null) ? opts.minGap : MIN_GAP_MS;
+    const signedIn=(typeof session!=='undefined' && session && session.role);
+    if(!signedIn || window.__cloudFirstRunning || busyEditing()) return false;
+    if(Date.now()-lastRefreshAt < gap) return false;
+    if(typeof window.autoLoadFromCloud!=='function') return false;
+    lastRefreshAt=Date.now();
+    window.__cloudFirstDone=false; window.__cfQuiet=true;
+    try{ await window.autoLoadFromCloud(); } catch(_){} finally{ window.__cfQuiet=false; }
+    return true;
+  }
+  window.cloudRefreshNow=refreshNow;
+  window.__cloudRefreshTiming={REFRESH_EVERY_MS, BACK_AFTER_MS, MIN_GAP_MS, reset:()=>{ lastRefreshAt=0; hiddenAt=0; }};
+  if(typeof document!=='undefined' && document.addEventListener){
+    document.addEventListener('visibilitychange', ()=>{
+      if(document.visibilityState==='hidden'){ hiddenAt=Date.now(); return; }
+      if(hiddenAt && Date.now()-hiddenAt>=BACK_AFTER_MS) refreshNow();
+      hiddenAt=0;
+    });
+  }
+  if(typeof setInterval==='function'){
+    setInterval(()=>{ if(typeof document==='undefined' || document.visibilityState!=='hidden') refreshNow(); }, REFRESH_EVERY_MS);
+  }
+
+  // ── STEP 4: live updates (Mario, 1 Oct 2026) ─────────────────────────
+  // Supabase tells every signed-in device when a row changes. On such a
+  // change this device runs the SAME full refresh as step 2 (send the
+  // queue, then take the cloud's copy) a few seconds later — so another
+  // admin's or the phone's change shows up here without waiting.
+  // Our own saves echo back too; those are ignored for a few seconds.
+  // Never mid-edit: under an open dialog / while typing it retries shortly.
+  // Needs the tables switched on for Realtime in Supabase (one-off SQL);
+  // without that no events arrive and nothing else changes.
+  const LIVE_TABLES=['students','lessons','lesson_updates','payments','payment_amounts','teachers','teacher_paid',
+    'teacher_absences','waiting_list','expenses','other_revenue','refunds','practice_sessions','notes','sales',
+    'products','instruments','wishlists','reminders_sent','renewals_dismissed','resources','deletion_log'];
+  const liveTiming={debounce:3000, ownEchoMs:5000, retryMs:15000, minGap:10000};
+  window.__liveTiming=liveTiming;
+  let liveChannel=null, liveClient=null, liveTimer=null, lastOwnWriteAt=0;
+  window.__noteOwnWrite=()=>{ lastOwnWriteAt=Date.now(); };
+  function onLiveChange(){
+    if(Date.now()-lastOwnWriteAt < liveTiming.ownEchoMs) return;   // our own save coming back
+    window.__liveChanges=(window.__liveChanges||0)+1;
+    if(liveTimer) clearTimeout(liveTimer);
+    // Keep trying (cheaply) until the screen is free — a dialog can stay
+    // open for minutes; a single retry would leave the change unseen until
+    // the 10-minute refresh.
+    const attempt=async ()=>{
+      liveTimer=null;
+      const ran=await refreshNow({minGap:liveTiming.minGap});
+      if(!ran && !liveTimer) liveTimer=setTimeout(attempt, liveTiming.retryMs);
+    };
+    liveTimer=setTimeout(attempt, liveTiming.debounce);
+  }
+  window.__onLiveChange=onLiveChange;
+  window.__liveReset=()=>{ lastOwnWriteAt=0; if(liveTimer) clearTimeout(liveTimer); liveTimer=null; };   // tests: a clean slate
+  function ensureLive(){
+    const client=window.supabaseClientV1;
+    const signedIn=(typeof session!=='undefined' && session && session.role);
+    if(liveChannel && (!signedIn || client!==liveClient)){
+      try{ liveClient && liveClient.removeChannel && liveClient.removeChannel(liveChannel); }catch(_){}
+      liveChannel=null; liveClient=null; window.__liveStatus='off';
+    }
+    if(liveChannel || !signedIn || !client || typeof client.channel!=='function') return;
+    try{
+      let ch=client.channel('cymatics-live');
+      LIVE_TABLES.forEach(t=>{ ch=ch.on('postgres_changes', {event:'*', schema:'public', table:t}, onLiveChange); });
+      ch.subscribe(status=>{ window.__liveStatus=status; });
+      liveChannel=ch; liveClient=client;
+    }catch(e){ console.warn('Live updates unavailable:', e && e.message); }
+  }
+  window.__ensureLive=ensureLive;
+  if(typeof setInterval==='function') setInterval(ensureLive, 5000);
+
+  window.__cloudFirst={splitByAge, parseTarget, diffFields, labelOf, describe, triageAndMaybeRefresh, refreshFromCloud, refreshNow};
 })();
 </script>
 
