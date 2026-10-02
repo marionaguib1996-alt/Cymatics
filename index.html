@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-322</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-323</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -13222,6 +13222,9 @@ try{
  function saveOutbox(items){
    try{ localStorage.setItem(OUTBOX_KEY, JSON.stringify(items.slice(-500))); }catch(e){}
  }
+ // Which visit (page open) queued a change: an admin's changes from an
+ // EARLIER visit are never sent without a decision (see the review dialog).
+ window.__cymPageSid=window.__cymPageSid || (Date.now().toString(36)+Math.random().toString(36).slice(2,8));
  function enqueueOutboxWrite(url, options){
    // Only the method, url, and body are stored — NOT the auth header,
    // which is re-attached fresh at replay time so a token refresh in the
@@ -13232,7 +13235,8 @@ try{
      method:(options&&options.method)||'POST',
      body:(options&&typeof options.body==='string')?options.body:(options&&options.body?JSON.stringify(options.body):null),
      headers:sanitizeOutboxHeaders(options&&options.headers),
-     ts:Date.now()
+     ts:Date.now(),
+     sid:window.__cymPageSid
    });
    saveOutbox(items);
    if(typeof updateSyncFailureBadge==='function') updateSyncFailureBadge();
@@ -13296,8 +13300,13 @@ try{
      if(!items.length) return;
    }
 
-   const heldBack = (window.__cfBypass || !adminSession) ? [] :
-     items.filter(it=>!(it && it.ts && (Date.now()-it.ts)<=24*60*60*1000));
+   // Mario (2 Oct 2026): for an ADMIN, every change left unsent from an
+   // earlier visit — whatever its age — waits for a decision (Send /
+   // Discard / Later). Changes queued during THIS visit retry by themselves.
+   // Teachers' changes always go out automatically.
+   const heldBack = !adminSession ? [] :
+     items.filter(it=>!(it && it.sid && it.sid===window.__cymPageSid)
+       && !(window.__cfBypass && window.__cfSendOnly && typeof window.__cfSig==='function' && window.__cfSendOnly.has(window.__cfSig(it))));
    if(heldBack.length){
      items=items.filter(it=>heldBack.indexOf(it)===-1);
      if(!items.length) return;
@@ -25388,7 +25397,7 @@ function renderRevenueTrendChart(){
       pendingResolve=resolve;
       const rows=described.map((d,i)=>`
         <label style="display:flex;gap:12px;align-items:flex-start;padding:14px 12px;border:1px solid ${d.overwrite?'rgba(226,196,122,0.55)':'var(--border)'};border-radius:10px;margin-bottom:10px;cursor:pointer;min-height:56px;background:${d.overwrite?'rgba(226,196,122,0.07)':'transparent'}">
-          <input type="checkbox" class="cf-pick" data-i="${i}" style="width:22px;height:22px;flex:0 0 22px;margin-top:2px">
+          <select class="cf-choice" data-i="${i}" style="min-height:40px;font-size:14px;flex:0 0 auto"><option value="later" selected>Later</option><option value="send">Send</option><option value="discard">Discard</option></select>
           <span style="flex:1;min-width:0">
             <span style="display:block;font-size:15px;font-weight:700;line-height:1.35">${escapeHtml(d.action)} · ${escapeHtml(d.kind)}</span>
             <span style="display:block;font-size:14px;line-height:1.35;word-break:break-word">${escapeHtml(d.label)}</span>
@@ -25401,20 +25410,20 @@ function renderRevenueTrendChart(){
         </label>`).join('');
       openModal('Changes that never reached the cloud', `
         <div style="font-size:14px;line-height:1.45;margin-bottom:12px">
-          This device has <b>${described.length}</b> change${described.length===1?'':'s'} older than 24 hours that never reached the cloud.
-          Nothing is sent unless you tick it. Anything left unticked is discarded.
+          This device has <b>${described.length}</b> change${described.length===1?'':'s'} from an earlier visit that never reached the cloud.
+          For each: <b>Send</b> it, <b>Discard</b> it, or decide <b>Later</b> (asked again next time you open the app). Nothing is sent unless you choose Send.
         </div>
-        <button type="button" class="btn" style="width:100%;min-height:44px;margin-bottom:12px" onclick="document.querySelectorAll('.cf-pick').forEach(c=>c.checked=!Array.from(document.querySelectorAll('.cf-pick')).every(x=>x.checked))">Select / clear all</button>
+        <div style="display:flex;gap:8px;margin-bottom:12px"><span style="align-self:center;font-size:13px;color:var(--text-muted)">All:</span><button type="button" class="btn" style="flex:1;min-height:44px" onclick="document.querySelectorAll('.cf-choice').forEach(c=>c.value='send')">Send</button><button type="button" class="btn" style="flex:1;min-height:44px" onclick="document.querySelectorAll('.cf-choice').forEach(c=>c.value='discard')">Discard</button><button type="button" class="btn" style="flex:1;min-height:44px" onclick="document.querySelectorAll('.cf-choice').forEach(c=>c.value='later')">Later</button></div>
         <div style="max-height:52vh;overflow-y:auto;-webkit-overflow-scrolling:touch">${rows}</div>
         <div style="display:flex;flex-direction:column;gap:10px;margin-top:14px">
-          <button type="button" class="btn btn-gold" style="width:100%;min-height:48px;font-size:15px" onclick="window.__cfDecide('send')">Send ticked · discard the rest</button>
-          <button type="button" class="btn" style="width:100%;min-height:44px" onclick="window.__cfDecide('later')">Decide later (keep them, don't refresh yet)</button>
+          <button type="button" class="btn btn-gold" style="width:100%;min-height:48px;font-size:15px" onclick="window.__cfDecide('apply')">Apply</button>
+          <button type="button" class="btn" style="width:100%;min-height:44px" onclick="window.__cfDecide('later')">Decide later for all (nothing sent, nothing lost)</button>
         </div>`);
       window.__cfDecide=(choice)=>{
-        const picked=Array.from(document.querySelectorAll('.cf-pick')).filter(c=>c.checked).map(c=>Number(c.dataset.i));
+        const decisions=Array.from(document.querySelectorAll('.cf-choice')).map(c=>({i:Number(c.dataset.i), d:c.value}));
         const r=pendingResolve; pendingResolve=null;
         if(origClose) origClose();
-        if(r) r({choice, picked});
+        if(r) r({choice, decisions});
       };
     });
   }
@@ -25450,7 +25459,8 @@ function renderRevenueTrendChart(){
     // queue is their own lesson logs, so there is nothing to weigh up: it
     // all goes, and they are never shown a list to decide about.
     const isAdminSession=(typeof session!=='undefined' && session && session.role==='admin');
-    const stillOld=isAdminSession ? readQ().filter(isOld) : [];
+    const fromEarlierVisit=it=>!(it && it.sid && it.sid===window.__cymPageSid);
+    const stillOld=isAdminSession ? readQ().filter(fromEarlierVisit) : [];
     // A background refresh (back to the tab / every few minutes) never pops
     // the review dialog — that's for when the page opens. It just leaves the
     // banner up and does an ordinary load until the old changes are reviewed.
@@ -25459,16 +25469,16 @@ function renderRevenueTrendChart(){
       const described=[];
       for(const it of stillOld) described.push(await describe(it));
       const res=await reviewOld(described);
-      if(res.choice==='send'){
-        const picked=new Set((res.picked||[]).map(i=>sig(described[i].item)));
-        const reviewed=new Set(stillOld.map(sig));
+      if(res.choice==='apply'){
+        const send=new Set(), discard=new Set();
+        (res.decisions||[]).forEach(({i,d})=>{ const key=sig(described[i].item); if(d==='send') send.add(key); else if(d==='discard') discard.add(key); });
         await waitIdle();
         // Synchronous from here to the flush starting — nothing can interleave.
-        writeQ(readQ().filter(it=>!reviewed.has(sig(it)) || picked.has(sig(it))));   // unticked = discarded
-        if(picked.size && typeof window.flushOutbox==='function'){
-          window.__cfBypass=true;                     // ticked by a person — let them through
+        writeQ(readQ().filter(it=>!discard.has(sig(it))));   // Discard = gone; Later = stays held
+        if(send.size && typeof window.flushOutbox==='function'){
+          window.__cfSig=sig; window.__cfSendOnly=send; window.__cfBypass=true;   // only what a person chose to Send
           const p=window.flushOutbox();
-          try{ await p; }catch(_){} finally{ window.__cfBypass=false; }
+          try{ await p; }catch(_){} finally{ window.__cfBypass=false; window.__cfSendOnly=null; }
         }
       }
       // "decide later": the queue is left exactly as it is
