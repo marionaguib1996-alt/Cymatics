@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-323</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-325</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -4201,6 +4201,37 @@ function getStudentHealthFlags(student){
   return {level: risk?'risk':'watch', reasons};
 }
 
+// What a student's course is worth for a month: the amount RECORDED when it
+// was paid (deductions, discounts, custom price included) — else the plan
+// price. Revenue already counts the recorded amount; the Students list now
+// shows the same number.
+function studentAmountForMonth(st, month){
+  const key=st.id+'_'+month;
+  const snap=(db.paymentAmounts||{})[key];
+  if((db.payments||{})[key] && snap!=null && snap!=='' && !Number.isNaN(Number(snap))) return Number(snap);
+  return getStudentPlanAmount(st);
+}
+
+// Correct the amount actually paid for the month on screen (e.g. a payment
+// recorded at full price before deductions were saved with it).
+function editPaidAmount(studentId){
+  const st=(db.students||[]).find(x=>String(x.id)===String(studentId));
+  if(!st) return;
+  const month=currentMonth(), key=st.id+'_'+month;
+  if(!(db.payments||{})[key]){ showToast('Mark this month as paid first.'); return; }
+  const current=studentAmountForMonth(st, month);
+  const raw=prompt('Amount actually paid by '+(st.name||'this student')+' for '+month+' (EGP):', String(current));
+  if(raw===null) return;
+  const n=Math.round(Number(String(raw).replace(/[^0-9.]/g,'')));
+  if(!(n>=0) || String(raw).trim()===''){ alert('Please enter an amount in EGP.'); return; }
+  db.paymentAmounts=db.paymentAmounts||{}; db.paymentStudentNames=db.paymentStudentNames||{};
+  db.paymentAmounts[key]=n; db.paymentStudentNames[key]=st.name||'';
+  save();
+  if(typeof syncPaymentAmountToSupabase==='function'){ try{ syncPaymentAmountToSupabase(key, n, st.name||''); }catch(_){} }
+  if(typeof refresh==='function') refresh(); else renderStudents();
+  showToast('Recorded '+egp(n)+' paid by '+(st.name||'student')+' for '+month+'.');
+}
+
 function renderStudents(){
   const tb=document.getElementById('students-tbody');
   const month=currentMonth();
@@ -4289,8 +4320,19 @@ function renderStudents(){
     // per-course slice. Per-course amounts stay visible because that's
     // what each course is individually worth (and what still applies if
     // one course is cancelled).
-    const ownAmount=getStudentPlanAmount(s);
+    // Mario (2 Oct 2026): a PAID month shows what was actually paid (the
+    // amount recorded at payment — deductions included), not the plan price.
+    // Ghalia & Ghazal Wafeek showed 2,000 each when they paid 1,500 each.
+    const ownAmount=studentAmountForMonth(s, month);
+    const planAmount=getStudentPlanAmount(s);
+    const paidThisMonth=!!(db.payments||{})[s.id+'_'+month];
     let amt=egp(ownAmount);
+    if(paidThisMonth && ownAmount<planAmount){
+      amt+=`<div style="font-size:11px;color:var(--text-muted);font-weight:400;margin-top:2px" title="Plan price, and what was deducted (e.g. sessions not made up)">plan ${egp(planAmount)} · ${egp(planAmount-ownAmount)} deducted</div>`;
+    }
+    if(paidThisMonth){
+      amt+=`<button type="button" class="btn btn-sm" style="margin-top:4px;padding:2px 8px;font-size:11px" title="Correct the amount actually paid this month" onclick="editPaidAmount('${jsString(String(s.id))}')">✎ amount</button>`;
+    }
     // Shown as an added line rather than merged into the figure above, so
     // the number always explains itself: "2,000 + 500 extra", never a
     // silently different 2,500.
@@ -4299,7 +4341,7 @@ function renderStudents(){
       amt+=`<div style="font-size:11px;color:var(--gold);font-weight:400;margin-top:2px" title="${escapeAttr(extras.count+' extra session'+(extras.count===1?'':'s')+' this month'+(extras.unpaid>0?' — '+extras.unpaid+' EGP still unpaid':' — all paid'))}">+ ${egp(extras.total)} extra${extras.unpaid>0?' <span style="color:#e06c6c">('+egp(extras.unpaid)+' unpaid)</span>':''}</div>`;
     }
     if(linkedCourses.length){
-      const combined=[s,...linkedCourses].reduce((sum,c)=>sum+getStudentPlanAmount(c),0);
+      const combined=[s,...linkedCourses].reduce((sum,c)=>sum+studentAmountForMonth(c, month),0);
       amt=egp(ownAmount)+`<div style="font-size:11px;color:var(--text-muted);font-weight:400;margin-top:2px" title="Combined across all ${linkedCourses.length+1} of this person's courses — what they pay in one transfer">of ${egp(combined)} total</div>`;
     }
     // Spell out WHICH course this row is, rather than a bare "+1" — two
@@ -5421,10 +5463,16 @@ function renderOverview(){
     collected += getStudentPlanAmount(s);
   });
   const teacherMonth=(db.teacherProfiles||[]).filter(p=>(p.status||'active')!=='archived');
-  const totalTeacher=teacherMonth.reduce((a,t)=>{
-      const eligible=db.lessons.filter(l=>isLessonInPayrollPeriod(l, month) && (l.teacher||'').toLowerCase()===(t.name||'').toLowerCase() && isPayrollEligibleLesson(l));
-      return a + calculatePayrollAmount(eligible, t.rate, t);
-    },0);
+  // Mario (2 Oct 2026): profit takes the FULL month's expected teacher
+  // payroll — lessons taught so far PLUS lessons still scheduled this month —
+  // not just what's been taught yet (which made early-month profit look far
+  // too high). It adjusts by itself as lessons change: a make-up moved to
+  // another month, a teacher absence, an excused absence, a trial added.
+  // What teachers are OWED (Payroll, pendingTeacher) stays "taught so far".
+  const payLessonsOf=t=>db.lessons.filter(l=>isLessonInPayrollPeriod(l, month) && (l.teacher||'').toLowerCase()===(t.name||'').toLowerCase() && isPayrollEligibleLesson(l));
+  const totalTeacherTaught=teacherMonth.reduce((a,t)=>a+calculatePayrollAmount(payLessonsOf(t), t.rate, t),0);
+  const totalTeacher=teacherMonth.reduce((a,t)=>a+calculateExpectedPayrollAmount(payLessonsOf(t), t.rate, t),0);
+  const teacherStillScheduled=Math.max(0, totalTeacher-totalTeacherTaught);
   const pendingTeacher=teacherMonth.filter(t=>!db.payrollPaid[t.name+'_'+month]).reduce((a,t)=>{
       const eligible=db.lessons.filter(l=>isLessonInPayrollPeriod(l, month) && (l.teacher||'').toLowerCase()===(t.name||'').toLowerCase() && isPayrollEligibleLesson(l));
       return a + calculatePayrollAmount(eligible, t.rate, t);
@@ -5476,7 +5524,8 @@ function renderOverview(){
   monthExp.forEach(e=>{cats[e.cat]=(cats[e.cat]||0)+e.amount;});
   const catRows=Object.entries(cats).map(([k,v])=>`<div class="summary-row"><span class="s-label">${k}</span><span class="s-val">${egp(v)}</span></div>`).join('');
   document.getElementById('expense-summary').innerHTML=`
-    <div class="summary-row"><span class="s-label">Teacher payouts (total)</span><span class="s-val red">${egp(totalTeacher)}</span></div>
+    <div class="summary-row" title="The whole month's teacher payroll: lessons taught so far plus lessons still scheduled this month. Changes by itself as lessons move, are cancelled or are added."><span class="s-label">Teacher payroll — full month (expected)</span><span class="s-val red">${egp(totalTeacher)}</span></div>
+    <div class="summary-row" style="opacity:.8"><span class="s-label">&nbsp;&nbsp;taught so far · still scheduled</span><span class="s-val">${egp(totalTeacherTaught)} · ${egp(teacherStillScheduled)}</span></div>
     ${catRows}
     <div class="summary-row"><span class="s-label">Pending teacher payout</span><span class="s-val amber">${egp(pendingTeacher)}</span></div>
     <div class="summary-row total"><span class="s-label">Total pending liabilities</span><span class="s-val red">${egp(totalLiabilities)}</span></div>
@@ -10996,6 +11045,8 @@ async function pushAllDataToCloud(alreadyConfirmed){
       status:s.status||'active', created_at:s.created_at||new Date().toISOString(),
       skill_level:s.skillLevel||'', current_goal:s.currentGoal||'', milestones:s.milestones||[],
       linked_person_id:s.linkedPersonId?String(s.linkedPersonId):null,
+      custom_pay:(s.customPay!=null && s.customPay!=='')?Number(s.customPay):null,
+      bundle_start_date:s.bundleStartDate||null, bundle_deadline:s.bundleDeadline||null,
       discount_percent:(s.discountPercent!=null && s.discountPercent!=='')?Number(s.discountPercent):null
     };
     const matchCol=s.public_id?'public_id':(s.student_code?'student_code':null);
@@ -11026,6 +11077,7 @@ async function pushAllDataToCloud(alreadyConfirmed){
       makeup_for_lesson_id:l.makeupForLessonId||null, is_double_session:l.isDoubleSession||false,
       archived_with_student:l.archivedWithStudent||false, unpaid:l.unpaid||false,
       custom_payroll_amount:(l.customPayrollAmount!=null && l.customPayrollAmount!=='')?Number(l.customPayrollAmount):null,
+      notes_show_to_teacher: l.notesShowToTeacher==null ? null : !!l.notesShowToTeacher, makeup_credits_due: l.makeupCreditsDue!=null ? Number(l.makeupCreditsDue) : null,
       plan_notes:l.planNotes||'',
       makeup_expired_unused:l.makeupExpiredUnused||false,
       is_extended_duration:l.isExtendedDuration||false,
@@ -12028,6 +12080,13 @@ function calculatePayrollAmount(lessons, rate, profile){
 // retroactively disappear just because the student was archived
 // afterward. Only a lesson that was directly archived/deleted on its own
 // (a genuine correction) is excluded.
+// The full month's EXPECTED payroll: lessons already paid-for (attended /
+// absent-paid) plus lessons still SCHEDULED, priced exactly the same way.
+// Excused absences, teacher absences and archived lessons are not paid.
+function calculateExpectedPayrollAmount(lessons, rate, profile){
+  return calculatePayrollAmount((lessons||[]).map(l=>l && l.status==='scheduled' ? Object.assign({}, l, {status:'attended'}) : l), rate, profile);
+}
+
 function isPayrollEligibleLesson(l){
   return (l.status_record||'active')!=='archived' || !!l.archivedWithStudent;
 }
@@ -12289,6 +12348,9 @@ async function _autoLoadFromCloudImpl(){
        currentGoal: s.current_goal||'',
        milestones: Array.isArray(s.milestones) ? s.milestones : [],
        linkedPersonId: s.linked_person_id||'',
+       customPay: (s.custom_pay!=null) ? s.custom_pay : null,
+       bundleStartDate: s.bundle_start_date || undefined,
+       bundleDeadline: s.bundle_deadline || undefined,
        discountPercent: (s.discount_percent!=null) ? s.discount_percent : null,
        frozen: !!s.frozen,
        // Read the paused-lesson count BACK from the cloud. Without this the
@@ -12619,7 +12681,8 @@ async function _autoLoadFromCloudImpl(){
        homeworkCompleted: String(row.homework_status||'').toLowerCase()==='completed',
        lessonNotes: row.notes||'',
        nextLessonFocus: row.next_lesson_goal||'',
-       homeworkDueDate: row.homework_due_date||''
+       homeworkDueDate: row.homework_due_date||'',
+       homeworkAssignedDate: row.homework_assigned_date||''
      }));
      const localLogs=db.lessonLogs||[];
      // A cloud log's lesson_id is frozen at the moment it was uploaded,
@@ -12767,6 +12830,7 @@ async function _autoLoadFromCloudImpl(){
        isDoubleSession: !!l.is_double_session,
        unpaid: !!l.unpaid,
        customPayrollAmount: (l.custom_payroll_amount!=null) ? l.custom_payroll_amount : null,
+       notesShowToTeacher: (l.notes_show_to_teacher!=null) ? !!l.notes_show_to_teacher : undefined, makeupCreditsDue: (l.makeup_credits_due!=null) ? l.makeup_credits_due : undefined,
        planNotes: l.plan_notes||'',
        makeupExpiredUnused: !!l.makeup_expired_unused,
        isExtendedDuration: !!l.is_extended_duration,
@@ -13479,7 +13543,22 @@ function syncHealthClick(){
    // device stops being stale.
    if(isTableWrite){ window.__writesInFlight=(window.__writesInFlight||0)+1; try{ updateSyncHealthBadge(); }catch(_){} }
    try{
-     const response=await fetch(url, {...options, keepalive:true});
+     let response=await fetch(url, {...options, keepalive:true});
+     // If the cloud says a column doesn't exist yet (new field, SQL not run),
+     // retry WITHOUT that one field so the rest of the change still saves,
+     // and note it. Without this one missing column refused the whole save.
+     for(let tries=0, sendOpts=options; isTableWrite && response.status===400 && tries<6; tries++){
+       let missing=null;
+       try{ const b=await response.clone().json(); const m=/Could not find the '([A-Za-z0-9_]+)' column/.exec(String((b&&(b.message||b.details))||'')); missing=m&&m[1]; }catch(_){}
+       if(!missing || typeof sendOpts.body!=='string') break;
+       let parsed; try{ parsed=JSON.parse(sendOpts.body); }catch(_){ break; }
+       const strip=o=>{ if(o && typeof o==='object') delete o[missing]; };
+       Array.isArray(parsed) ? parsed.forEach(strip) : strip(parsed);
+       sendOpts={...sendOpts, body:JSON.stringify(parsed)};
+       (window.__missingColumns=window.__missingColumns||{})[missing]=true;
+       console.warn('Cloud column "'+missing+'" is missing — saved without it. Run the latest SQL.');
+       response=await fetch(url, {...sendOpts, keepalive:true});
+     }
      if(!isAuthRequest && response.status>=400 && response.status!==406){
        let detail='Error '+response.status;
        try{
@@ -13513,6 +13592,7 @@ function syncHealthClick(){
      if(isTableWrite){ window.__writesInFlight=Math.max(0,(window.__writesInFlight||1)-1); try{ updateSyncHealthBadge(); }catch(_){} }
    }
  };
+ window.__keepaliveFetch=keepaliveFetch;   // tests
  // Creating the client is wrapped in a function that retries until the
  // CDN-loaded Supabase SDK is actually present. Previously this ran once,
  // inline, the moment this script was parsed — fine when opening the file
@@ -13679,6 +13759,8 @@ async function _addStudentToSupabaseImpl(student){
       current_goal: student.currentGoal || '',
       milestones: student.milestones || [],
       linked_person_id: student.linkedPersonId ? String(student.linkedPersonId) : null,
+      custom_pay: (student.customPay!=null && student.customPay!=='') ? Number(student.customPay) : null,
+      bundle_start_date: student.bundleStartDate||null, bundle_deadline: student.bundleDeadline||null,
       discount_percent: (student.discountPercent!=null && student.discountPercent!=='') ? Number(student.discountPercent) : null,
       frozen: !!student.frozen,
       // The COUNT of sessions paused by the freeze, and which of them were
@@ -13915,6 +13997,8 @@ async function syncStudentUpdateToSupabase(student){
       current_goal: student.currentGoal || '',
       milestones: student.milestones || [],
       linked_person_id: student.linkedPersonId ? String(student.linkedPersonId) : null,
+      custom_pay: (student.customPay!=null && student.customPay!=='') ? Number(student.customPay) : null,
+      bundle_start_date: student.bundleStartDate||null, bundle_deadline: student.bundleDeadline||null,
       discount_percent: (student.discountPercent!=null && student.discountPercent!=='') ? Number(student.discountPercent) : null,
       frozen: !!student.frozen,
       // The COUNT of sessions paused by the freeze, and which of them were
@@ -14327,6 +14411,7 @@ async function syncLessonToSupabase(lesson){
      is_double_session: lesson.isDoubleSession||false,
      unpaid: lesson.unpaid||false,
      custom_payroll_amount: (lesson.customPayrollAmount!=null && lesson.customPayrollAmount!=='') ? Number(lesson.customPayrollAmount) : null,
+     notes_show_to_teacher: lesson.notesShowToTeacher==null ? null : !!lesson.notesShowToTeacher, makeup_credits_due: lesson.makeupCreditsDue!=null ? Number(lesson.makeupCreditsDue) : null,
      plan_notes: lesson.planNotes||'',
      makeup_expired_unused: lesson.makeupExpiredUnused||false,
      is_extended_duration: lesson.isExtendedDuration||false,
@@ -14447,6 +14532,7 @@ async function syncLessonToSupabase(lesson){
         isDoubleSession: !!l.is_double_session,
         unpaid: !!l.unpaid,
         customPayrollAmount: (l.custom_payroll_amount!=null) ? l.custom_payroll_amount : null,
+        notesShowToTeacher: (l.notes_show_to_teacher!=null) ? !!l.notes_show_to_teacher : undefined, makeupCreditsDue: (l.makeup_credits_due!=null) ? l.makeup_credits_due : undefined,
         planNotes: l.plan_notes||'',
         makeupExpiredUnused: !!l.makeup_expired_unused,
         isExtendedDuration: !!l.is_extended_duration,
@@ -14529,6 +14615,7 @@ async function syncLessonUpdateToSupabase(lesson){
         is_double_session: lesson.isDoubleSession||false,
         unpaid: lesson.unpaid||false,
         custom_payroll_amount: (lesson.customPayrollAmount!=null && lesson.customPayrollAmount!=='') ? Number(lesson.customPayrollAmount) : null,
+        notes_show_to_teacher: lesson.notesShowToTeacher==null ? null : !!lesson.notesShowToTeacher, makeup_credits_due: lesson.makeupCreditsDue!=null ? Number(lesson.makeupCreditsDue) : null,
         plan_notes: lesson.planNotes||'',
         makeup_expired_unused: lesson.makeupExpiredUnused||false,
         is_extended_duration: lesson.isExtendedDuration||false,
@@ -14995,7 +15082,8 @@ function restoreOtherRevenue(id){
  renderOverview = function(){
    oldRenderOverview();
 
-   const totalStudents=countUniquePeople(db.students||[]);
+   // Mario (2 Oct 2026): archived students are NOT part of the total.
+   const totalStudents=countUniquePeople((db.students||[]).filter(s=>(s.status||'active')!=='archived'));
    // Active EXCLUDES trials, matching how the Students tab has always
    // counted. Including them here meant the two tabs quietly disagreed by
    // however many trials were running — the same word, "Students",
@@ -15021,7 +15109,7 @@ function restoreOtherRevenue(id){
    if(!el) return;
 
    el.innerHTML=`
-   <div class="metric" title="Everyone on record, including frozen and archived. Counted per person, so two courses count once."><div class="metric-label">Total Students</div><div class="metric-value">${totalStudents}</div></div>
+   <div class="metric" title="Everyone currently with us — active, trial and frozen; archived students are not counted. Counted per person, so two courses count once."><div class="metric-label">Total Students</div><div class="metric-value">${totalStudents}</div></div>
    <div class="metric green" title="Enrolled on a monthly or weekly plan. Excludes trials, frozen and archived — the same figure as the Students tab."><div class="metric-label">Active Students</div><div class="metric-value green">${activeStudents}</div></div>
    ${trialStudents ? `<div class="metric" title="On a trial lesson — not enrolled yet, so not counted as Active"><div class="metric-label">Trials</div><div class="metric-value">${trialStudents}</div></div>` : ''}
    ${lapsedTrialCount ? `<div class="metric red" title="Trialled more than a day ago and still not on a plan — they need following up. The full list with phone numbers is in Reports."><div class="metric-label">Lapsed Trials</div><div class="metric-value red">${lapsedTrialCount}</div></div>` : ''}
@@ -15239,7 +15327,8 @@ window.addEventListener('load', function(){
    oldRenderOverview();
 
    const month=currentMonth();
-   const totalStudents=countUniquePeople(db.students||[]);
+   // Mario (2 Oct 2026): archived students are NOT part of the total.
+   const totalStudents=countUniquePeople((db.students||[]).filter(s=>(s.status||'active')!=='archived'));
    // Active EXCLUDES trials, matching how the Students tab has always
    // counted. Including them here meant the two tabs quietly disagreed by
    // however many trials were running — the same word, "Students",
@@ -15319,7 +15408,7 @@ window.addEventListener('load', function(){
 
    const academy=document.getElementById('academy-kpis');
    if(academy) academy.innerHTML=`
-   <div class="metric" title="Everyone on record, including frozen and archived. Counted per person, so two courses count once."><div class="metric-label">Total Students</div><div class="metric-value">${totalStudents}</div></div>
+   <div class="metric" title="Everyone currently with us — active, trial and frozen; archived students are not counted. Counted per person, so two courses count once."><div class="metric-label">Total Students</div><div class="metric-value">${totalStudents}</div></div>
    <div class="metric green" title="Enrolled on a monthly or weekly plan. Excludes trials, frozen and archived — the same figure as the Students tab."><div class="metric-label">Active Students</div><div class="metric-value green">${activeStudents}</div></div>
    ${trialStudents ? `<div class="metric" title="On a trial lesson — not enrolled yet, so not counted as Active"><div class="metric-label">Trials</div><div class="metric-value">${trialStudents}</div></div>` : ''}
    ${lapsedTrialCount ? `<div class="metric red" title="Trialled more than a day ago and still not on a plan — they need following up. The full list with phone numbers is in Reports."><div class="metric-label">Lapsed Trials</div><div class="metric-value red">${lapsedTrialCount}</div></div>` : ''}
@@ -16968,7 +17057,8 @@ async function syncLessonLogToSupabase(log){
       next_lesson_goal: log.nextLessonGoal||'',
       homework: log.homework||'',
       homework_status: log.homeworkStatus||'',
-      homework_due_date: log.homeworkDueDate||null
+      homework_due_date: log.homeworkDueDate||null,
+      homework_assigned_date: log.homeworkAssignedDate||null
     };
     // NEVER upload a log with nothing written in it.
     //
