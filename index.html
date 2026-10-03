@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-325</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-326</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -3056,7 +3056,7 @@ function migrateBackfillLessonStudentIds(){
     const matches=byName[key]||[];
     // Only when unambiguous — two students sharing a name must not have
     // lessons guessed onto one of them.
-    if(matches.length===1){ l.studentId=matches[0].id; fixed++; }
+    if(matches.length===1){ l.studentId=matches[0].id; fixed++; if(typeof syncLessonUpdateToSupabase==='function'){ try{ syncLessonUpdateToSupabase(l); }catch(_){} } }   // the fix reaches the cloud, or every refresh undoes it
     else if(matches.length>1){ ambiguous++; }
   }
   if(fixed){
@@ -3301,12 +3301,14 @@ function migrateLessonMonthsAndStatus(){
   const VALID_STATUSES=['attended','absent_paid','absent_excused','teacher_absent','scheduled'];
   let fixed=0;
   for(const l of (db.lessons||[])){
+    const before=fixed;
     const correctMonth=String(l.date||'').slice(0,7);
     if(correctMonth && l.month!==correctMonth){ l.month=correctMonth; fixed++; }
     if(typeof l.status==='string'){
       const normalized=l.status.trim().toLowerCase();
       if(VALID_STATUSES.includes(normalized) && l.status!==normalized){ l.status=normalized; fixed++; }
     }
+    if(fixed>before){ if(typeof syncLessonUpdateToSupabase==='function'){ try{ syncLessonUpdateToSupabase(l); }catch(_){} } }   // the fix reaches the cloud, or every refresh undoes it
   }
   if(fixed){
     save();
@@ -8572,6 +8574,41 @@ function logRecordDeletion(type, record, reason){
 }
 
 // Restores any non-student record straight back into its collection.
+// A restored record must reach the cloud — restored on this device only, the
+// next refresh (the cloud's copy wins) deleted it again.
+function pushRestoredRecordToCloud(type, r){
+  const call=fn=>{ if(typeof fn==='function'){ try{ return fn(r); }catch(e){ console.warn('Restore sync failed:', e && e.message); } } };
+  switch(type){
+    case 'student':         return call(typeof addStudentToSupabase==='function' ? addStudentToSupabase : null);
+    case 'lesson':          return call(typeof syncLessonToSupabase==='function' ? syncLessonToSupabase : null);
+    case 'waitingEntry':    return call(typeof syncWaitingEntryToSupabase==='function' ? syncWaitingEntryToSupabase : null);
+    case 'practiceSession': return call(typeof syncPracticeSessionToSupabase==='function' ? syncPracticeSessionToSupabase : null);
+    case 'note':            return call(typeof syncNoteToSupabase==='function' ? syncNoteToSupabase : null);
+    case 'teacherAbsence':  return call(typeof syncTeacherAbsenceToSupabase==='function' ? syncTeacherAbsenceToSupabase : null);
+    case 'expense':         return call(typeof syncExpenseToSupabase==='function' ? syncExpenseToSupabase : null);
+    case 'otherRevenue':    return call(typeof syncOtherRevenueToSupabase==='function' ? syncOtherRevenueToSupabase : null);
+    case 'teacher':         return call(typeof syncTeacherToSupabase==='function' ? syncTeacherToSupabase : null);
+    case 'lessonLog':       return call(typeof syncLessonLogToSupabase==='function' ? syncLessonLogToSupabase : null);
+    case 'product':         return call(typeof syncProductToSupabase==='function' ? syncProductToSupabase : null);
+    case 'sale':            return call(typeof syncSaleToSupabase==='function' ? syncSaleToSupabase : null);
+    case 'refund':
+      if(!window.supabaseClientV1) return;
+      return window.supabaseClientV1.from('refunds').insert([{
+        student_id:r.studentId, student_name:r.studentName, amount:r.amount, reason:r.reason,
+        refund_date:r.date, month:r.month, processed_by:r.processedBy
+      }]).then(({error})=>{ if(error) console.warn('Refund restore sync failed:', error.message); });
+    case 'resource':
+      if(typeof upsertToCloud!=='function') return;
+      return upsertToCloud('resources','id', r.id, {
+        title:r.title, filename:r.filename||'', storage_path:r.storagePath||'', file_size:r.fileSize||0,
+        uploaded_by:r.uploadedBy, target_type:r.targetType, target_skill:r.targetSkill||null,
+        target_student_ids:r.targetStudentIds||null, resource_kind:r.resourceKind||'file', link_url:r.linkUrl||null,
+        uploaded_by_role:r.uploadedByRole||'teacher', teacher_owner:r.teacherOwner||null
+      });
+    default: console.warn('Restored "'+type+'" on this device — no cloud upload known for that type.');
+  }
+}
+
 function restoreDeletedRecord(index){
   const entry=(db.deletionLog||[])[index];
   if(!entry || !entry.snapshot){ showToast('That log entry has no restorable snapshot.'); return; }
@@ -8584,8 +8621,10 @@ function restoreDeletedRecord(index){
     return;
   }
   if(!confirm('Restore this '+def.label.toLowerCase()+'?\n\n'+entry.name)) return;
-  list.push(JSON.parse(JSON.stringify(entry.snapshot)));
+  const restored=JSON.parse(JSON.stringify(entry.snapshot));
+  list.push(restored);
   save();
+  pushRestoredRecordToCloud(entry.recordType, restored);
   // Re-render whatever view owns this collection.
   ['renderStudents','renderLessons','renderWaitingList','renderPracticeSessionsPage',
    'renderNotesPage','renderResources','renderUpcomingAbsences','renderFinances',
@@ -8702,6 +8741,13 @@ function applyCleanOrphanedLogs(){
   const ids=new Set(rows.map(l=>String(l.id)));
   db.lessonLogs=(db.lessonLogs||[]).filter(l=>!ids.has(String(l.id)));
   save();
+  // Removed in the CLOUD too — otherwise the next refresh brings them all back.
+  if(window.supabaseClientV1){
+    rows.filter(l=>l.lessonId!=null && l.lessonId!=='').forEach(l=>{
+      window.supabaseClientV1.from('lesson_updates').delete().eq('lesson_id', l.lessonId)
+        .then(({error})=>{ if(error) console.warn('Orphaned log cloud delete failed:', error.message); });
+    });
+  }
   showToast(rows.length+' orphaned log(s) removed ✓');
   previewCleanOrphanedLogs();
 }
@@ -17242,6 +17288,12 @@ function syncLessonLogFromLesson(lessonId){
     log.attendance=lesson.status;
     normalizeLessonLog(log,lesson);
     save();
+    // Sent too (a log with writing — empty ones never go up): the cloud row
+    // otherwise kept the old teacher/date, and the teacher's access to a
+    // log follows its teacher name.
+    if((typeof lessonLogHasWriting!=='function' || lessonLogHasWriting(log)) && typeof syncLessonLogToSupabase==='function'){
+      try{ syncLessonLogToSupabase(log); }catch(_){}
+    }
   }
 }
 
