@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-326</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-329</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -950,6 +950,7 @@ input::placeholder{color:var(--text-dim)}
   <div class="card">
     <div class="card-title">Makeup Dashboard</div>
     <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;align-items:center">
+      <button class="btn btn-gold" onclick="openAddManualMakeup()" title="Give a student a make-up for an emergency or rare case">+ Add make-up</button>
       <input id="makeup-search" placeholder="Search student..." oninput="renderReports()" style="max-width:200px">
       <select id="makeup-teacher-filter" onchange="renderReports()" style="max-width:170px"><option value="">All teachers</option></select>
       <select id="makeup-day-filter" onchange="renderReports()" style="max-width:150px">
@@ -4420,9 +4421,13 @@ function editStudent(id){
      <div class="form-field"><label for="es-day">Lesson Day</label><select id="es-day" onchange="onEditStudentDayChange(${s.id})">
        ${dayChoices.map(d=>`<option value="${escapeAttr(d)}" ${d===s.lesson_day?'selected':''}>${escapeHtml(d)}</option>`).join('')}
      </select></div>
-     <div class="form-field"><label for="es-time">Time Slot</label><select id="es-time">
-       ${slotOptionsHtml(s.teacher, s.lesson_day, s.id, isGroupPlan(s.plan), s.lessonTime)}
-     </select></div>
+     <div class="form-field"><label for="es-time">Time Slot</label><select id="es-time" onchange="onEditStudentTimeChange()">
+       ${withEditCustomTime(slotOptionsHtml(s.teacher, s.lesson_day, s.id, isGroupPlan(s.plan), s.lessonTime), s.lessonTime)}
+     </select>
+     <div id="es-time-custom-field" style="display:none;margin-top:6px">
+       <input id="es-time-custom" type="time" step="300" style="max-width:150px">
+       <button type="button" class="btn btn-sm" onclick="applyEditStudentCustomTime()">Use this time</button>
+     </div></div>
      <div class="form-field"><label for="es-plan">Payment Plan</label><select id="es-plan" onchange="onEditStudentDayChange(${s.id})">
        ${planOptionsHtml(s.plan)}
      </select></div>
@@ -4466,12 +4471,44 @@ function onEditStudentDayChange(studentId){
  if(!timeSel) return;
  const plan=document.getElementById('es-plan')?.value||'';
  const cur=document.getElementById('es-time')?.value||'';
- timeSel.innerHTML=slotOptionsHtml(teacherName, dayName, studentId, isGroupPlan(plan), cur);
+ timeSel.innerHTML=withEditCustomTime(slotOptionsHtml(teacherName, dayName, studentId, isGroupPlan(plan), cur), cur);
+}
+
+// Edit Student: a custom time, like Add Student has (Mario, 2 Oct 2026).
+// Keeps a student's existing custom time in the list (it isn't one of the
+// teacher's slots, so rebuilding the list used to drop it), and ends the
+// list with "✏️ Custom time...".
+function withEditCustomTime(optionsHtml, currentTime){
+  let html=String(optionsHtml||'');
+  const t=String(currentTime||'');
+  if(/^\d{1,2}:\d{2}$/.test(t) && !html.includes('value="'+t+'"')){
+    html+=`<option value="${t}" data-custom="1" selected>${escapeHtml(formatTime12h(t))} (Custom)</option>`;
+  }
+  return html+'<option value="__custom__">✏️ Custom time...</option>';
+}
+function onEditStudentTimeChange(){
+  const sel=document.getElementById('es-time'), field=document.getElementById('es-time-custom-field');
+  if(sel && field) field.style.display = sel.value==='__custom__' ? 'block' : 'none';
+}
+function applyEditStudentCustomTime(){
+  const v=String(document.getElementById('es-time-custom')?.value||'').slice(0,5);
+  if(!/^\d{2}:\d{2}$/.test(v)){ showToast('Pick a time first.'); return; }
+  const sel=document.getElementById('es-time'); if(!sel) return;
+  [...sel.querySelectorAll('option[data-custom]')].forEach(o=>o.remove());
+  const opt=document.createElement('option');
+  opt.value=v; opt.textContent=formatTime12h(v)+' (Custom)'; opt.setAttribute('data-custom','1');
+  sel.insertBefore(opt, sel.querySelector('option[value="__custom__"]'));
+  sel.value=v;
+  const field=document.getElementById('es-time-custom-field'); if(field) field.style.display='none';
 }
 
 function saveEditStudent(id){
  const s=db.students.find(x=>x.id===id);
  if(!s) return;
+ if(document.getElementById('es-time')?.value==='__custom__'){
+   alert('Set the custom time first: pick it and press "Use this time".');
+   return;
+ }
  const first_name=document.getElementById('es-first')?.value.trim()||'';
  const last_name=document.getElementById('es-last')?.value.trim()||'';
  if(!first_name){showToast('First name is required'); return;}
@@ -5915,6 +5952,21 @@ function sendFamilyRenewalReminder(memberIdsCsv){
   }
 }
 
+const RENEWAL_WEEK_ORDER=['Friday','Saturday','Sunday','Monday','Tuesday','Wednesday','Thursday'];
+// Sort key for a Renewals row (or family group): its earliest lesson day in
+// the Friday→Thursday week, and that day's lesson time.
+function renewalDaySortKey(row){
+  const people=(row && row.members && row.members.length) ? row.members.map(m=>m.s) : [row && row.s];
+  let best={day:99, time:'99:99'};
+  people.forEach(st=>{
+    if(!st) return;
+    const d=RENEWAL_WEEK_ORDER.indexOf(String(st.lesson_day||'').trim());
+    const k={day:d<0?99:d, time:String(st.lessonTime||'99:99')};
+    if(k.day<best.day || (k.day===best.day && k.time<best.time)) best=k;
+  });
+  return best;
+}
+
 function renderRenewalsDue(){
   const host=document.getElementById('renewals-due-list');
   if(!host) return;
@@ -6061,7 +6113,13 @@ function renderRenewalsDue(){
   // consolidation so a sibling who takes two instruments keeps them
   // grouped inside their own entry.
   const familyRows=(typeof groupRenewalsByFamily==='function') ? groupRenewalsByFamily(grouped) : grouped;
-  familyRows.sort((a,b)=>(a.s.name||'').localeCompare(b.s.name||''));
+  // Mario (2 Oct 2026): sorted by lesson DAY, the academy's week — Friday
+  // first, through Thursday — then by time, then name. A family sits at its
+  // earliest member's day; students with no lesson day go last.
+  familyRows.sort((a,b)=>{
+    const ka=renewalDaySortKey(a), kb=renewalDaySortKey(b);
+    return (ka.day-kb.day) || ka.time.localeCompare(kb.time) || (a.s.name||'').localeCompare(b.s.name||'');
+  });
 
   if(!familyRows.length){
     host.innerHTML='<div class="empty"><div class="empty-icon">✅</div><div class="empty-text">No renewals due right now.</div></div>';
@@ -11388,6 +11446,9 @@ function renameInstrument(idx){
  if(!inst) return;
  openModal('Edit Instrument', `
    <div class="form-field wide"><label for="ri-name">Instrument Name</label><input id="ri-name" value="${escapeAttr(inst.name)}"></div>
+   <div class="form-field wide"><label for="ri-minutes">Session length (minutes)</label><input id="ri-minutes" type="number" min="15" max="240" step="5" value="${Number(inst.sessionMinutes)||45}">
+     <small style="color:var(--text-muted);display:block;margin-top:4px">Default 45. A longer lesson pushes the teacher's next slot later, the same way a group session does.</small>
+   </div>
    <div class="form-field wide"><label for="ri-quantity">How Many Available at Once</label><input id="ri-quantity" type="number" min="1" step="1" value="${inst.quantity||1}">
      <small style="color:var(--text-muted);display:block;margin-top:4px">If the academy has more than one of this instrument (e.g. 2 electric guitars in different rooms), set this so that many lessons/practice sessions can be booked on it at the same time before it's considered fully busy.</small>
    </div>
@@ -11399,6 +11460,9 @@ function saveRenameInstrument(idx){
  if(!inst) return;
  const newName=document.getElementById('ri-name')?.value.trim()||'';
  const newQuantity=Math.max(1, Number(document.getElementById('ri-quantity')?.value)||1);
+ const rawMinutes=Number(document.getElementById('ri-minutes')?.value);
+ if(document.getElementById('ri-minutes') && !(rawMinutes>=15 && rawMinutes<=240)){ alert('Session length must be between 15 and 240 minutes.'); return; }
+ const newMinutes=rawMinutes>=15 ? Math.round(rawMinutes) : 45;
  if(!newName){ closeModal(); return; }
 
  const oldName=inst.name;
@@ -11418,6 +11482,7 @@ function saveRenameInstrument(idx){
 
  inst.name=newName;
  inst.quantity=newQuantity;
+ inst.sessionMinutes=newMinutes;
  save();
  closeModal();
  renderInstrumentPage();
@@ -11425,7 +11490,7 @@ function saveRenameInstrument(idx){
  refreshInstrumentSelectors();
  showToast(nameChanged ? 'Instrument updated and renamed' : 'Instrument updated');
  if(window.supabaseClientV1){
-   window.supabaseClientV1.from('instruments').update({name:newName, quantity:newQuantity}).eq('name', oldName)
+   window.supabaseClientV1.from('instruments').update({name:newName, quantity:newQuantity, session_minutes:newMinutes}).eq('name', oldName)
      .then(({error})=>{ if(error) console.warn('Instrument update sync failed:', error.message); });
  }
  // Everything renamed above goes to the cloud as well. Changed only on this
@@ -19794,6 +19859,7 @@ window.applyStudentCustomTime=function(){
 
 // Override Edit Student time slot dropdown
 window.onEditStudentDayChange=function(studentId){
+  const curTime=document.getElementById('es-time')?.value||'';
   const teacherName=document.getElementById('es-teacher')?.value||'';
   const dayName=document.getElementById('es-day')?.value||'';
   const plan=document.getElementById('es-plan')?.value||'';
@@ -19812,6 +19878,8 @@ window.onEditStudentDayChange=function(studentId){
         return `<option value="${bookValue}" ${full?'disabled':''}>${escapeHtml(label)}</option>`;
       }).join('')
     : '<option value="">No available slots</option>';
+  timeSel.innerHTML=withEditCustomTime(timeSel.innerHTML, curTime);
+  if(curTime && [...timeSel.options].some(o=>o.value===curTime)) timeSel.value=curTime;
 };
 
 // Block Add Student if room is full at the chosen slot
@@ -19915,6 +19983,61 @@ const GROUP_SESSION_MIN_MINUTES=45;
 // "extended" lesson as 60 minutes — but a double-session makeup is 90,
 // so its final half hour was invisible to room capacity, teacher-busy
 // checks, and the Calendar, allowing genuine double-bookings there.
+// Session length for an instrument (Mario, 2 Oct 2026): set per instrument
+// on the Instruments page, default 45. A longer lesson is handled exactly
+// like a group session — it pushes the teacher's following slot later.
+function instrumentSessionMinutes(instrumentName){
+  const n=String(instrumentName||'').trim().toLowerCase();
+  if(!n) return SESSION_DURATION_MINUTES;
+  const inst=(db.instruments||[]).find(i=>String(i.name||'').trim().toLowerCase()===n);
+  const m=inst ? Number(inst.sessionMinutes) : NaN;
+  return (m>=15 && m<=240) ? Math.round(m) : SESSION_DURATION_MINUTES;
+}
+
+// Manual make-ups (Mario, 2 Oct 2026) — for emergencies & rare cases. A
+// make-up is OWED by an excused absence, so a manual one is an excused-
+// absence record marked "Manual make-up: <reason>". It has no time, so it
+// never occupies a slot, clashes with a real lesson, or shows in the
+// calendar grid — but the Makeup Dashboard, booking and the renewal
+// "make-up sessions left" line all see it. "Add & book now" then opens the
+// normal make-up booking window for it.
+function openAddManualMakeup(){
+  const studs=(db.students||[]).filter(s=>(s.status||'active')!=='archived')
+    .sort((a,b)=>(a.name||'').localeCompare(b.name||'') || String(a.instrument||'').localeCompare(String(b.instrument||'')));
+  if(!studs.length){ showToast('No students to add a make-up for.'); return; }
+  const today=getLocalTodayKey();
+  openModal('Add a make-up', `
+    <p style="color:var(--text-muted);margin-bottom:12px">For emergencies and rare cases: gives the student one make-up to book, like an excused absence.</p>
+    <div class="form-field wide"><label for="mm-student">Student (course)</label>
+      <select id="mm-student">${studs.map(s=>`<option value="${escapeAttr(String(s.id))}">${escapeHtml(s.name||'?')} — ${escapeHtml(s.instrument||'?')} (${escapeHtml(s.teacher||'?')})</option>`).join('')}</select></div>
+    <div class="form-field wide"><label for="mm-reason">Reason</label><input id="mm-reason" placeholder="e.g. family emergency"></div>
+    <div class="form-field wide"><label for="mm-date">Date it relates to</label><input id="mm-date" type="date" value="${today}"></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
+      <button class="btn" onclick="addManualMakeup(false)">Add as owed (book later)</button>
+      <button class="btn btn-gold" onclick="addManualMakeup(true)">Add &amp; book now</button>
+    </div>`);
+}
+function addManualMakeup(bookNow){
+  const id=document.getElementById('mm-student')?.value;
+  const reason=(document.getElementById('mm-reason')?.value||'').trim();
+  const date=(document.getElementById('mm-date')?.value||'').trim() || getLocalTodayKey();
+  const s=(db.students||[]).find(x=>String(x.id)===String(id));
+  if(!s){ alert('Choose a student.'); return; }
+  if(!reason){ alert('Please write a short reason (e.g. family emergency).'); return; }
+  const credit={
+    id:Date.now(), studentId:s.id, student:s.name, teacher:s.teacher||'', instrument:s.instrument||'',
+    date, month:date.slice(0,7), time:'', status:'absent_excused', status_record:'active',
+    notes:'Manual make-up: '+reason, manualMakeup:true
+  };
+  db.lessons=db.lessons||[]; db.lessons.push(credit);
+  save();
+  if(typeof syncLessonToSupabase==='function'){ try{ syncLessonToSupabase(credit); }catch(_){} }
+  closeModal();
+  if(typeof renderReports==='function'){ try{ renderReports(); }catch(_){} }
+  showToast('Make-up added for '+(s.name||'student')+'.');
+  if(bookNow && typeof openScheduleMakeup==='function') openScheduleMakeup(credit.id);
+}
+
 function getLessonDurationMinutes(lesson){
   if(!lesson) return SESSION_DURATION_MINUTES;
   // Order matters: a double-session makeup also sets isExtendedDuration,
@@ -19923,7 +20046,7 @@ function getLessonDurationMinutes(lesson){
   if(lesson.isExtendedDuration) return GROUP_SESSION_DURATION_MINUTES;
   const s=(db.students||[]).find(st=>lessonBelongsToStudent(lesson, st));
   if(s && isGroupPlan(s.plan)) return GROUP_SESSION_DURATION_MINUTES;
-  return SESSION_DURATION_MINUTES;
+  return instrumentSessionMinutes(lesson.instrument || (s && s.instrument));
 }
 
 // ── Effective (shifted) slot computation ────────────────────────────────
@@ -20091,7 +20214,7 @@ function getTeacherBookingsByTime(teacherName, dayName, targetDate, excludeStude
     })()
   ).forEach(s=>{
     if(!s.lessonTime || bookingsByTime[s.lessonTime]) return;
-    const duration=isGroupPlan(s.plan) ? GROUP_SESSION_DURATION_MINUTES : SESSION_DURATION_MINUTES;
+    const duration=isGroupPlan(s.plan) ? GROUP_SESSION_DURATION_MINUTES : instrumentSessionMinutes(s.instrument);
     bookingsByTime[s.lessonTime]={label:s.name||'Booked', durationMinutes:duration};
   });
 
@@ -20133,7 +20256,7 @@ function getTeacherBookingsByTime(teacherName, dayName, targetDate, excludeStude
     // is the student's own weekday — always 7 days after their last lesson
     // — so comparing it to a 3-day window meant the hold never applied.
     if(!holdUntil || getLocalTodayKey()>holdUntil) return; // hold expired — slot is free
-    const duration=isGroupPlan(s.plan) ? GROUP_SESSION_DURATION_MINUTES : SESSION_DURATION_MINUTES;
+    const duration=isGroupPlan(s.plan) ? GROUP_SESSION_DURATION_MINUTES : instrumentSessionMinutes(s.instrument);
     bookingsByTime[s.lessonTime]={
       label:(s.name||'Reserved'),
       durationMinutes:duration,
@@ -24466,7 +24589,7 @@ async function syncPracticeSessionUpdateToSupabase(session){
         }));
       }
       if(instrumentRows){
-        db.instruments=instrumentRows.map(i=>({id:i.id, name:i.name||'', quantity:i.quantity||1}));
+        db.instruments=instrumentRows.map(i=>({id:i.id, name:i.name||'', quantity:i.quantity||1, sessionMinutes:Number(i.session_minutes)||45}));
       }
       if(expenseRows||instrumentRows){
         save();
