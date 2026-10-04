@@ -415,7 +415,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-329</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-330</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -1153,6 +1153,7 @@ input::placeholder{color:var(--text-dim)}
 <div class="card">
 <div class="card-title">Student Database</div><div id="db-analytics" class="metric-grid" style="margin-bottom:15px"></div>
 <input id="db-search" placeholder="Search students..." oninput="renderDatabase()" style="max-width:280px;margin-bottom:12px">
+<select id="db-status-filter" onchange="renderDatabase()" style="max-width:170px;margin-bottom:12px"><option value="">All statuses</option><option value="active">Active</option><option value="archived">Archived</option></select>
 <div class="table-wrap">
 <table>
 <thead><tr><th onclick="sortDatabase('public_id')" style="cursor:pointer;user-select:none" title="Click to sort">ID<span class="db-sort-arrow" data-key="public_id"></span></th><th onclick="sortDatabase('first_name')" style="cursor:pointer;user-select:none" title="Click to sort">First Name<span class="db-sort-arrow" data-key="first_name"></span></th><th onclick="sortDatabase('last_name')" style="cursor:pointer;user-select:none" title="Click to sort">Last Name<span class="db-sort-arrow" data-key="last_name"></span></th><th onclick="sortDatabase('email')" style="cursor:pointer;user-select:none" title="Click to sort">Email<span class="db-sort-arrow" data-key="email"></span></th><th onclick="sortDatabase('attended')" style="cursor:pointer;user-select:none" title="Click to sort">Attended<span class="db-sort-arrow" data-key="attended"></span></th><th onclick="sortDatabase('absent_paid')" style="cursor:pointer;user-select:none" title="Click to sort">Absent Paid<span class="db-sort-arrow" data-key="absent_paid"></span></th><th onclick="sortDatabase('teacher_absent')" style="cursor:pointer;user-select:none" title="Click to sort">Teacher Absent<span class="db-sort-arrow" data-key="teacher_absent"></span></th><th onclick="sortDatabase('makeups')" style="cursor:pointer;user-select:none" title="Click to sort">Makeups Owed<span class="db-sort-arrow" data-key="makeups"></span></th><th onclick="sortDatabase('age')" style="cursor:pointer;user-select:none" title="Click to sort">Age<span class="db-sort-arrow" data-key="age"></span></th><th onclick="sortDatabase('joined_date')" style="cursor:pointer;user-select:none" title="Click to sort">Starting Date<span class="db-sort-arrow" data-key="joined_date"></span></th><th onclick="sortDatabase('phone1')" style="cursor:pointer;user-select:none" title="Click to sort">Phone<span class="db-sort-arrow" data-key="phone1"></span></th><th onclick="sortDatabase('phone2')" style="cursor:pointer;user-select:none" title="Click to sort">Parent Phone<span class="db-sort-arrow" data-key="phone2"></span></th><th onclick="sortDatabase('teacher')" style="cursor:pointer;user-select:none" title="Click to sort">Teacher<span class="db-sort-arrow" data-key="teacher"></span></th><th onclick="sortDatabase('instrument')" style="cursor:pointer;user-select:none" title="Click to sort">Instrument<span class="db-sort-arrow" data-key="instrument"></span></th><th onclick="sortDatabase('lesson_day')" style="cursor:pointer;user-select:none" title="Click to sort">Day<span class="db-sort-arrow" data-key="lesson_day"></span></th><th onclick="sortDatabase('lessonTime')" style="cursor:pointer;user-select:none" title="Click to sort">Time<span class="db-sort-arrow" data-key="lessonTime"></span></th><th>Actions</th></tr></thead>
@@ -1349,6 +1350,12 @@ input::placeholder{color:var(--text-dim)}
     <small style="display:block;margin-bottom:8px;color:var(--text-muted)">For a person whose courses are linked to a record that no longer exists (Data Health: "linked to missing …"). Their earliest remaining course becomes the main record and the others link to it. Lessons, payments and payroll are not touched.</small>
     <button class="btn" onclick="previewRepairBrokenCourseLinks()">🔍 Preview (changes nothing)</button>
     <div id="broken-links-results" style="margin-top:14px"></div>
+
+    <div style="border-top:1px solid var(--border);margin:20px 0 16px;"></div>
+    <div class="card-title" style="margin-bottom:10px">Restore Students Archived By Mistake</div>
+    <small style="display:block;margin-bottom:8px;color:var(--text-muted)">Archived students who still have lessons booked from today on — e.g. renewed students archived by an out-of-date device. Restores them to active, with their upcoming lessons.</small>
+    <button class="btn" onclick="previewRestoreMistakenArchives()">🔍 Preview (changes nothing)</button>
+    <div id="mistaken-archive-results" style="margin-top:14px"></div>
 
     <div style="border-top:1px solid var(--border);margin:20px 0 16px;"></div>
 
@@ -3295,8 +3302,12 @@ function migrateFlagUnmarkedTrialLessons(){
   }
 }
 migrateFlagUnmarkedTrialLessons();
-autoArchiveStaleTrials();
-enforceBundlePlanDeadlines();
+// autoArchiveStaleTrials() and enforceBundlePlanDeadlines() used to run HERE,
+// at page load, on this device's STORED copy — before the cloud load. A
+// device that hadn't seen this month's renewals (made elsewhere, or not yet
+// loaded) archived renewed students and pushed that to the cloud (3 Oct
+// 2026). They now run only right after a successful cloud load — see
+// _autoLoadFromCloudImpl.
 
 function migrateLessonMonthsAndStatus(){
   const VALID_STATUSES=['attended','absent_paid','absent_excused','teacher_absent','scheduled'];
@@ -7412,8 +7423,10 @@ function renderDatabase(){
  const tb=document.getElementById('database-body');
  if(!tb) return;
  const q=(document.getElementById('db-search')?.value||'').toLowerCase();
+ const statusFilter=document.getElementById('db-status-filter')?.value||'';
  let rows=(db.students||[]).filter(s=>
-   !q || (s.name||'').toLowerCase().includes(q)
+   (!q || (s.name||'').toLowerCase().includes(q)) &&
+   (!statusFilter || (statusFilter==='archived' ? (s.status||'active')==='archived' : (s.status||'active')!=='archived'))
  );
  const sort=window._dbSort||{};
  if(sort.key){
@@ -8463,6 +8476,45 @@ function applyFixCourseFields(){
 // The name-based link tools skip them, because they already share a root.
 // Repair: the earliest-joined remaining course (active preferred) becomes
 // the root, and every other record of that person links to it.
+// Archived students who still have scheduled lessons from today on. A
+// deliberate archive takes their upcoming lessons with it, so this mix only
+// happens when the archive was a mistake — e.g. the page-load archive that
+// ran on a device which hadn't seen the renewal (fixed 3 Oct 2026).
+function findMistakenlyArchivedStudents(){
+  const today=(typeof getLocalTodayKey==='function') ? getLocalTodayKey() : new Date().toISOString().slice(0,10);
+  return (db.students||[]).filter(s=>(s.status||'active')==='archived').map(s=>{
+    const upcoming=(db.lessons||[]).filter(l=>lessonBelongsToStudent(l, s) && l.status==='scheduled' && l.date && l.date>=today);
+    return {s, live:upcoming.filter(l=>(l.status_record||'active')!=='archived'), archivedWith:upcoming.filter(l=>(l.status_record||'active')==='archived')};
+  }).filter(r=>r.live.length>0);
+}
+function previewRestoreMistakenArchives(){
+  const el=document.getElementById('mistaken-archive-results'); if(!el) return;
+  const rows=findMistakenlyArchivedStudents();
+  if(!rows.length){ el.innerHTML='<div style="color:var(--text-muted)">No archived students with upcoming lessons.</div>'; return; }
+  el.innerHTML=rows.map(r=>'<div style="margin-bottom:6px"><b>'+escapeHtml(r.s.name||'?')+'</b> — '+escapeHtml(r.s.instrument||'?')+' · '+escapeHtml(r.s.teacher||'?')
+    +' · '+r.live.length+' upcoming lesson'+(r.live.length===1?'':'s')+(r.archivedWith.length?' (+'+r.archivedWith.length+' to restore)':'')+'</div>').join('')
+    +'<button class="btn btn-gold" style="margin-top:8px" onclick="applyRestoreMistakenArchives()">Restore these '+rows.length+' student'+(rows.length===1?'':'s')+'</button>';
+}
+function applyRestoreMistakenArchives(){
+  const rows=findMistakenlyArchivedStudents();
+  if(!rows.length){ showToast('Nothing to restore.'); return; }
+  rows.forEach(({s, archivedWith})=>{
+    s.status='active';
+    delete s.autoArchivedAsStaleMonthly; delete s.autoArchivedAsStaleTrial;
+    s._localModifiedAt=Date.now();
+    if(typeof syncStudentUpdateToSupabase==='function'){ try{ syncStudentUpdateToSupabase(s); }catch(_){} }
+    archivedWith.forEach(l=>{
+      l.status_record='active'; l.archivedWithStudent=false;
+      if(typeof syncLessonUpdateToSupabase==='function'){ try{ syncLessonUpdateToSupabase(l); }catch(_){} }
+    });
+  });
+  save();
+  if(typeof refresh==='function'){ try{ refresh(); }catch(_){} }
+  const el=document.getElementById('mistaken-archive-results');
+  if(el) el.innerHTML='<div style="color:var(--green,#2e7d32)">Restored '+rows.length+' student'+(rows.length===1?'':'s')+' to active.</div>';
+  showToast('Restored '+rows.length+' student'+(rows.length===1?'':'s')+'.');
+}
+
 function findBrokenCourseLinkGroups(){
   const all=db.students||[];
   const publicIds=new Set(all.map(s=>s.public_id).filter(Boolean));
@@ -13251,6 +13303,13 @@ async function _autoLoadFromCloudImpl(){
      (payments?.length||0)+' payments';
    window.__loadedFromCloudThisSession=true;
    if(typeof stampLastSync==='function') stampLastSync('loaded from cloud');
+   // The archive and bundle-deadline rules judge students by their lessons,
+   // so they run ONLY here: on data just loaded from the cloud, signed in as
+   // an admin — never on a device's stored (possibly stale) copy.
+   if(autoLoadSignedIn && typeof session!=='undefined' && session && session.role==='admin'){
+     try{ if(typeof autoArchiveStaleTrials==='function') autoArchiveStaleTrials(); }catch(e){ console.warn('Auto-archive failed:', e && e.message); }
+     try{ if(typeof enforceBundlePlanDeadlines==='function') enforceBundlePlanDeadlines(); }catch(e){ console.warn('Bundle deadlines failed:', e && e.message); }
+   }
    hideSyncIndicator();
  }catch(e){
    console.error('Auto-load failed:', e.message);
