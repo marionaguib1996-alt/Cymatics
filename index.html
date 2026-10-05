@@ -90,6 +90,7 @@ body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;min
 /* METRIC GRID */
 .metric-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:1.5rem}
 .metric-grid.metric-grid-5{grid-template-columns:repeat(5,1fr)}
+.metric-grid.metric-grid-6{grid-template-columns:repeat(6,minmax(0,1fr))}
 .metric{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:1.1rem 1.25rem;position:relative;overflow:hidden}
 .metric::after{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--gold-dim)}
 .metric.green::after{background:var(--green)}
@@ -295,7 +296,7 @@ input::placeholder{color:var(--text-dim)}
 @keyframes toast-fadeout{0%{opacity:1;transform:translateY(0)}80%{opacity:1;transform:translateY(0)}100%{opacity:0;transform:translateY(8px)}}
 @media(max-width:768px){
   .metric-grid{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
-  .metric-grid.metric-grid-5{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+  .metric-grid.metric-grid-5,.metric-grid.metric-grid-6{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
   .two-col{grid-template-columns:minmax(0,1fr)}
   .app-header{padding:0.5rem 1rem;height:auto;flex-wrap:wrap;row-gap:8px}
   .main{padding:1rem}
@@ -320,7 +321,7 @@ input::placeholder{color:var(--text-dim)}
   /* Stat cards: two-up is genuinely cramped at this width (labels wrap to
      three lines and a 5-card row leaves an orphan), so go single-column
      and let each card be readable at a glance. */
-  .metric-grid,.metric-grid.metric-grid-5{grid-template-columns:minmax(0,1fr)}
+  .metric-grid,.metric-grid.metric-grid-5,.metric-grid.metric-grid-6{grid-template-columns:minmax(0,1fr)}
   .metric{padding:10px 12px}
   .metric-value{font-size:22px}
   .metric-label{font-size:10px;letter-spacing:0.04em}
@@ -415,7 +416,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-330</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-332</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -814,7 +815,7 @@ input::placeholder{color:var(--text-dim)}
 <option value="instrument_desc">Instrument Z-A</option>
 </select>
 </div>
-<div id="lesson-summary" class="metric-grid metric-grid-5"></div>
+<div id="lesson-summary" class="metric-grid metric-grid-6"></div>
 </div>
 
 <div class="card">
@@ -6949,7 +6950,8 @@ if(sum){sum.innerHTML=`<div class="metric"><div class="metric-label">Lessons</di
 <div class="metric green"><div class="metric-label">Attended</div><div class="metric-value green">${all.filter(x=>x.status==='attended').length}</div></div>
 <div class="metric red"><div class="metric-label">Absent &amp; Paid</div><div class="metric-value red">${all.filter(x=>x.status==='absent_paid').length}</div></div>
 <div class="metric amber"><div class="metric-label">Excused</div><div class="metric-value amber">${all.filter(x=>x.status==='absent_excused').length}</div></div>
-<div class="metric red"><div class="metric-label">Makeups Owed</div><div class="metric-value red">${all.filter(l=>isMakeupOwed(l)).length}</div></div>`;}
+<div class="metric red"><div class="metric-label">Makeups Owed</div><div class="metric-value red">${all.filter(l=>isMakeupOwed(l)).length}</div></div>
+<div class="metric" title="Trial lessons in the week shown below (Friday to Thursday)"><div class="metric-label">Trials</div><div class="metric-value">${all.filter(l=>isTrialLessonRecord(l)).length}</div></div>`;}
 
    ledger.innerHTML=list.map(l=>{
      const owed=isMakeupOwed(l);
@@ -11202,6 +11204,7 @@ async function pushAllDataToCloud(alreadyConfirmed){
       skill_level:s.skillLevel||'', current_goal:s.currentGoal||'', milestones:s.milestones||[],
       linked_person_id:s.linkedPersonId?String(s.linkedPersonId):null,
       custom_pay:(s.customPay!=null && s.customPay!=='')?Number(s.customPay):null,
+      auto_archived: s.autoArchivedAsStaleTrial ? 'trial' : (s.autoArchivedAsStaleMonthly ? 'monthly' : null),
       bundle_start_date:s.bundleStartDate||null, bundle_deadline:s.bundleDeadline||null,
       discount_percent:(s.discountPercent!=null && s.discountPercent!=='')?Number(s.discountPercent):null
     };
@@ -11234,6 +11237,7 @@ async function pushAllDataToCloud(alreadyConfirmed){
       archived_with_student:l.archivedWithStudent||false, unpaid:l.unpaid||false,
       custom_payroll_amount:(l.customPayrollAmount!=null && l.customPayrollAmount!=='')?Number(l.customPayrollAmount):null,
       notes_show_to_teacher: l.notesShowToTeacher==null ? null : !!l.notesShowToTeacher, makeup_credits_due: l.makeupCreditsDue!=null ? Number(l.makeupCreditsDue) : null,
+      was_trial: !!l.wasTrial, absence_reason: l.absenceReason||null, archived_by_cutoff: l.archivedByCutoff||null,
       plan_notes:l.planNotes||'',
       makeup_expired_unused:l.makeupExpiredUnused||false,
       is_extended_duration:l.isExtendedDuration||false,
@@ -12514,6 +12518,8 @@ async function _autoLoadFromCloudImpl(){
        customPay: (s.custom_pay!=null) ? s.custom_pay : null,
        bundleStartDate: s.bundle_start_date || undefined,
        bundleDeadline: s.bundle_deadline || undefined,
+       autoArchivedAsStaleTrial: s.auto_archived==='trial' || undefined,
+       autoArchivedAsStaleMonthly: s.auto_archived==='monthly' || undefined,
        discountPercent: (s.discount_percent!=null) ? s.discount_percent : null,
        frozen: !!s.frozen,
        // Read the paused-lesson count BACK from the cloud. Without this the
@@ -12994,6 +13000,7 @@ async function _autoLoadFromCloudImpl(){
        unpaid: !!l.unpaid,
        customPayrollAmount: (l.custom_payroll_amount!=null) ? l.custom_payroll_amount : null,
        notesShowToTeacher: (l.notes_show_to_teacher!=null) ? !!l.notes_show_to_teacher : undefined, makeupCreditsDue: (l.makeup_credits_due!=null) ? l.makeup_credits_due : undefined,
+       wasTrial: !!l.was_trial || undefined, absenceReason: l.absence_reason || undefined, archivedByCutoff: l.archived_by_cutoff || undefined,
        planNotes: l.plan_notes||'',
        makeupExpiredUnused: !!l.makeup_expired_unused,
        isExtendedDuration: !!l.is_extended_duration,
@@ -13930,6 +13937,7 @@ async function _addStudentToSupabaseImpl(student){
       milestones: student.milestones || [],
       linked_person_id: student.linkedPersonId ? String(student.linkedPersonId) : null,
       custom_pay: (student.customPay!=null && student.customPay!=='') ? Number(student.customPay) : null,
+      auto_archived: student.autoArchivedAsStaleTrial ? 'trial' : (student.autoArchivedAsStaleMonthly ? 'monthly' : null),
       bundle_start_date: student.bundleStartDate||null, bundle_deadline: student.bundleDeadline||null,
       discount_percent: (student.discountPercent!=null && student.discountPercent!=='') ? Number(student.discountPercent) : null,
       frozen: !!student.frozen,
@@ -14168,6 +14176,7 @@ async function syncStudentUpdateToSupabase(student){
       milestones: student.milestones || [],
       linked_person_id: student.linkedPersonId ? String(student.linkedPersonId) : null,
       custom_pay: (student.customPay!=null && student.customPay!=='') ? Number(student.customPay) : null,
+      auto_archived: student.autoArchivedAsStaleTrial ? 'trial' : (student.autoArchivedAsStaleMonthly ? 'monthly' : null),
       bundle_start_date: student.bundleStartDate||null, bundle_deadline: student.bundleDeadline||null,
       discount_percent: (student.discountPercent!=null && student.discountPercent!=='') ? Number(student.discountPercent) : null,
       frozen: !!student.frozen,
@@ -14582,6 +14591,7 @@ async function syncLessonToSupabase(lesson){
      unpaid: lesson.unpaid||false,
      custom_payroll_amount: (lesson.customPayrollAmount!=null && lesson.customPayrollAmount!=='') ? Number(lesson.customPayrollAmount) : null,
      notes_show_to_teacher: lesson.notesShowToTeacher==null ? null : !!lesson.notesShowToTeacher, makeup_credits_due: lesson.makeupCreditsDue!=null ? Number(lesson.makeupCreditsDue) : null,
+     was_trial: !!lesson.wasTrial, absence_reason: lesson.absenceReason||null, archived_by_cutoff: lesson.archivedByCutoff||null,
      plan_notes: lesson.planNotes||'',
      makeup_expired_unused: lesson.makeupExpiredUnused||false,
      is_extended_duration: lesson.isExtendedDuration||false,
@@ -14703,6 +14713,7 @@ async function syncLessonToSupabase(lesson){
         unpaid: !!l.unpaid,
         customPayrollAmount: (l.custom_payroll_amount!=null) ? l.custom_payroll_amount : null,
         notesShowToTeacher: (l.notes_show_to_teacher!=null) ? !!l.notes_show_to_teacher : undefined, makeupCreditsDue: (l.makeup_credits_due!=null) ? l.makeup_credits_due : undefined,
+        wasTrial: !!l.was_trial || undefined, absenceReason: l.absence_reason || undefined, archivedByCutoff: l.archived_by_cutoff || undefined,
         planNotes: l.plan_notes||'',
         makeupExpiredUnused: !!l.makeup_expired_unused,
         isExtendedDuration: !!l.is_extended_duration,
@@ -14786,6 +14797,7 @@ async function syncLessonUpdateToSupabase(lesson){
         unpaid: lesson.unpaid||false,
         custom_payroll_amount: (lesson.customPayrollAmount!=null && lesson.customPayrollAmount!=='') ? Number(lesson.customPayrollAmount) : null,
         notes_show_to_teacher: lesson.notesShowToTeacher==null ? null : !!lesson.notesShowToTeacher, makeup_credits_due: lesson.makeupCreditsDue!=null ? Number(lesson.makeupCreditsDue) : null,
+        was_trial: !!lesson.wasTrial, absence_reason: lesson.absenceReason||null, archived_by_cutoff: lesson.archivedByCutoff||null,
         plan_notes: lesson.planNotes||'',
         makeup_expired_unused: lesson.makeupExpiredUnused||false,
         is_extended_duration: lesson.isExtendedDuration||false,
@@ -20067,8 +20079,10 @@ function openAddManualMakeup(){
   const today=getLocalTodayKey();
   openModal('Add a make-up', `
     <p style="color:var(--text-muted);margin-bottom:12px">For emergencies and rare cases: gives the student one make-up to book, like an excused absence.</p>
+    <div class="form-field wide"><label for="mm-search">Find student</label>
+      <input id="mm-search" placeholder="Type a name, instrument or teacher…" oninput="filterManualMakeupStudents()" autocomplete="off"></div>
     <div class="form-field wide"><label for="mm-student">Student (course)</label>
-      <select id="mm-student">${studs.map(s=>`<option value="${escapeAttr(String(s.id))}">${escapeHtml(s.name||'?')} — ${escapeHtml(s.instrument||'?')} (${escapeHtml(s.teacher||'?')})</option>`).join('')}</select></div>
+      <select id="mm-student" size="6" style="height:auto">${studs.map(s=>`<option value="${escapeAttr(String(s.id))}">${escapeHtml(s.name||'?')} — ${escapeHtml(s.instrument||'?')} (${escapeHtml(s.teacher||'?')})</option>`).join('')}</select></div>
     <div class="form-field wide"><label for="mm-reason">Reason</label><input id="mm-reason" placeholder="e.g. family emergency"></div>
     <div class="form-field wide"><label for="mm-date">Date it relates to</label><input id="mm-date" type="date" value="${today}"></div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
@@ -20076,6 +20090,22 @@ function openAddManualMakeup(){
       <button class="btn btn-gold" onclick="addManualMakeup(true)">Add &amp; book now</button>
     </div>`);
 }
+// The student list in "Add a make-up" narrows as you type (name,
+// instrument or teacher), and the first match is selected.
+function filterManualMakeupStudents(){
+  const q=String(document.getElementById('mm-search')?.value||'').trim().toLowerCase();
+  const sel=document.getElementById('mm-student'); if(!sel) return;
+  let first=null, shown=0;
+  [...sel.options].forEach(o=>{
+    const hit=!q || o.textContent.toLowerCase().includes(q);
+    o.hidden=!hit; o.disabled=!hit;
+    if(hit){ shown++; if(!first) first=o; }
+  });
+  const cur=sel.selectedOptions[0];
+  if(first && (!cur || cur.hidden)) sel.value=first.value;   // keep a still-visible choice, else the first match
+  if(!shown) sel.value='';
+}
+
 function addManualMakeup(bookNow){
   const id=document.getElementById('mm-student')?.value;
   const reason=(document.getElementById('mm-reason')?.value||'').trim();
@@ -20095,6 +20125,15 @@ function addManualMakeup(bookNow){
   if(typeof renderReports==='function'){ try{ renderReports(); }catch(_){} }
   showToast('Make-up added for '+(s.name||'student')+'.');
   if(bookNow && typeof openScheduleMakeup==='function') openScheduleMakeup(credit.id);
+}
+
+// A trial lesson: flagged wasTrial (kept when the student converts, so it
+// isn't billed again), or its student is still on a trial plan.
+function isTrialLessonRecord(l){
+  if(!l) return false;
+  if(l.wasTrial) return true;
+  const st=(db.students||[]).find(s=>lessonBelongsToStudent(l, s));
+  return !!st && (st.plan==='trial' || st.plan==='group-trial');
 }
 
 function getLessonDurationMinutes(lesson){
