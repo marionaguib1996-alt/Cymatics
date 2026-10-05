@@ -416,7 +416,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-332</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-333</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -3175,8 +3175,24 @@ function autoArchiveStaleTrials(){
     const lastLessons=own.filter(l=>['attended','absent_paid','absent_excused','teacher_absent'].includes(l.status) && l.date)
       .map(l=>l.date).sort();
     const last=lastLessons[lastLessons.length-1];
-    const daysSince=Math.floor((new Date(todayKey)-new Date(last))/86400000);
-    if(daysSince<=days) return;
+    // (Mario, 4 Oct 2026) Paid for this month or later → never auto-archived.
+    const monthNow=todayKey.slice(0,7), prefix=String(s.id)+'_';
+    if(Object.keys(db.payments||{}).some(k=>db.payments[k] && k.startsWith(prefix) && k.slice(prefix.length)>=monthNow)) return;
+    // Restored (un-archived) → the clock restarts from the restore day; it
+    // used to count from the old last lesson, so the next cloud load
+    // archived a just-restored student again.
+    let clockFrom=last;
+    const restoredOn=String(s.unarchivedAt||'').slice(0,10);
+    if(restoredOn && restoredOn>clockFrom) clockFrom=restoredOn;
+    // Teacher absent on the student's NEXT lesson day (the first one after
+    // their last lesson) → one more week before archiving.
+    let allowed=days;
+    if(!isTrial && s.lesson_day && typeof nextWeekdayStrictlyAfter==='function' && typeof isTeacherAbsentOnDate==='function'){
+      const nextDay=nextWeekdayStrictlyAfter(last, s.lesson_day);
+      if(nextDay && isTeacherAbsentOnDate(s.teacher, nextDay, s.lessonTime)) allowed+=7;
+    }
+    const daysSince=Math.floor((new Date(todayKey)-new Date(clockFrom))/86400000);
+    if(daysSince<=allowed) return;
     s.status='archived';
     s._localModifiedAt=Date.now();
     if(isTrial) s.autoArchivedAsStaleTrial=true;
@@ -7638,6 +7654,8 @@ function restoreStudent(id){
   if(!s) return;
   s.status='active';
   s._localModifiedAt=Date.now(); // guards against a stale download re-archiving it
+  s.unarchivedAt=(typeof getLocalTodayKey==='function') ? getLocalTodayKey() : new Date().toISOString().slice(0,10);   // the archive clock restarts today
+  delete s.autoArchivedAsStaleMonthly; delete s.autoArchivedAsStaleTrial;
   let lessonsRestored=0;
   const restoredLessonIds=[];
   (db.lessons||[]).forEach(l=>{
@@ -8502,6 +8520,7 @@ function applyRestoreMistakenArchives(){
   if(!rows.length){ showToast('Nothing to restore.'); return; }
   rows.forEach(({s, archivedWith})=>{
     s.status='active';
+    s.unarchivedAt=(typeof getLocalTodayKey==='function') ? getLocalTodayKey() : new Date().toISOString().slice(0,10);
     delete s.autoArchivedAsStaleMonthly; delete s.autoArchivedAsStaleTrial;
     s._localModifiedAt=Date.now();
     if(typeof syncStudentUpdateToSupabase==='function'){ try{ syncStudentUpdateToSupabase(s); }catch(_){} }
@@ -11205,6 +11224,7 @@ async function pushAllDataToCloud(alreadyConfirmed){
       linked_person_id:s.linkedPersonId?String(s.linkedPersonId):null,
       custom_pay:(s.customPay!=null && s.customPay!=='')?Number(s.customPay):null,
       auto_archived: s.autoArchivedAsStaleTrial ? 'trial' : (s.autoArchivedAsStaleMonthly ? 'monthly' : null),
+      unarchived_at: s.unarchivedAt||null,
       bundle_start_date:s.bundleStartDate||null, bundle_deadline:s.bundleDeadline||null,
       discount_percent:(s.discountPercent!=null && s.discountPercent!=='')?Number(s.discountPercent):null
     };
@@ -12520,6 +12540,7 @@ async function _autoLoadFromCloudImpl(){
        bundleDeadline: s.bundle_deadline || undefined,
        autoArchivedAsStaleTrial: s.auto_archived==='trial' || undefined,
        autoArchivedAsStaleMonthly: s.auto_archived==='monthly' || undefined,
+       unarchivedAt: s.unarchived_at || undefined,
        discountPercent: (s.discount_percent!=null) ? s.discount_percent : null,
        frozen: !!s.frozen,
        // Read the paused-lesson count BACK from the cloud. Without this the
@@ -13938,6 +13959,7 @@ async function _addStudentToSupabaseImpl(student){
       linked_person_id: student.linkedPersonId ? String(student.linkedPersonId) : null,
       custom_pay: (student.customPay!=null && student.customPay!=='') ? Number(student.customPay) : null,
       auto_archived: student.autoArchivedAsStaleTrial ? 'trial' : (student.autoArchivedAsStaleMonthly ? 'monthly' : null),
+      unarchived_at: student.unarchivedAt||null,
       bundle_start_date: student.bundleStartDate||null, bundle_deadline: student.bundleDeadline||null,
       discount_percent: (student.discountPercent!=null && student.discountPercent!=='') ? Number(student.discountPercent) : null,
       frozen: !!student.frozen,
@@ -14177,6 +14199,7 @@ async function syncStudentUpdateToSupabase(student){
       linked_person_id: student.linkedPersonId ? String(student.linkedPersonId) : null,
       custom_pay: (student.customPay!=null && student.customPay!=='') ? Number(student.customPay) : null,
       auto_archived: student.autoArchivedAsStaleTrial ? 'trial' : (student.autoArchivedAsStaleMonthly ? 'monthly' : null),
+      unarchived_at: student.unarchivedAt||null,
       bundle_start_date: student.bundleStartDate||null, bundle_deadline: student.bundleDeadline||null,
       discount_percent: (student.discountPercent!=null && student.discountPercent!=='') ? Number(student.discountPercent) : null,
       frozen: !!student.frozen,
