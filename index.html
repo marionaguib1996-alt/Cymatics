@@ -416,7 +416,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-333</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-334</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -700,6 +700,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="form-field"><label for="pr-lowat">Warn me at</label><input id="pr-lowat" type="number" placeholder="3" min="0" title="Show the low-stock warning when stock falls to this or below. Set 0 to be warned only when it runs out. Leave blank for 3."></div>
     </div>
     <button class="btn btn-gold" onclick="addProduct()">+ Add product</button>
+    <button class="btn" onclick="printProductPriceList()" title="Print (or save as PDF) the products with their selling prices">🖨 Print price list</button>
     <div class="table-wrap" style="margin-top:14px"><table>
       <thead><tr><th>Product</th><th>Cost</th><th>Price</th><th>Margin</th><th>In Stock</th><th>Sold This Month</th><th>Actions</th></tr></thead>
       <tbody id="products-tbody"></tbody>
@@ -1229,15 +1230,25 @@ input::placeholder{color:var(--text-dim)}
     <small style="display:block;margin-top:8px;color:var(--text-muted)">For an admin or teacher who already had a login before this scheme — resets their account to the current one (admin: a new one-off password, shown once; teacher: their own ID as the password). For an admin this also works as a password reset — their old password stops working immediately.</small>
 
     <div style="border-top:1px solid var(--border);margin:20px 0 16px;"></div>
-    <div class="card-title" style="margin-bottom:10px">Clean Up Redundant Multi-Course Logins</div>
-    <button class="btn" onclick="cleanupRedundantLinkedLogins()">Remove Redundant Linked-Course Logins</button>
-    <small style="display:block;margin-top:8px;color:var(--text-muted)">A student in two courses now logs in once and can switch between both — before this, each course had its own separate login. Run this once to remove any old, now-redundant logins left over from before. Safe to run any time; only touches accounts that are genuinely redundant.</small>
-
-    <div style="border-top:1px solid var(--border);margin:20px 0 16px;"></div>
     <div class="card-title" style="margin-bottom:10px">Data Health Check</div>
     <button class="btn btn-gold" onclick="runDataHealthCheck()">🩺 Run Health Check</button>
     <small style="display:block;margin-top:8px;color:var(--text-muted)">Scans for data that's fallen out of sync or is inconsistent — orphaned records (a lesson whose student no longer exists, a broken multi-course link), duplicate lessons, teacher double-bookings, rooms over capacity, a frozen student still on the calendar, paid payroll periods worth double-checking for the double-session bug, unsynced records, and (when connected) duplicate or stale-linked rows in Supabase itself. Read-only: it only reports issues, it never changes or deletes anything on its own.</small>
     <div id="health-check-results" style="margin-top:14px"></div>
+
+    <div style="border-top:1px solid var(--border);margin:20px 0 16px;"></div>
+    <div class="card-title" style="margin-bottom:10px">Deletion Log</div>
+    <small style="display:block;margin-bottom:8px;color:var(--text-muted)">Every student removal recorded on this device — who, when, and why — with a full snapshot so any of them can be restored exactly as they were. Also catches students that disappear from the cloud without being deleted here (they're kept and re-uploaded automatically, and logged so you know it happened).</small>
+    <button class="btn" onclick="renderDeletionLog()">📋 Show deletion log</button>
+    <div id="deletion-log-results" style="margin-top:14px"></div>
+
+
+    <details id="cloud-repair-tools" style="margin-top:22px;border-top:1px solid var(--border);padding-top:14px">
+      <summary style="cursor:pointer;font-weight:600;padding:6px 0">🛠 Repair &amp; cleanup tools (19) — only when the Health Check points to one</summary>
+      <small style="display:block;margin:6px 0 4px;color:var(--text-muted)">One-off tools that fix a specific kind of data problem. Every one previews first and changes nothing until you confirm.</small>
+    <div style="border-top:1px solid var(--border);margin:20px 0 16px;"></div>
+    <div class="card-title" style="margin-bottom:10px">Clean Up Redundant Multi-Course Logins</div>
+    <button class="btn" onclick="cleanupRedundantLinkedLogins()">Remove Redundant Linked-Course Logins</button>
+    <small style="display:block;margin-top:8px;color:var(--text-muted)">A student in two courses now logs in once and can switch between both — before this, each course had its own separate login. Run this once to remove any old, now-redundant logins left over from before. Safe to run any time; only touches accounts that are genuinely redundant.</small>
 
     <div style="border-top:1px solid var(--border);margin:20px 0 16px;"></div>
     <div class="card-title" style="margin-bottom:10px">Reconnect Orphaned Lessons</div>
@@ -1310,12 +1321,6 @@ input::placeholder{color:var(--text-dim)}
     <small style="display:block;margin-bottom:8px;color:var(--text-muted)">Finds owed make-ups that are definitively wrong — either dated before the linked student even registered, or the lesson's own recorded name doesn't match who its id resolves to now. Both only happen from a reused/misassigned student id, never from a genuine session, so no cutoff date is needed. Same safe resolution as above: only the owed status clears, nothing is deleted.</small>
     <button class="btn" onclick="previewResolveMisassignedMakeups()">🔍 Preview (changes nothing)</button>
     <div id="misassigned-makeup-results" style="margin-top:14px"></div>
-
-    <div style="border-top:1px solid var(--border);margin:20px 0 16px;"></div>
-    <div class="card-title" style="margin-bottom:10px">Deletion Log</div>
-    <small style="display:block;margin-bottom:8px;color:var(--text-muted)">Every student removal recorded on this device — who, when, and why — with a full snapshot so any of them can be restored exactly as they were. Also catches students that disappear from the cloud without being deleted here (they're kept and re-uploaded automatically, and logged so you know it happened).</small>
-    <button class="btn" onclick="renderDeletionLog()">📋 Show deletion log</button>
-    <div id="deletion-log-results" style="margin-top:14px"></div>
 
     <div style="border-top:1px solid var(--border);margin:20px 0 16px;"></div>
     <div class="card-title" style="margin-bottom:10px">Archive Lessons Before a Date</div>
@@ -1398,6 +1403,7 @@ input::placeholder{color:var(--text-dim)}
     <small style="display:block;margin-bottom:8px;color:var(--text-muted)">Freezing removes a student's upcoming lessons and remembers how many were paused. Restoring a backup taken <b>before</b> a freeze brings those lessons back while the student stays frozen — so the teacher sees sessions for someone who isn't coming, the slot stays blocked, and payroll counts lessons that won't happen. This pauses them properly. If someone has actually returned, use <b>Resume</b> on their card instead.</small>
     <button class="btn" onclick="previewFixFrozenWithLessons()">🔍 Preview (changes nothing)</button>
     <div id="frozen-lessons-results" style="margin-top:12px"></div>
+    </details>
   </div>
 </div>
 
@@ -5372,6 +5378,29 @@ function deleteSale(saleId){
   renderProducts();
   if(typeof renderOverview==='function') renderOverview();
   showToast('Sale removed, stock restored');
+}
+
+// Printable price list (Mario, 4 Oct 2026): product names and SELLING prices
+// only — never the cost — sorted by name, in a print-ready page.
+function printProductPriceList(){
+  const items=(db.products||[]).filter(p=>p && p.name && !p.archived && (p.status||'active')!=='archived')
+    .slice().sort((a,b)=>String(a.name).localeCompare(String(b.name)));
+  if(!items.length){ showToast('No products to print yet.'); return; }
+  const esc=v=>String(v==null?'':v).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const price=v=>Math.round(Number(v)||0).toLocaleString('en-US')+' EGP';
+  const today=new Date().toLocaleDateString('en-GB',{day:'numeric',month:'long',year:'numeric'});
+  const rows=items.map(p=>'<tr><td>'+esc(p.name)+'</td><td class="p">'+price(p.price)+'</td></tr>').join('');
+  const html='<!doctype html><html><head><meta charset="utf-8"><title>Cymatics — Price List</title>'
+    +'<style>body{font-family:Arial,Helvetica,sans-serif;margin:32px;color:#111}h1{margin:0 0 4px;font-size:24px}'
+    +'.sub{color:#555;margin-bottom:20px;font-size:13px}table{width:100%;border-collapse:collapse;font-size:15px}'
+    +'th,td{border-bottom:1px solid #ccc;padding:10px 6px;text-align:left}th{border-bottom:2px solid #111}'
+    +'.p{text-align:right;white-space:nowrap}@media print{body{margin:12mm}}</style></head><body>'
+    +'<h1>Cymatics Music Academy &amp; Art Center</h1><div class="sub">Price list · '+esc(today)+'</div>'
+    +'<table><thead><tr><th>Product</th><th class="p">Price</th></tr></thead><tbody>'+rows+'</tbody></table></body></html>';
+  const w=window.open('', '_blank');
+  if(!w){ showToast('Allow pop-ups for this site to print the price list.'); return; }
+  w.document.open(); w.document.write(html); w.document.close();
+  try{ w.focus(); setTimeout(()=>{ try{ w.print(); }catch(_){} }, 250); }catch(_){}
 }
 
 function renderProducts(){
