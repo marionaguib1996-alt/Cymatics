@@ -416,7 +416,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-334</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-337</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -461,6 +461,7 @@ input::placeholder{color:var(--text-dim)}
   <div id="profit-banner"></div>
   <div id="overview-conflict-banner"></div>
   <div class="card-title">Academy Overview</div><div class="metric-grid" id="academy-kpis"></div>
+  <div id="policy-card" style="margin-top:14px"></div>
   <div class="card-title" id="monthly-kpi-title">Monthly Activity</div><div class="metric-grid" id="metrics"></div>
   <div class="two-col">
     <div class="card">
@@ -5160,6 +5161,7 @@ function addProduct(){
   const product={id:(crypto.randomUUID?crypto.randomUUID():String(Date.now())),
                  name, cost, price, qty, lowStockAt, createdAt:new Date().toISOString()};
   db.products.push(product);
+  if(qty>0) recordStockPurchaseExpense(product, qty, cost, 'Starting stock');
   save();
   if(typeof syncProductToSupabase==='function'){ try{ syncProductToSupabase(product); }catch(_){} }
   ['pr-name','pr-cost','pr-price','pr-qty','pr-lowat'].forEach(id=>{ const el=document.getElementById(id); if(el) el.value=''; });
@@ -5194,6 +5196,18 @@ function openRestockProduct(id){
   `);
 }
 
+// Buying stock is money out: record it as an expense for the month.
+function recordStockPurchaseExpense(product, qty, costEach, label){
+  const amount=Math.round((Number(qty)||0)*(Number(costEach)||0));
+  if(!(amount>0)) return null;
+  db.expenses=db.expenses||[];
+  const expense={id:Date.now()+Math.floor(Math.random()*1000), desc:label+': '+product.name+' ×'+qty+' @ '+egp(costEach),
+                 cat:'Products (stock)', amount, month:currentMonth(), productId:product.id};
+  db.expenses.push(expense);
+  if(typeof syncExpenseToSupabase==='function'){ try{ syncExpenseToSupabase(expense); }catch(_){} }
+  return expense;
+}
+
 function confirmRestockProduct(id){
   const p=(db.products||[]).find(x=>String(x.id)===String(id));
   if(!p) return;
@@ -5204,6 +5218,7 @@ function confirmRestockProduct(id){
   if(add<0){ showToast('Quantity cannot be negative.'); return; }
   p.qty=(Number(p.qty)||0)+add;
   p.cost=cost; // latest buy-in price; past sales keep their own copy
+  if(add>0) recordStockPurchaseExpense(p, add, cost, 'Restock');
   const lowRaw=(document.getElementById('rs-lowat')?.value||'').trim();
   if(lowRaw!=='') p.lowStockAt=Math.max(0, Number(lowRaw)||0);
   save();
@@ -5507,7 +5522,99 @@ function renderOtherRevenue(){
 // final decorator's #metrics loop was aligned to match it in v150. Editing
 // this function changes the profit banner and income summary but NOT the
 // five #metrics tiles or the academy KPIs — those are owned by the decorators.
+// ── POLICY REMINDER (Mario, 10 Oct 2026) ──────────────────────────────
+// New and converted students (any paid plan — not trials) must be sent the
+// academy policy. One row per PERSON (a two-course student appears once).
+// "Send on WhatsApp" opens WhatsApp with the saved message — the document
+// goes as a LINK (WhatsApp links can't attach files) — and marks it sent.
+// The sent date lives on the student (students.policy_sent_at); the message
+// and link are shared settings in the cloud (app_meta).
+const POLICY_DEFAULT_MESSAGE='Hello {name}! 🎶\nWelcome to Cymatics Music Academy & Art Center. Please take a moment to read our academy policy:\n{link}\n\nIf you have any questions, just reply here. We are happy to have you with us!';
+function policySettings(){ const p=db.policySettings||{}; return {message:p.message||POLICY_DEFAULT_MESSAGE, link:p.link||''}; }
+function policyPeople(){
+  const seen=new Set(), out=[];
+  (db.students||[]).forEach(st=>{
+    if((st.status||'active')==='archived') return;
+    if(st.plan==='trial' || st.plan==='group-trial') return;
+    const courses=[st].concat((typeof getLinkedCourses==='function') ? getLinkedCourses(st) : []);
+    const key=courses.map(c=>String(c.id)).sort().join('|');
+    if(seen.has(key)) return; seen.add(key);
+    if(courses.some(c=>c.policySentAt)) return;
+    out.push({student:st, courses});
+  });
+  return out.sort((a,b)=>String(a.student.name||'').localeCompare(String(b.student.name||'')));
+}
+function renderPolicyCard(){
+  const el=document.getElementById('policy-card'); if(!el) return;
+  if(!(session && session.role==='admin')){ el.innerHTML=''; return; }
+  const rows=policyPeople();
+  const head='<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">'
+    +'<b>📄 Policy to send'+(rows.length?' ('+rows.length+')':'')+'</b>'
+    +'<button class="btn btn-sm" onclick="openPolicySettings()">✎ Message &amp; link</button></div>';
+  if(!rows.length){ el.innerHTML=head+'<div style="color:var(--text-muted);margin-top:6px">✓ Everyone on a plan has been sent the policy.</div>'; return; }
+  el.innerHTML=head+'<div style="margin-top:8px">'+rows.map(r=>{
+      const id=escapeAttr(String(r.student.id));
+      return '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)">'
+        +'<span>'+escapeHtml(r.student.name||'?')+' <small style="color:var(--text-muted)">'+escapeHtml(r.courses.map(c=>c.instrument||'').filter(Boolean).join(' + '))+'</small></span>'
+        +'<span style="display:flex;gap:6px"><button class="btn btn-sm btn-gold" onclick="sendPolicyToStudent(\''+id+'\')">Send on WhatsApp</button>'
+        +'<button class="btn btn-sm" onclick="markPolicySent(\''+id+'\', true)">Mark sent</button></span></div>';
+    }).join('')+'</div>'
+    +'<div style="margin-top:8px"><button class="btn btn-sm" onclick="markAllCurrentPolicySent()" title="First use: everyone already with you before this feature">Mark everyone current as already sent</button></div>';
+}
+function markPolicySent(studentId, sent){
+  const st=(db.students||[]).find(x=>String(x.id)===String(studentId)); if(!st) return;
+  const courses=[st].concat((typeof getLinkedCourses==='function') ? getLinkedCourses(st) : []);
+  const today=(typeof getLocalTodayKey==='function') ? getLocalTodayKey() : new Date().toISOString().slice(0,10);
+  courses.forEach(c=>{
+    c.policySentAt = sent ? today : null;
+    if(typeof syncStudentUpdateToSupabase==='function'){ try{ syncStudentUpdateToSupabase(c); }catch(_){} }
+  });
+  save(); renderPolicyCard();
+}
+function sendPolicyToStudent(studentId){
+  const st=(db.students||[]).find(x=>String(x.id)===String(studentId)); if(!st) return;
+  const {message, link}=policySettings();
+  if(/\{link\}/.test(message) && !link){ alert('Add the policy link first (✎ Message & link).'); openPolicySettings(); return; }
+  const phone=String(st.phone1||'').trim() || String(st.phone2||'').trim();
+  if(!phone){ alert('No phone number on file for '+(st.name||'this student')+'.'); return; }
+  const first=st.first_name || String(st.name||'').split(' ')[0] || st.name || '';
+  const text=message.replace(/\{name\}/g, first).replace(/\{link\}/g, link);
+  window.open(whatsAppSendUrl(phone, text), '_blank');
+  markPolicySent(studentId, true);
+  showToast('Policy marked as sent to '+(st.name||'student')+'.');
+}
+function markAllCurrentPolicySent(){
+  const rows=policyPeople(); if(!rows.length) return;
+  if(!confirm('Mark all '+rows.length+' current students as already having the policy?\n\nUse this once, for everyone who joined before this reminder existed. From now on only new and converted students will appear.')) return;
+  rows.forEach(r=>markPolicySent(r.student.id, true));
+  showToast('Marked '+rows.length+' students as already sent.');
+}
+function openPolicySettings(){
+  const {message, link}=policySettings();
+  openModal('Policy message & link', `
+    <div class="form-field wide"><label for="pol-link">Policy document link</label>
+      <input id="pol-link" placeholder="https://… (e.g. a Google Drive link to the PDF)" value="${escapeAttr(link)}"></div>
+    <div class="form-field wide"><label for="pol-message">Message</label>
+      <textarea id="pol-message" rows="7">${escapeHtml(message)}</textarea>
+      <small style="color:var(--text-muted)">{name} = the student's first name · {link} = the link above. WhatsApp can't attach files, so the document goes as a link.</small></div>
+    <div style="text-align:right;margin-top:10px"><button class="btn btn-gold" onclick="savePolicySettings()">Save</button></div>`);
+}
+async function savePolicySettings(){
+  const link=String(document.getElementById('pol-link')?.value||'').trim();
+  const message=String(document.getElementById('pol-message')?.value||'').trim() || POLICY_DEFAULT_MESSAGE;
+  db.policySettings={message, link}; save();
+  if(window.supabaseClientV1){
+    const now=new Date().toISOString();
+    const {error}=await window.supabaseClientV1.from('app_meta').upsert([
+      {key:'policy_message', value:'', value_string:message, updated_at:now},
+      {key:'policy_link', value:'', value_string:link, updated_at:now}], {onConflict:'key'});
+    if(error){ showToast('⚠ Policy settings not saved to the cloud: '+error.message); return; }
+  }
+  closeModal(); renderPolicyCard(); showToast('Policy message saved.');
+}
+
 function renderOverview(){
+  try{ renderPolicyCard(); }catch(_){}
   const month=currentMonth();
   const monthStudents=db.students.filter(s=>(s.status||'active')!=='archived' && !s.frozen);
   let collected=0,outstanding=0;
@@ -5577,12 +5684,12 @@ function renderOverview(){
   const totalExp=monthExp.reduce((a,e)=>a+e.amount,0);
   const totalRefunds=(db.refunds||[]).filter(r=>r.month===month).reduce((a,r)=>a+Number(r.amount||0),0);
   const totalOtherRevenue=(db.otherRevenue||[]).filter(r=>r.month===month && (r.status_record||'active')!=='archived').reduce((a,r)=>a+Number(r.amount||0),0);
-  // Product sales are revenue and their cost of goods is an expense, both
-  // taken from the SALE's own recorded prices rather than the current
-  // price list — so a later price change never restates a past month.
-  // Only goods actually SOLD are counted as cost: stock still on the
-  // shelf is inventory, not a loss, and treating a restock as an expense
-  // would show a loss every time the shelf was filled.
+  // Product sales are revenue, taken from each SALE's own recorded price.
+  // Cost of goods (Mario, 5 Oct 2026 — cash basis): stock is an expense
+  // WHEN BOUGHT — restocks and a new product's starting stock are recorded
+  // as "Products (stock)" expenses — so it is NOT subtracted again at sale
+  // (that would count every item twice). A month with a big restock shows
+  // the money that actually went out that month.
   const productStats=(typeof productSoldStats==='function') ? productSoldStats(month) : {revenue:0, cost:0};
   const totalProductRevenue=productStats.revenue||0;
   const totalProductCost=productStats.cost||0;
@@ -5590,7 +5697,7 @@ function renderOverview(){
   // ones are owed. Shown as their own tiles rather than folded into the
   // plan figures, so a total always says what it is made of.
   const extras=(typeof monthExtraCharges==='function') ? monthExtraCharges(month) : {paid:0, unpaid:0, total:0, count:0};
-  const netProfit=collected+totalOtherRevenue+totalProductRevenue+extras.paid-totalTeacher-totalExp-totalProductCost-totalRefunds;
+  const netProfit=collected+totalOtherRevenue+totalProductRevenue+extras.paid-totalTeacher-totalExp-totalRefunds;   // stock purchases are in totalExp
   const totalLiabilities=pendingTeacher+totalExp+outstanding;
 
   // Profit banner
@@ -5973,7 +6080,7 @@ function sendFamilyRenewalReminder(memberIdsCsv){
     // one child's name.
     const ePiano=String.fromCodePoint(0x1F3B9), eMic=String.fromCodePoint(0x1F3A4), eSparkle=String.fromCodePoint(0x1F4AB);
     const message='Hello dear!\n'+
-      'Hope they\'re having a blast at Cymatics!\n'+
+      'Hope you\'re having a blast at Cymatics!\n'+
       '\n'+
       'Just a little reminder that the payment for '+monthName+' sessions:\n'+
       clauseBlock+'\nis due Today '+ePiano+eMic+'\n'+
@@ -11254,6 +11361,7 @@ async function pushAllDataToCloud(alreadyConfirmed){
       custom_pay:(s.customPay!=null && s.customPay!=='')?Number(s.customPay):null,
       auto_archived: s.autoArchivedAsStaleTrial ? 'trial' : (s.autoArchivedAsStaleMonthly ? 'monthly' : null),
       unarchived_at: s.unarchivedAt||null,
+      policy_sent_at: s.policySentAt||null,
       bundle_start_date:s.bundleStartDate||null, bundle_deadline:s.bundleDeadline||null,
       discount_percent:(s.discountPercent!=null && s.discountPercent!=='')?Number(s.discountPercent):null
     };
@@ -12570,6 +12678,7 @@ async function _autoLoadFromCloudImpl(){
        autoArchivedAsStaleTrial: s.auto_archived==='trial' || undefined,
        autoArchivedAsStaleMonthly: s.auto_archived==='monthly' || undefined,
        unarchivedAt: s.unarchived_at || undefined,
+       policySentAt: s.policy_sent_at || undefined,
        discountPercent: (s.discount_percent!=null) ? s.discount_percent : null,
        frozen: !!s.frozen,
        // Read the paused-lesson count BACK from the cloud. Without this the
@@ -13358,6 +13467,13 @@ async function _autoLoadFromCloudImpl(){
      (teachers?.length||0)+' teachers · '+
      (lessons?.length||0)+' lessons · '+
      (payments?.length||0)+' payments';
+   try{
+     const {data:meta}=await client.from('app_meta').select('key,value_string').in('key',['policy_message','policy_link']);
+     if(Array.isArray(meta)){
+       const m={}; meta.forEach(r=>{ m[r.key]=r.value_string||''; });
+       db.policySettings={message:m.policy_message||'', link:m.policy_link||''};
+     }
+   }catch(_){}
    window.__loadedFromCloudThisSession=true;
    if(typeof stampLastSync==='function') stampLastSync('loaded from cloud');
    // The archive and bundle-deadline rules judge students by their lessons,
@@ -13989,6 +14105,7 @@ async function _addStudentToSupabaseImpl(student){
       custom_pay: (student.customPay!=null && student.customPay!=='') ? Number(student.customPay) : null,
       auto_archived: student.autoArchivedAsStaleTrial ? 'trial' : (student.autoArchivedAsStaleMonthly ? 'monthly' : null),
       unarchived_at: student.unarchivedAt||null,
+      policy_sent_at: student.policySentAt||null,
       bundle_start_date: student.bundleStartDate||null, bundle_deadline: student.bundleDeadline||null,
       discount_percent: (student.discountPercent!=null && student.discountPercent!=='') ? Number(student.discountPercent) : null,
       frozen: !!student.frozen,
@@ -14229,6 +14346,7 @@ async function syncStudentUpdateToSupabase(student){
       custom_pay: (student.customPay!=null && student.customPay!=='') ? Number(student.customPay) : null,
       auto_archived: student.autoArchivedAsStaleTrial ? 'trial' : (student.autoArchivedAsStaleMonthly ? 'monthly' : null),
       unarchived_at: student.unarchivedAt||null,
+      policy_sent_at: student.policySentAt||null,
       bundle_start_date: student.bundleStartDate||null, bundle_deadline: student.bundleDeadline||null,
       discount_percent: (student.discountPercent!=null && student.discountPercent!=='') ? Number(student.discountPercent) : null,
       frozen: !!student.frozen,
@@ -25532,6 +25650,15 @@ function printTeacherPayrollLessons(teacherName){
     isPayrollEligibleLesson(l)
   );
   const paymentTotal=calculatePayrollAmount(eligibleLessons, profile.rate, profile);
+  // (Mario, 5 Oct 2026) How many attended lessons have a written log, and
+  // the pay counted on logged lessons only. Absent-but-paid lessons can't be
+  // logged (the log opens for attended lessons only), so they still count.
+  const logIdx=(typeof buildLessonLogIndex==='function') ? buildLessonLogIndex() : new Map();
+  const isLogged=l=>{ const lg=(typeof logForLesson==='function') ? logForLesson(logIdx, l) : null;
+    return !!lg && (typeof lessonLogHasWriting!=='function' || lessonLogHasWriting(lg)); };
+  const attendedLessons=eligibleLessons.filter(l=>l.status==='attended');
+  const loggedLessons=attendedLessons.filter(isLogged);
+  const loggedPaymentTotal=calculatePayrollAmount(eligibleLessons.filter(l=>l.status==='absent_paid' || (l.status==='attended' && isLogged(l))), profile.rate, profile);
 
   // Draw as a plain white canvas document, matching the reference layout.
   const width=520;
@@ -25539,7 +25666,7 @@ function printTeacherPayrollLessons(teacherName){
   const blankHeight=14;
   const headerHeight=44;
   const nameHeight=34;
-  const footerHeight=70;
+  const footerHeight=70+44;   // + "Logged" and "Payment (logged lessons only)" 
   const padding=24;
   const bodyHeight=lines.reduce((h,l)=>h+(l.blankBefore?blankHeight:0)+(l.rateNote?lineHeight:0)+lineHeight, 0);
   const height=headerHeight+nameHeight+bodyHeight+footerHeight+padding;
@@ -25593,6 +25720,10 @@ function printTeacherPayrollLessons(teacherName){
     +(customPayCount>0?' ('+customPayCount+' Custom Pay)':''), padding, cursorY+13);
   cursorY+=22;
   ctx.fillText('Payment: '+Math.round(paymentTotal), padding, cursorY+13);
+  cursorY+=22;
+  ctx.fillText('Logged lessons: '+loggedLessons.length, padding, cursorY+13);   // only the logged count (even if 0) — Mario
+  cursorY+=22;
+  ctx.fillText('Payment (logged lessons only): '+Math.round(loggedPaymentTotal), padding, cursorY+13);
 
   const link=document.createElement('a');
   link.download='Payroll_'+teacherName.replace(/\s+/g,'_')+'_'+month+'.png';
