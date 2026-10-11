@@ -416,7 +416,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-337</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-338</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -520,6 +520,7 @@ input::placeholder{color:var(--text-dim)}
         <div class="teacher-row-meta" style="margin-top:2px">Still checked against room and teacher availability when you save.</div>
       </div>
       </div>
+      <div class="form-field"><label for="s-level">Level</label><select id="s-level"><option value="">— Level —</option><option value="Beginner">Beginner</option><option value="Intermediate +">Intermediate +</option></select></div>
       <div class="form-field"><label for="s-plan">Payment plan</label>
         <select id="s-plan" onchange="updateStudentTimeSlotOptions()">
           <option value="trial">Trial Session (500 EGP)</option>
@@ -4463,6 +4464,7 @@ function editStudent(id){
        <input id="es-time-custom" type="time" step="300" style="max-width:150px">
        <button type="button" class="btn btn-sm" onclick="applyEditStudentCustomTime()">Use this time</button>
      </div></div>
+     <div class="form-field"><label for="es-level">Level</label><select id="es-level">${['','Beginner','Intermediate +'].map(v=>`<option value="${v}" ${(s.level||'')===v?'selected':''}>${v||'— Level —'}</option>`).join('')}</select></div>
      <div class="form-field"><label for="es-plan">Payment Plan</label><select id="es-plan" onchange="onEditStudentDayChange(${s.id})">
        ${planOptionsHtml(s.plan)}
      </select></div>
@@ -4671,6 +4673,7 @@ function saveEditStudent(id){
      });
    }
    s.plan=nextPlan;
+   s.level=document.getElementById('es-level')?.value||'';
  }
  const discountPercentRaw=document.getElementById('es-discount-percent')?.value;
  s.discountPercent=(discountPercentRaw==null||discountPercentRaw==='')?null:Math.max(0,Math.min(100,Number(discountPercentRaw)));
@@ -5611,6 +5614,16 @@ async function savePolicySettings(){
     if(error){ showToast('⚠ Policy settings not saved to the cloud: '+error.message); return; }
   }
   closeModal(); renderPolicyCard(); showToast('Policy message saved.');
+}
+
+// Short instrument names for the schedule photo: E-Guitar → Electric,
+// C-Guitar → Classic, B-Guitar → Bass; anything else as it is.
+function instrumentShortLabel(name){
+  const n=String(name||'').trim(), l=n.toLowerCase();
+  if(/e-?guitar|electric/.test(l)) return 'Electric';
+  if(/c-?guitar|classic/.test(l)) return 'Classic';
+  if(/b-?guitar|bass/.test(l)) return 'Bass';
+  return n;
 }
 
 function renderOverview(){
@@ -11362,6 +11375,7 @@ async function pushAllDataToCloud(alreadyConfirmed){
       auto_archived: s.autoArchivedAsStaleTrial ? 'trial' : (s.autoArchivedAsStaleMonthly ? 'monthly' : null),
       unarchived_at: s.unarchivedAt||null,
       policy_sent_at: s.policySentAt||null,
+      level: s.level||null,
       bundle_start_date:s.bundleStartDate||null, bundle_deadline:s.bundleDeadline||null,
       discount_percent:(s.discountPercent!=null && s.discountPercent!=='')?Number(s.discountPercent):null
     };
@@ -11984,6 +11998,7 @@ addStudent=function(){
    lessonTime:document.getElementById('s-time')?.value||'',
    isOnline:!!document.getElementById('s-online')?.checked,
    plan:document.getElementById('s-plan').value,
+   level:document.getElementById('s-level')?.value||'',
    joined_date:dmyToIso(document.getElementById('s-joined-date')?.value||''),
    created_at: new Date().toISOString(),
    skillLevel:'',
@@ -12679,6 +12694,7 @@ async function _autoLoadFromCloudImpl(){
        autoArchivedAsStaleMonthly: s.auto_archived==='monthly' || undefined,
        unarchivedAt: s.unarchived_at || undefined,
        policySentAt: s.policy_sent_at || undefined,
+       level: s.level || '',
        discountPercent: (s.discount_percent!=null) ? s.discount_percent : null,
        frozen: !!s.frozen,
        // Read the paused-lesson count BACK from the cloud. Without this the
@@ -14106,6 +14122,7 @@ async function _addStudentToSupabaseImpl(student){
       auto_archived: student.autoArchivedAsStaleTrial ? 'trial' : (student.autoArchivedAsStaleMonthly ? 'monthly' : null),
       unarchived_at: student.unarchivedAt||null,
       policy_sent_at: student.policySentAt||null,
+      level: student.level||null,
       bundle_start_date: student.bundleStartDate||null, bundle_deadline: student.bundleDeadline||null,
       discount_percent: (student.discountPercent!=null && student.discountPercent!=='') ? Number(student.discountPercent) : null,
       frozen: !!student.frozen,
@@ -14347,6 +14364,7 @@ async function syncStudentUpdateToSupabase(student){
       auto_archived: student.autoArchivedAsStaleTrial ? 'trial' : (student.autoArchivedAsStaleMonthly ? 'monthly' : null),
       unarchived_at: student.unarchivedAt||null,
       policy_sent_at: student.policySentAt||null,
+      level: student.level||null,
       bundle_start_date: student.bundleStartDate||null, bundle_deadline: student.bundleDeadline||null,
       discount_percent: (student.discountPercent!=null && student.discountPercent!=='') ? Number(student.discountPercent) : null,
       frozen: !!student.frozen,
@@ -25285,7 +25303,7 @@ function generateTeacherSchedulePhoto(teacherName, dayName, silent){
   // than a flat 45 — this is the actual fix requested: a Group session
   // shifts every slot after it to its real available time, not a wasted
   // extra 45-minute block.
-  let allSlotInfo=effectiveSlots.map(slot=>{
+  let allSlotInfo=effectiveSlots.flatMap(slot=>{
     // Times compared as MINUTES, never as text. A slot without a duration
     // (closed-to-new days) ended at "NaN:NaN", and as text "16:15" < "NaN:NaN"
     // — so every such slot "contained" the next lesson of the day: Lara Saeed
@@ -25312,9 +25330,27 @@ function generateTeacherSchedulePhoto(teacherName, dayName, silent){
     });
     const shown=lesson||continuing;
     const matchedStudent=shown ? (db.students||[]).find(s=>lessonBelongsToStudent(shown, s)) : null;
-    return {
-      time:slot.time,
-      timeEnd:slotEnd,
+    // A lesson starting INSIDE the slot (a custom time, e.g. 6:15 in the
+    // 6:00 slot) used to fill the slot AND come back as its own row — the
+    // same lesson twice. Now: the free bit as "N min gap", then the lesson
+    // once, at its real time.
+    // A lesson that ENDS partway through this slot (e.g. Lara at a custom
+    // 6:00–6:45 against the 6:15–7:00 slot) is already shown at its own
+    // time — repeating it here made one lesson look like two slots. The
+    // slot's leftover is just a gap ("15 min gap" for 6:45–7:00).
+    if(!lesson && continuing){
+      const contDur=getLessonDurationMinutes(continuing);
+      const contEndMin=timeToMinutes(continuing.time)+contDur;
+      if(contEndMin<slotEndMin){
+        return [{time:addSlotMinutes(continuing.time, contDur), timeEnd:slotEnd, gap:true, gapMinutes:slotEndMin-contEndMin, occupied:false}];
+      }
+    }
+    const gapMin=lesson ? timeToMinutes(lesson.time)-slotStartMin : 0;
+    const gapRow=gapMin>0 ? [{time:slot.time, timeEnd:lesson.time, gap:true, gapMinutes:gapMin, occupied:false}] : [];
+    return gapRow.concat([{
+      time:gapMin>0 ? lesson.time : slot.time,
+      timeEnd:gapMin>0 ? addSlotMinutes(lesson.time, getLessonDurationMinutes(lesson)) : slotEnd,
+      level:matchedStudent ? (matchedStudent.level||'') : '',
       // REAL lessons only, like the Calendar. slot.occupiedBy comes from the
       // booking-availability view — a student's regular weekly slot
       // projected forward, a slot HELD for someone who hasn't renewed, or
@@ -25333,7 +25369,7 @@ function generateTeacherSchedulePhoto(teacherName, dayName, silent){
       // earlier — it's already shown on that earlier row, so repeating it
       // here would just duplicate the same booking.
       isContinuation:!!continuing
-    };
+    }]);
   // A 90-minute session is KEPT on both rows. It was dropped from the
   // second one as a duplicate, which left that slot looking unaccounted
   // for — a teacher reading the photo sees a name at 5:30 and a blank at
@@ -25387,6 +25423,7 @@ function generateTeacherSchedulePhoto(teacherName, dayName, silent){
       time:pieceStart,
       timeEnd:addSlotMinutes(pieceStart, pieceLen),
       studentName:l.student,
+      level:matchedStudent ? (matchedStudent.level||'') : '',
       instrument:l.instrument||matchedStudent?.instrument||'',
       paid:paidSet.has(String(matchedStudent?matchedStudent.id:l.studentId)),
       isWeekly:!!(matchedStudent && typeof isWeeklyPlan==='function' && isWeeklyPlan(matchedStudent.plan)),
@@ -25427,15 +25464,29 @@ function generateTeacherSchedulePhoto(teacherName, dayName, silent){
 
   const firstOccupied2=allSlotInfo.findIndex(s=>s.occupied);
   const lastOccupied2=allSlotInfo.length-1-[...allSlotInfo].reverse().findIndex(s=>s.occupied);
-  const rows=allSlotInfo.slice(firstOccupied2, lastOccupied2+1);
+  // Wherever one row ENDS before the next BEGINS (e.g. Lara at a custom
+  // 6:00–6:45, then the 7:00 slot), a short "15 min gap" row goes between,
+  // so the time jump is visible instead of looking like a longer lesson.
+  const rows=[];
+  allSlotInfo.slice(firstOccupied2, lastOccupied2+1).forEach(r=>{
+    const prev=rows[rows.length-1];
+    if(prev && !prev.gap && !r.gap && prev.timeEnd && r.time && timeToMinutes(r.time)>timeToMinutes(prev.timeEnd)){
+      rows.push({time:prev.timeEnd, timeEnd:r.time, gap:true, gapMinutes:timeToMinutes(r.time)-timeToMinutes(prev.timeEnd), occupied:false});
+    }
+    rows.push(r);
+  });
 
   // Draw as canvas image
   const timeColWidth=110;
   const cellColWidth=390;
   const headerHeight=54;
   const rowHeight=50;
+  // Gap rows are drawn SHORT, so a 15-minute gap looks like what it is.
+  const GAP_ROW_HEIGHT=24;
+  const rowHeightOf=r=>r && r.gap ? GAP_ROW_HEIGHT : rowHeight;
   const width=timeColWidth+cellColWidth;
-  const height=headerHeight+rows.length*rowHeight;
+  const rowY=[]; { let acc=headerHeight; rows.forEach(r=>{ rowY.push(acc); acc+=rowHeightOf(r); }); }
+  const height=headerHeight+rows.reduce((a,r)=>a+rowHeightOf(r),0);
 
   const canvas=document.createElement('canvas');
   canvas.width=width;
@@ -25460,7 +25511,8 @@ function generateTeacherSchedulePhoto(teacherName, dayName, silent){
 
   // Rows
   rows.forEach((row,i)=>{
-    const y=headerHeight+i*rowHeight;
+    const rowHeight=rowHeightOf(row);   // this row's own height (short for gaps)
+    const y=rowY[i];
 
     // Time cell (left) — white background, black border, black text
     ctx.fillStyle='#ffffff';
@@ -25503,12 +25555,25 @@ function generateTeacherSchedulePhoto(teacherName, dayName, silent){
       ctx.strokeRect(timeColWidth,y,cellColWidth,rowHeight);
       ctx.fillStyle='#000000';
     }
-    if(row.studentName){
+    if(row.gap){
+      ctx.fillStyle='#e9e9e9';
+      ctx.fillRect(timeColWidth,y,cellColWidth,rowHeight);
+      ctx.strokeStyle='#000000';
+      ctx.strokeRect(timeColWidth,y,cellColWidth,rowHeight);
+      ctx.fillStyle='#555555';
+      ctx.font='italic 12px Arial, sans-serif';
+      ctx.textAlign='center';
+      ctx.textBaseline='middle';
+      ctx.fillText(row.gapMinutes+' min gap', timeColWidth+cellColWidth/2, y+rowHeight/2);
+    } else if(row.studentName){
       ctx.font='bold 14px Arial, sans-serif';
       ctx.textAlign='center';
       ctx.textBaseline='middle';
-      const instTag=(teacherInstruments.length>1 && row.instrument) ? ' '+instrumentEmoji(row.instrument) : '';
-      ctx.fillText(row.studentName+instTag+(row.isGroup?' (Group)':'')+(row.isMakeup?' (Make-Up)':''), timeColWidth+cellColWidth/2, y+rowHeight/2);
+      // "(Beginner Electric)": level, then the instrument when the teacher
+      // teaches more than one (Mario, 10 Oct 2026).
+      const parts=[row.level||'', (teacherInstruments.length>1 && row.instrument) ? instrumentShortLabel(row.instrument) : ''].filter(Boolean);
+      const tag=parts.length ? ' ('+parts.join(' ')+')' : '';
+      ctx.fillText(row.studentName+tag+(row.isGroup?' (Group)':'')+(row.isMakeup?' (Make-Up)':''), timeColWidth+cellColWidth/2, y+rowHeight/2);
     }
   });
 
