@@ -416,7 +416,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-338</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-340</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -26276,6 +26276,106 @@ function renderRevenueTrendChart(){
   if(typeof setInterval==='function') setInterval(ensureLive, 5000);
 
   window.__cloudFirst={splitByAge, parseTarget, diffFields, labelOf, describe, triageAndMaybeRefresh, refreshFromCloud, refreshNow};
+})();
+</script>
+
+<script>
+// ── SELF-UPDATE (Mario, 23 Oct 2026) ─────────────────────────────────────
+// Teachers' logs stopped reaching the cloud, yet the current version saves
+// them correctly. The phones were running OLD copies: a browser tab or a
+// home-screen icon left open keeps running the version it first loaded,
+// for weeks, and nothing ever told it a new one existed. Versions before
+// v321 said "saved" even when the cloud refused the log.
+//
+// Now every open copy checks the live site for a newer version — shortly
+// after opening (8 seconds), when you come back to the tab, and every 10 minutes —
+// and reloads itself onto it. Never mid-edit (dialog open, typing, a save
+// still on its way): it waits and tries again. Unsent changes are kept in
+// this device's queue across the reload and go out afterwards, as always.
+(function(){
+  const CHECK_EVERY_MS=10*60*1000, FIRST_CHECK_MS=8*1000, RETRY_BUSY_MS=20*1000, MIN_GAP_MS=2*60*1000;
+  const TRIED_KEY='cym_update_tried', DONE_KEY='cym_updated_to';
+  const S={
+    // Only on the real site. Test pages (http://localhost) never fetch.
+    enabled: (typeof location!=='undefined' && location.protocol==='https:'),
+    fetchText: async function(){
+      const r=await fetch(location.pathname+'?v='+Date.now(), {cache:'no-store'});
+      if(!r.ok) throw new Error('HTTP '+r.status);
+      return r.text();
+    },
+    reload: function(){ location.reload(); },
+    pending:null, lastCheckAt:0, retryTimer:null
+  };
+  function currentVersion(){
+    const el=document.getElementById('build-version');
+    const m=/v[0-9.]+-[0-9]+/.exec(el ? el.textContent : '');
+    return m ? m[0] : '';
+  }
+  function versionIn(html){
+    const m=/id="build-version"[^>]*>\s*(v[0-9.]+-[0-9]+)\s*</.exec(String(html||''));
+    return m ? m[1] : '';
+  }
+  // Build number after the dash; reload only onto a NEWER one, so a stale
+  // copy served by a cache can never roll a device backwards.
+  function buildNo(v){ const m=/-(\d+)$/.exec(String(v||'')); return m ? Number(m[1]) : 0; }
+  function busy(){
+    const m=document.getElementById('app-modal');
+    if(m && m.style.display==='flex') return true;
+    const a=document.activeElement;
+    if(a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName||'')) return true;
+    return (window.__writesInFlight||0)>0 || !!window.__cloudFirstRunning;
+  }
+  function ss(){ try{ return window.sessionStorage; }catch(_){ return null; } }
+  function tryApply(){
+    if(!S.pending) return false;
+    if(busy()){
+      clearTimeout(S.retryTimer);
+      S.retryTimer=setTimeout(tryApply, RETRY_BUSY_MS);
+      return false;
+    }
+    // One reload per new version per tab. If the page that comes back is
+    // still old (a cache in the way), stop rather than reload in a loop.
+    const st=ss();
+    try{ if(st && st.getItem(TRIED_KEY)===S.pending) return false; }catch(_){}
+    try{ if(st){ st.setItem(TRIED_KEY, S.pending); st.setItem(DONE_KEY, S.pending); } }catch(_){}
+    S.reload();
+    return true;
+  }
+  async function check(force){
+    if(!S.enabled && !force) return null;
+    if(typeof fetch!=='function' && !S.__testFetch) return null;
+    if(!force && Date.now()-S.lastCheckAt < MIN_GAP_MS) return null;
+    S.lastCheckAt=Date.now();
+    let latest='';
+    try{ latest=versionIn(await S.fetchText()); }catch(_){ return null; }   // offline: try later
+    const mine=currentVersion();
+    if(!latest || !mine || buildNo(latest)<=buildNo(mine)) return latest||null;
+    S.pending=latest;
+    tryApply();
+    return latest;
+  }
+  S.FIRST_CHECK_MS=FIRST_CHECK_MS;
+  S.check=check; S.tryApply=tryApply; S.versionIn=versionIn; S.currentVersion=currentVersion; S.busy=busy;
+  window.__selfUpdate=S;
+
+  // After an update: one short line, so the person knows why it reloaded.
+  try{
+    const st=ss(), done=st && st.getItem(DONE_KEY);
+    if(done && done===currentVersion()){
+      st.removeItem(DONE_KEY);
+      setTimeout(()=>{ if(typeof showToast==='function') showToast('Updated to the latest version ('+done+') ✓'); }, 1500);
+    }
+  }catch(_){}
+
+  if(typeof setTimeout==='function') setTimeout(()=>check(), FIRST_CHECK_MS);
+  if(typeof setInterval==='function') setInterval(()=>{ if(document.visibilityState!=='hidden') check(); }, CHECK_EVERY_MS);
+  if(document.addEventListener){
+    document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='visible') check(); });
+  }
+  if(window.addEventListener){
+    // A phone restoring the page from memory (back button, app switcher)
+    window.addEventListener('pageshow', e=>{ if(e && e.persisted) check(true); });
+  }
 })();
 </script>
 
