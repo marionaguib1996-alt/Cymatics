@@ -416,7 +416,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-340</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-341</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -7988,11 +7988,13 @@ function renderReports(){
       const next=unbooked.slice().sort((a,b)=>String(a.date).localeCompare(String(b.date)))[0];
       const expired=isMakeupExpired(next);
       let actionsHtml, daysRemainingHtml;
-      actionsHtml=`<button class="btn btn-sm btn-gold" onclick="openScheduleMakeup(${next.id})">${expired?'Schedule Anyway':'Schedule'}</button>`;
+      // Past 60 days is only a LABEL (Mario, 23 Oct 2026): nothing expires
+      // by itself — it stays owed until you press Expire.
+      actionsHtml=`<button class="btn btn-sm btn-gold" onclick="openScheduleMakeup(${next.id})">Schedule</button>`;
       if(expired){
-        actionsHtml=`<span class="badge badge-red" style="margin-right:4px" title="Original lesson was ${escapeAttr(formatDateDMY(next.date))} — over ${MAKEUP_EXPIRY_DAYS} days ago">⏰ Expired</span>`+actionsHtml+
-          ` <button class="btn btn-sm btn-danger" onclick="markMakeupExpired(${next.id})">Close Out</button>`;
-        daysRemainingHtml='<span class="badge badge-red">Expired</span>';
+        actionsHtml=actionsHtml+
+          ` <button class="btn btn-sm btn-danger" title="Missed lesson ${escapeAttr(formatDateDMY(next.date))} — over ${MAKEUP_EXPIRY_DAYS} days ago" onclick="markMakeupExpired(${next.id})">Expire</button>`;
+        daysRemainingHtml=`<span class="badge badge-red">Over ${MAKEUP_EXPIRY_DAYS} days</span>`;
       } else {
         const daysSince=Math.floor((new Date(todayKey)-new Date(next.date))/86400000);
         const daysLeft=Math.max(0, MAKEUP_EXPIRY_DAYS-daysSince);
@@ -16315,7 +16317,9 @@ function getTeacherWorkspaceData(){
     if(session.teacherId && l.teacher_id) return l.teacher_id===session.teacherId;
     if(scopeName) return String(l.teacher||l.teacherName||'').toLowerCase()===scopeName;
     return isDemoMode; // demo: show all
-  }).filter(l=>(l.status_record||'active')!=='archived');
+  }).filter(l=>(l.status_record||'active')!=='archived')
+    // "+ Add make-up" records are not lessons the teacher had — never listed.
+    .filter(l=>!isManualMakeupRecord(l));
 
   // A teacher's "month" is their PAY PERIOD (25th of the previous month
   // through the 24th), everywhere — the lesson count they see has to be
@@ -16625,6 +16629,7 @@ function renderTeacherWorkspace(){
     && String(l.teacher||'').trim().toLowerCase()===owedTeacherName
     && typeof isMakeupOwed==='function' && isMakeupOwed(l)
     && !(typeof findMakeupLessonFor==='function' && findMakeupLessonFor(l.id))
+    && teacherSeesMakeup(l)
   ).length;
 
   const weekEl=document.getElementById('teacher-sessions-week');
@@ -16646,13 +16651,19 @@ function renderTeacherWorkspace(){
   // count, so the list and the number always agree.
   const makeupsList=document.getElementById('teacher-makeups-list');
   if(makeupsList){
+    // Manual make-ups the admin chose to show join the list (date only).
+    const shownManual=(db.lessons||[]).filter(l=>isManualMakeupRecord(l) && l.notesShowToTeacher
+      && (l.status_record||'active')!=='archived' && isMakeupOwed(l)
+      && String(l.teacher||'').trim().toLowerCase()===owedTeacherName);
     const owed=data.allLessons.filter(l=>(l.status_record||'active')!=='archived' && isMakeupOwed(l))
+      .concat(shownManual)
       .sort((a,b)=>String(a.date||'').localeCompare(String(b.date||'')));
     if(!owed.length){
       makeupsList.innerHTML='<div class="teacher-empty">No make-ups currently owed. 🎉</div>';
     } else {
       makeupsList.innerHTML=owed.map(l=>{
-        const reason = l.status==='teacher_absent' ? 'Teacher was absent'
+        const reason = isManualMakeupRecord(l) ? 'Make-up owed'
+          : l.status==='teacher_absent' ? 'Teacher was absent'
           : l.status==='absent_excused' ? 'Excused absence' : 'Missed session';
         return `<div class="teacher-row">
           <div>
@@ -17762,10 +17773,14 @@ function openAdminStudentProfile(studentId,studentName){
   const homeworkHistory=studentLogs.filter(l=>l.homework);
   const currentGoal=studentLogs.find(l=>l.nextLessonGoal)?.nextLessonGoal || 'No current goal set.';
 
-  const studentLessons=(db.lessons||[])
-    .filter(l=>lessonBelongsToStudent(l, student) && (l.status_record||'active')!=='archived')
+  const ownLessons=(db.lessons||[])
+    .filter(l=>lessonBelongsToStudent(l, student) && (l.status_record||'active')!=='archived');
+  // The teacher's view of a student: "+ Add make-up" records never appear
+  // as lessons, and count as owed only if the admin chose to show them.
+  const asTeacher=!!(session && session.role==='teacher');
+  const studentLessons=ownLessons.filter(l=>!(asTeacher && isManualMakeupRecord(l)))
     .sort((a,b)=>String(b.date||'').localeCompare(String(a.date||'')));
-  const makeupsOwed=studentLessons.filter(l=>isMakeupOwed(l)).length;
+  const makeupsOwed=ownLessons.filter(l=>isMakeupOwed(l) && (!asTeacher || teacherSeesMakeup(l))).length;
 
   const month=currentMonth();
   const paidThisMonth=isStudentPaidForMonth(student, month);
@@ -20273,6 +20288,9 @@ function openAddManualMakeup(){
       <select id="mm-student" size="6" style="height:auto">${studs.map(s=>`<option value="${escapeAttr(String(s.id))}">${escapeHtml(s.name||'?')} — ${escapeHtml(s.instrument||'?')} (${escapeHtml(s.teacher||'?')})</option>`).join('')}</select></div>
     <div class="form-field wide"><label for="mm-reason">Reason</label><input id="mm-reason" placeholder="e.g. family emergency"></div>
     <div class="form-field wide"><label for="mm-date">Date it relates to</label><input id="mm-date" type="date" value="${today}"></div>
+    <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-top:6px;cursor:pointer">
+      <input id="mm-show-teacher" type="checkbox" style="width:auto"> Let the teacher see it in their make-ups owed (date only)</label>
+    <small style="display:block;color:var(--text-muted);margin-top:2px">Off: the teacher never sees this make-up. Its make-up session, once booked, shows to them like any lesson.</small>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
       <button class="btn" onclick="addManualMakeup(false)">Add as owed (book later)</button>
       <button class="btn btn-gold" onclick="addManualMakeup(true)">Add &amp; book now</button>
@@ -20294,6 +20312,30 @@ function filterManualMakeupStudents(){
   if(!shown) sel.value='';
 }
 
+// A make-up added with "+ Add make-up" (Mario, 23 Oct 2026). These are the
+// ACADEMY's business — an emergency the teacher was still paid for, or a
+// make-up re-entered after a data loss — so the teacher never sees the
+// record. Optionally (the "show to teacher" tick, the same cloud field as a
+// lesson note's) it appears in the teacher's Make-ups Owed list with its
+// DATE only — no reason. The flag is not a cloud column, so a manual
+// make-up is also recognised by its note.
+function isManualMakeupRecord(l){
+  return !!(l && (l.manualMakeup || /^Manual make-up:/i.test(String(l.notes||''))));
+}
+function teacherSeesMakeup(l){
+  return !isManualMakeupRecord(l) || !!l.notesShowToTeacher;
+}
+function setManualMakeupTeacherVisible(lessonId, visible){
+  const l=(db.lessons||[]).find(x=>String(x.id)===String(lessonId));
+  if(!l || !isManualMakeupRecord(l)) return;
+  l.notesShowToTeacher=!!visible;
+  save();
+  if(typeof syncLessonUpdateToSupabase==='function'){ try{ syncLessonUpdateToSupabase(l); }catch(_){} }
+  showToast(visible ? 'The teacher now sees this make-up (date only).' : 'Hidden from the teacher.');
+  if(window._makeupDetailsStudentId!=null && typeof showMakeupDetails==='function')
+    showMakeupDetails(window._makeupDetailsStudentId, window._makeupDetailsIdsCsv);
+}
+
 function addManualMakeup(bookNow){
   const id=document.getElementById('mm-student')?.value;
   const reason=(document.getElementById('mm-reason')?.value||'').trim();
@@ -20304,7 +20346,8 @@ function addManualMakeup(bookNow){
   const credit={
     id:Date.now(), studentId:s.id, student:s.name, teacher:s.teacher||'', instrument:s.instrument||'',
     date, month:date.slice(0,7), time:'', status:'absent_excused', status_record:'active',
-    notes:'Manual make-up: '+reason, manualMakeup:true
+    notes:'Manual make-up: '+reason, manualMakeup:true,
+    notesShowToTeacher: !!document.getElementById('mm-show-teacher')?.checked
   };
   db.lessons=db.lessons||[]; db.lessons.push(credit);
   save();
@@ -22658,13 +22701,17 @@ function isMakeupExpired(lesson){
 function markMakeupExpired(lessonId){
   const l=(db.lessons||[]).find(x=>x.id===lessonId);
   if(!l) return;
-  if(!confirm('Mark this makeup as expired without being used? The student will no longer be able to book it.')) return;
+  if(!confirm('Expire this make-up? It will no longer be owed, and the student can no longer book it.')) return;
   l.makeupResolved=true;
   l.makeupExpiredUnused=true;
   save();
   if(typeof renderReports==='function') renderReports();
-  showToast('Makeup marked as expired');
+  showToast('Make-up expired');
   if(typeof syncLessonUpdateToSupabase==='function') syncLessonUpdateToSupabase(l);
+  if(window._makeupDetailsStudentId!=null && document.getElementById('app-modal')?.style.display==='flex' && typeof showMakeupDetails==='function'){
+    const left=String(window._makeupDetailsIdsCsv||'').split(',').filter(x=>x && String(x)!==String(lessonId)).join(',');
+    if(left) showMakeupDetails(window._makeupDetailsStudentId, left); else closeModal();
+  }
 }
 
 // Date-specific room capacity check (distinct from the weekly-recurring-slot check —
@@ -23004,7 +23051,7 @@ function showMakeupDetails(studentId, idsCsv){
   const rowsHtml=lessons.map(l=>{
     const expired=isMakeupExpired(l);
     let daysHtml;
-    if(expired){ daysHtml='<span class="badge badge-red">Expired</span>'; }
+    if(expired){ daysHtml=`<span class="badge badge-red">Over ${MAKEUP_EXPIRY_DAYS} days</span>`; }
     else {
       const daysSince=Math.floor((new Date(todayKey)-new Date(l.date))/86400000);
       const daysLeft=Math.max(0, MAKEUP_EXPIRY_DAYS-daysSince);
@@ -23016,7 +23063,7 @@ function showMakeupDetails(studentId, idsCsv){
       <td>${escapeHtml(l.instrument||student?.instrument||'—')}</td>
       <td>${escapeHtml(statusLabel(l.status))}</td>
       <td>${daysHtml}</td>
-      <td><button class="btn btn-sm btn-gold" onclick="closeModal();openScheduleMakeup(${l.id})">Schedule</button></td>
+      <td style="white-space:nowrap"><button class="btn btn-sm btn-gold" onclick="closeModal();openScheduleMakeup(${l.id})">Schedule</button>${expired?` <button class="btn btn-sm btn-danger" onclick="markMakeupExpired(${l.id})">Expire</button>`:''}${isManualMakeupRecord(l)?`<div style="margin-top:4px;font-size:11px;color:var(--text-muted)">Added by you · teacher ${l.notesShowToTeacher?'sees the date':'doesn\'t see it'} · <a href="#" onclick="event.preventDefault();setManualMakeupTeacherVisible(${l.id},${l.notesShowToTeacher?'false':'true'})">${l.notesShowToTeacher?'hide':'show'}</a></div>`:''}</td>
     </tr>`;
   }).join('');
   openModal('Make-Ups — '+escapeHtml(student?.name||''), `
