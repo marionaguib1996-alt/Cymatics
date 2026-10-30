@@ -416,7 +416,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-343</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-344</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -6096,7 +6096,7 @@ function sendFamilyRenewalReminder(memberIdsCsv){
     // A parent number covering several children shouldn't be greeted by
     // one child's name.
     const ePiano=String.fromCodePoint(0x1F3B9), eMic=String.fromCodePoint(0x1F3A4), eSparkle=String.fromCodePoint(0x1F4AB);
-    const message='Hello dear!\n'+
+    const message=finalizeReminderNotes('Hello dear!\n'+
       'Hope you\'re having a blast at Cymatics!\n'+
       '\n'+
       'Just a little reminder that the payment for '+monthName+' sessions:\n'+
@@ -6108,7 +6108,7 @@ function sendFamilyRenewalReminder(memberIdsCsv){
       'Can\'t wait to see them at the next session! '+eSparkle+
       absenceNotes+
       deductionNotes+
-      perStudent.map(p=>makeupsLeftNote(p.courses, p.firstName)).join('');
+      perStudent.map(p=>makeupsLeftNote(p.courses, p.firstName)).join(''));
 
     const win=window.open(whatsAppSendUrl(phone, message), '_blank');
     if(!win){
@@ -6525,6 +6525,36 @@ function makeupsLeftNote(students, forName){
   return '\n\nKindly note that we still have '+n+' make-up session'+(n===1?'':'s')+' left'+(forName?' for '+forName:'')+'.';
 }
 
+// Mario (30 Oct 2026): the make-ups line joins the note before it instead
+// of opening a second "Kindly note…":
+//   "…wasn't made-up ☺+ we still have 3 make-up sessions left."
+// Several children's lines (a family message) become one phrase
+// ("…2 make-up sessions left for Ali and 1 for Sara"). With no note before
+// it, it stays its own "Kindly note that we still have…" line.
+function finalizeReminderNotes(message){
+  const RE=/^Kindly note that we still have (\d+) make-up sessions? left(?: for (.+?))?\.$/;
+  const paras=String(message||'').split('\n\n');
+  const items=[]; let at=-1;
+  const kept=[];
+  paras.forEach(p=>{
+    const m=RE.exec(p.trim());
+    if(m){ if(at<0) at=kept.length; items.push({n:Number(m[1]), name:m[2]||''}); }
+    else kept.push(p);
+  });
+  if(!items.length) return message;
+  const unit=n=>n+' make-up session'+(n===1?'':'s');
+  let phrase='we still have '+unit(items[0].n)+' left'+(items[0].name?' for '+items[0].name:'');
+  const rest=items.slice(1).map(it=>it.n+(it.name?' for '+it.name:''));
+  if(rest.length) phrase+=(rest.length>1 ? ', '+rest.slice(0,-1).join(', ') : '')+' and '+rest[rest.length-1];
+  const prev=at>0 ? kept[at-1] : '';
+  if(at>0 && /^Kindly note\b/.test(prev.trim())){
+    kept[at-1]=prev.replace(/\s+$/,'')+'+ '+phrase+'.';
+  } else {
+    kept.splice(at, 0, 'Kindly note that '+phrase+'.');
+  }
+  return kept.join('\n\n');
+}
+
 function sendRenewalReminder(studentId){
   try{
     const student=(db.students||[]).find(s=>s.id===studentId);
@@ -6552,9 +6582,10 @@ function sendRenewalReminder(studentId){
       const def=BUNDLE_PLANS[student.plan];
       const amount=(typeof getStudentPlanAmount==='function') ? getStudentPlanAmount(student) : def.price;
       const eMusicNote=String.fromCodePoint(0x1F3B6);
-      const msg='Hi! Hope you enjoyed your '+def.label+' plan '+eMusicNote+'\n\n'
+      let msg='Hi! Hope you enjoyed your '+def.label+' plan '+eMusicNote+'\n\n'
         +'Ready for another round? The '+def.label+' plan is '+Math.round(amount)+' EGP for '+def.sessions+' lessons — just send the payment to lock in your next batch.'
         +makeupsLeftNote([student]);
+      msg=finalizeReminderNotes(msg);
       const url=(typeof whatsAppSendUrl==='function') ? whatsAppSendUrl(phone, msg) : ('https://wa.me/'+phone+'?text='+encodeURIComponent(msg));
       window.open(url, '_blank');
       db.remindersSent=db.remindersSent||{};
@@ -6598,7 +6629,7 @@ function sendRenewalReminder(studentId){
     // correctly because the link goes straight to web.whatsapp.com rather
     // than through a redirector that corrupts multi-byte characters.
     const ePiano=String.fromCodePoint(0x1F3B9), eMic=String.fromCodePoint(0x1F3A4), eSparkle=String.fromCodePoint(0x1F4AB);
-    const message='Hello '+firstName+'!\n'+
+    const message=finalizeReminderNotes('Hello '+firstName+'!\n'+
       'Hope you\'re having a blast at Cymatics!\n'+
       '\n'+
       'Just a little reminder that your payment for '+monthName+' sessions ('+lessonCount+' lessons on the '+dateList+') is due Today '+ePiano+eMic+'\n'+
@@ -6609,7 +6640,7 @@ function sendRenewalReminder(studentId){
       'Can\'t wait to see you at the next session! '+eSparkle+
       absenceNote+
       deductionNoteBlock+
-      makeupsLeftNote([student]);
+      makeupsLeftNote([student]));
 
     // See whatsAppSendUrl: web.whatsapp.com avoids both the "open the app"
     // interstitial and the wa.me redirect that mangles some emoji.
@@ -6669,7 +6700,7 @@ function sendConsolidatedRenewalReminder(primary, linkedPending, phone){
       : (primary.first_name||(primary.name||'').split(' ')[0]||primary.name);
 
     const ePiano=String.fromCodePoint(0x1F3B9), eMic=String.fromCodePoint(0x1F3A4), eSparkle=String.fromCodePoint(0x1F4AB);
-    const message='Hello '+firstName+'!\n'+
+    const message=finalizeReminderNotes('Hello '+firstName+'!\n'+
       'Hope you\'re having a blast at Cymatics!\n'+
       '\n'+
       'Just a little reminder that your payment for '+monthName+' sessions:\n'+
@@ -6681,7 +6712,7 @@ function sendConsolidatedRenewalReminder(primary, linkedPending, phone){
       'Can\'t wait to see you at the next session! '+eSparkle+
       absenceNotes+
       deductionNotes+
-      makeupsLeftNote(allCourses);
+      makeupsLeftNote(allCourses));
 
     const win=window.open(whatsAppSendUrl(phone, message), '_blank');
     if(!win){
