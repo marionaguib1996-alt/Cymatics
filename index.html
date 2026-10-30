@@ -416,7 +416,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-341</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-342</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -25398,6 +25398,8 @@ function generateTeacherSchedulePhoto(teacherName, dayName, silent){
       time:gapMin>0 ? lesson.time : slot.time,
       timeEnd:gapMin>0 ? addSlotMinutes(lesson.time, getLessonDurationMinutes(lesson)) : slotEnd,
       level:matchedStudent ? (matchedStudent.level||'') : '',
+      age:matchedStudent ? studentAge(matchedStudent) : '',
+      isTrialPlan:!!(matchedStudent && (matchedStudent.plan==='trial' || matchedStudent.plan==='group-trial')),
       // REAL lessons only, like the Calendar. slot.occupiedBy comes from the
       // booking-availability view — a student's regular weekly slot
       // projected forward, a slot HELD for someone who hasn't renewed, or
@@ -25471,6 +25473,8 @@ function generateTeacherSchedulePhoto(teacherName, dayName, silent){
       timeEnd:addSlotMinutes(pieceStart, pieceLen),
       studentName:l.student,
       level:matchedStudent ? (matchedStudent.level||'') : '',
+      age:matchedStudent ? studentAge(matchedStudent) : '',
+      isTrialPlan:!!(matchedStudent && (matchedStudent.plan==='trial' || matchedStudent.plan==='group-trial')),
       instrument:l.instrument||matchedStudent?.instrument||'',
       paid:paidSet.has(String(matchedStudent?matchedStudent.id:l.studentId)),
       isWeekly:!!(matchedStudent && typeof isWeeklyPlan==='function' && isWeeklyPlan(matchedStudent.plan)),
@@ -25616,10 +25620,14 @@ function generateTeacherSchedulePhoto(teacherName, dayName, silent){
       ctx.font='bold 14px Arial, sans-serif';
       ctx.textAlign='center';
       ctx.textBaseline='middle';
-      // "(Beginner Electric)": level, then the instrument when the teacher
-      // teaches more than one (Mario, 10 Oct 2026).
-      const parts=[row.level||'', (teacherInstruments.length>1 && row.instrument) ? instrumentShortLabel(row.instrument) : ''].filter(Boolean);
-      const tag=parts.length ? ' ('+parts.join(' ')+')' : '';
+      // "(Beginner Electric, 9 yrs)": the instrument when the teacher
+      // teaches more than one (Mario, 10 Oct 2026); level and age on TRIAL
+      // students only — the teacher is meeting them for the first time
+      // (Mario, 30 Oct 2026).
+      const parts=[row.isTrialPlan ? (row.level||'') : '', (teacherInstruments.length>1 && row.instrument) ? instrumentShortLabel(row.instrument) : ''].filter(Boolean);
+      let inner=parts.join(' ');
+      if(row.isTrialPlan && row.age!=='' && row.age!=null) inner+=(inner?', ':'')+row.age+' yrs';
+      const tag=inner ? ' ('+inner+')' : '';
       ctx.fillText(row.studentName+tag+(row.isGroup?' (Group)':'')+(row.isMakeup?' (Make-Up)':''), timeColWidth+cellColWidth/2, y+rowHeight/2);
     }
   });
