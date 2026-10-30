@@ -416,7 +416,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-342</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-343</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -660,6 +660,10 @@ input::placeholder{color:var(--text-dim)}
   <div class="card">
     <div class="card-title">Renewals Due</div>
     <div class="teacher-row-meta" style="margin-bottom:12px">Monthly and Group Monthly students who have attended their last logged session for the current month. Shows the payment due for next month.</div>
+    <div style="margin-bottom:12px"><select id="renewals-day-filter" onchange="renderRenewalsDue()" style="width:auto;min-width:160px">
+      <option value="">All days</option>
+      <option>Friday</option><option>Saturday</option><option>Sunday</option><option>Monday</option><option>Tuesday</option><option>Wednesday</option><option>Thursday</option>
+    </select></div>
     <div id="renewals-due-list"></div>
   </div>
   <div class="card">
@@ -6144,6 +6148,17 @@ function renewalDaySortKey(row){
   return best;
 }
 
+// Every lesson day a Renewals row covers: the student's own, each linked
+// course's, and every sibling's in a family row.
+function renewalRowDays(row){
+  const days=new Set();
+  const addS=st=>{ if(st && st.lesson_day) days.add(String(st.lesson_day).trim()); };
+  addS(row && row.s);
+  ((row && row.courses)||[]).forEach(addS);
+  ((row && row.members)||[]).forEach(m=>{ addS(m && m.s); ((m && m.courses)||[]).forEach(addS); });
+  return days;
+}
+
 function renderRenewalsDue(){
   const host=document.getElementById('renewals-due-list');
   if(!host) return;
@@ -6298,11 +6313,17 @@ function renderRenewalsDue(){
     return (ka.day-kb.day) || ka.time.localeCompare(kb.time) || (a.s.name||'').localeCompare(b.s.name||'');
   });
 
-  if(!familyRows.length){
-    host.innerHTML='<div class="empty"><div class="empty-icon">✅</div><div class="empty-text">No renewals due right now.</div></div>';
+  // Day filter (Mario, 30 Oct 2026): a row shows when ANY of its courses or
+  // family members has a lesson on the chosen day.
+  const dayFilter=String(document.getElementById('renewals-day-filter')?.value||'');
+  const shownRows=dayFilter ? familyRows.filter(r=>renewalRowDays(r).has(dayFilter)) : familyRows;
+
+  if(!shownRows.length){
+    host.innerHTML='<div class="empty"><div class="empty-icon">✅</div><div class="empty-text">'+
+      (dayFilter && familyRows.length ? 'No renewals due on '+escapeHtml(dayFilter)+'.' : 'No renewals due right now.')+'</div></div>';
     return;
   }
-  host.innerHTML=familyRows.map(({s,courses,lessonCount,amount,remindedAt,isCustomPay,deductionCount,nextMonthName,needsLessonDay,isBundleRow,sessionsCompleted,sessionsTotal,isFamily,members})=>{
+  host.innerHTML=shownRows.map(({s,courses,lessonCount,amount,remindedAt,isCustomPay,deductionCount,nextMonthName,needsLessonDay,isBundleRow,sessionsCompleted,sessionsTotal,isFamily,members})=>{
     // ── FAMILY ROW: siblings on one parent number ──────────────────────
     // One combined reminder (the parent gets a single message for all
     // their children), but a SEPARATE Renew button per student. Renewing
