@@ -416,7 +416,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-347</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-349</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -3816,11 +3816,11 @@ function togglePayment(id){
 
   if(siblings.length){
     const all=[student].concat(siblings);
-    const total=all.reduce((sum,c)=>sum+((typeof getStudentPlanAmount==='function')?getStudentPlanAmount(c):0),0);
+    const total=all.reduce((sum,c)=>sum+amountDueFor(c, month),0);
     const breakdown=all.map(c=>
       '<div style="display:flex;justify-content:space-between;padding:3px 0">'
       +'<span>'+escapeHtml(c.instrument||'?')+' <span style="color:var(--text-muted)">· '+escapeHtml(c.teacher||'?')+'</span></span>'
-      +'<span style="font-weight:600">'+egp((typeof getStudentPlanAmount==='function')?getStudentPlanAmount(c):0)+'</span></div>'
+      +'<span style="font-weight:600">'+egp(amountDueFor(c, month))+'</span></div>'
     ).join('');
     const allIds=all.map(c=>c.id).join(',');
     openModal('Mark as Paid', `
@@ -3934,14 +3934,36 @@ function syncLessonPaidFlags(studentId, monthKey, isPaid){
 // A renewal's payment snapshot = what was actually charged for it, split
 // across the months its sessions fall in (by session count; any rounding
 // remainder goes to the first month).
-function recordChargedAmount(studentId, months, dates, amount){
+function splitChargeByMonth(months, dates, amount){
   const total=Math.max(0, Math.round(Number(amount)||0));
   const ms=(months||[]).slice().sort();
-  if(!ms.length) return;
+  if(!ms.length) return {ms, shares:[]};
   const counts=ms.map(m=>(dates||[]).filter(d=>String(d).slice(0,7)===m).length||0);
   const n=counts.reduce((a,b)=>a+b,0)||ms.length;
   const shares=ms.map((m,i)=>Math.floor(total*(counts[i]||(n===ms.length?1:0))/n));
   shares[0]+=total-shares.reduce((a,b)=>a+b,0);
+  return {ms, shares};
+}
+// Mario (6 Nov 2026): renewed but NOT marked paid → the price the renewal
+// worked out (deductions, discount, Custom Pay — all of which are used up
+// by the renewal itself) is remembered on the student per month, so
+// marking them paid later from the Students tab charges exactly that and
+// not a fresh full-price figure. Synced (students.amounts_due).
+function recordAmountDue(studentId, months, dates, amount){
+  const st=(db.students||[]).find(x=>String(x.id)===String(studentId));
+  if(!st) return;
+  const {ms, shares}=splitChargeByMonth(months, dates, amount);
+  st.amountsDue=Object.assign({}, st.amountsDue||{});
+  ms.forEach((m,i)=>{ st.amountsDue[m]=shares[i]; });
+}
+function amountDueFor(st, month){
+  const due=st && st.amountsDue && st.amountsDue[month];
+  if(due!=null && due!=='' && !Number.isNaN(Number(due))) return Number(due);
+  return (typeof getStudentPlanAmount==='function' && st) ? getStudentPlanAmount(st) : 0;
+}
+function recordChargedAmount(studentId, months, dates, amount){
+  const {ms, shares}=splitChargeByMonth(months, dates, amount);
+  if(!ms.length) return;
   const st=(db.students||[]).find(x=>String(x.id)===String(studentId));
   ms.forEach((m,i)=>{
     const key=studentId+'_'+m;
@@ -3965,7 +3987,7 @@ function recordPaymentSnapshot(studentId, monthKey, isPaid){
     return;
   }
   const s=(db.students||[]).find(st=>String(st.id)===String(studentId));
-  db.paymentAmounts[key]=(typeof getStudentPlanAmount==='function' && s) ? getStudentPlanAmount(s) : 0;
+  db.paymentAmounts[key]=s ? amountDueFor(s, monthKey) : 0;
   if(s) db.paymentStudentNames[key]=s.name||'';
   if(typeof syncPaymentAmountToSupabase==='function'){
     try{ syncPaymentAmountToSupabase(key, db.paymentAmounts[key], db.paymentStudentNames[key]); }catch(_){}
@@ -4269,7 +4291,7 @@ function studentAmountForMonth(st, month){
   const key=st.id+'_'+month;
   const snap=(db.paymentAmounts||{})[key];
   if((db.payments||{})[key] && snap!=null && snap!=='' && !Number.isNaN(Number(snap))) return Number(snap);
-  return getStudentPlanAmount(st);
+  return amountDueFor(st, month);
 }
 
 // Correct the amount actually paid for the month on screen (e.g. a payment
@@ -5734,6 +5756,7 @@ function openAddEventStudents(eventId){
   const list=eventCandidates(ev);
   openModal('Add students — '+ev.name, `
     <input id="evs-search" placeholder="Search by name…" oninput="filterEventStudents()" style="margin-bottom:8px">
+    ${list.length ? `<label style="display:flex;align-items:center;gap:8px;padding:6px 0;font-weight:600;cursor:pointer"><input type="checkbox" id="evs-all" style="width:auto" onchange="selectAllEventStudents(this.checked)"> Select all</label>` : ''}
     <div id="evs-list" style="max-height:50vh;overflow:auto">${list.length ? list.map(r=>`
       <label class="evs-row" data-name="${escapeAttr(String(r.student.name||'').toLowerCase())}" style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);cursor:pointer">
         <input type="checkbox" class="evs-box" value="${escapeAttr(String(r.student.id))}" style="width:auto">
@@ -5741,6 +5764,31 @@ function openAddEventStudents(eventId){
       </label>`).join('') : '<div style="color:var(--text-muted)">Every active student is already in this event.</div>'}</div>
     <div style="text-align:right;margin-top:10px"><button class="btn btn-gold" onclick="addSelectedEventStudents('${jsString(String(ev.id))}')">Add selected</button></div>`);
   setTimeout(()=>document.getElementById('evs-search')?.focus(), 50);
+}
+// Ticks every student currently shown (respects the search box).
+function selectAllEventStudents(on){
+  document.querySelectorAll('#evs-list .evs-row').forEach(r=>{
+    if(r.style.display==='none') return;
+    const b=r.querySelector('.evs-box'); if(b) b.checked=!!on;
+  });
+}
+function openMarkAllEventPaid(eventId){
+  const ev=findEvent(eventId); if(!ev) return;
+  const unpaid=(ev.participants||[]).filter(p=>!p.paid);
+  if(!unpaid.length){ showToast('Everyone has already paid.'); return; }
+  openModal('Mark all paid — '+ev.name, `
+    <div style="margin-bottom:10px;color:var(--text-muted)">Marks all ${unpaid.length} student${unpaid.length===1?'':'s'} who haven't paid as paid ${egp(Number(ev.fee)||0)} each.</div>
+    <div class="form-field wide"><label for="evp-all-method">Paid by</label><select id="evp-all-method"><option>Instapay</option><option>Cash</option></select></div>
+    <div style="text-align:right;margin-top:10px"><button class="btn btn-gold" onclick="confirmMarkAllEventPaid('${jsString(String(ev.id))}')">Mark ${unpaid.length} paid</button></div>`);
+}
+function confirmMarkAllEventPaid(eventId){
+  const ev=findEvent(eventId); if(!ev) return;
+  const method=String(document.getElementById('evp-all-method')?.value||'');
+  const today=(typeof getLocalTodayKey==='function') ? getLocalTodayKey() : new Date().toISOString().slice(0,10);
+  let n=0;
+  (ev.participants||[]).forEach(p=>{ if(p.paid) return; p.paid=true; p.amount=Number(ev.fee)||0; p.method=method; p.paidAt=today; n++; });
+  closeModal(); saveEvent(ev);
+  showToast(n+' marked paid.');
 }
 function filterEventStudents(){
   const q=String(document.getElementById('evs-search')?.value||'').trim().toLowerCase();
@@ -5832,7 +5880,7 @@ function renderEventsPage(){
     }).join('');
     return `<div class="card" style="margin-bottom:10px">${head}
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0">${fbtn('all','All ('+sm.total+')')}${fbtn('unpaid','Not paid ('+sm.unpaid+')')}${fbtn('paid','Paid ('+sm.paid+')')}
-        <span style="flex:1"></span><button class="btn btn-sm btn-gold" onclick="openAddEventStudents('${id}')">+ Add students</button>
+        <span style="flex:1"></span>${sm.unpaid?`<button class="btn btn-sm" onclick="openMarkAllEventPaid('${id}')">✓ Mark all paid</button>`:''}<button class="btn btn-sm btn-gold" onclick="openAddEventStudents('${id}')">+ Add students</button>
         <button class="btn btn-sm btn-danger" onclick="deleteEvent('${id}')">Delete event</button></div>
       ${rows || '<div style="color:var(--text-muted);padding:6px 0">'+(sm.total?'Nobody in this list.':'No students yet — press "+ Add students".')+'</div>'}
     </div>`;
@@ -7132,7 +7180,7 @@ function addLesson(studentId){
      <p style="color:var(--text-muted);margin-bottom:16px">${escapeHtml(s.name)} already has a lesson scheduled on ${escapeHtml(formatDateDMY(date))}. Is this that same session, or a genuinely separate one?</p>
      <div style="display:flex;flex-direction:column;gap:10px">
        <button class="btn btn-gold" onclick="resolveLessonLogCollision(${existing.id}, ${s.id}, '${status}', 'existing')">Mark the existing lesson as ${escapeHtml(STATUS_LABELS[status]||status)}</button>
-       <button class="btn" onclick="resolveLessonLogCollision(${existing.id}, ${s.id}, '${status}', 'new')">This is a separate session — add a new one</button>
+       <button class="btn" onclick="resolveLessonLogCollision(${existing.id}, ${s.id}, '${status}', 'new')">This is a separate session — add it (they become one 90-minute double session)</button>
      </div>`);
    return;
  }
@@ -7175,18 +7223,32 @@ function finishAddLesson(s, date, status, res){
  // and the session just added is charged separately through the amount
  // entered a moment ago. The teacher is paid 2x automatically because the
  // kept lesson is now a double.
- const neighbour=(db.lessons||[]).find(x=>
+ // Mario (6 Nov 2026): ANY of their lessons that day with the same teacher
+ // counts — not only one exactly 45 minutes away. A lesson added from the
+ // quick ledger takes their regular time, usually the very time of the
+ // lesson already there, so the old "exactly 45 min apart" rule never
+ // joined them and the day showed two separate lessons. A neighbour
+ // exactly one slot away is still preferred; an absence (excused /
+ // teacher absent) is never merged into.
+ const sameDay=(db.lessons||[]).filter(x=>
    x!==lesson &&
    lessonBelongsToStudent(x, s) &&
    x.date===lesson.date &&
    (x.status_record||'active')!=='archived' &&
    String(x.teacher||'')===String(lesson.teacher||'') &&
    !x.isDoubleSession && !lesson.isDoubleSession &&
-   x.time && lesson.time &&
-   Math.abs(timeToMinutes(x.time)-timeToMinutes(lesson.time))===SESSION_DURATION_MINUTES
+   ['scheduled','attended','absent_paid'].includes(x.status||'scheduled')
  );
+ const neighbour=sameDay.find(x=>x.time && lesson.time &&
+     Math.abs(timeToMinutes(x.time)-timeToMinutes(lesson.time))===SESSION_DURATION_MINUTES)
+   || sameDay[0];
  if(neighbour){
-   const earlier = timeToMinutes(neighbour.time)<=timeToMinutes(lesson.time) ? neighbour.time : lesson.time;
+   const adjacent=!!(neighbour.time && lesson.time && Math.abs(timeToMinutes(neighbour.time)-timeToMinutes(lesson.time))===SESSION_DURATION_MINUTES);
+   // Adjacent: start at the earlier of the two. Otherwise the lesson already
+   // there keeps its time and the double runs on from it.
+   const earlier = adjacent
+     ? (timeToMinutes(neighbour.time)<=timeToMinutes(lesson.time) ? neighbour.time : lesson.time)
+     : (neighbour.time || lesson.time);
    neighbour.time=earlier;
    neighbour.isDoubleSession=true;
    neighbour.isExtendedDuration=true;   // occupies 90 minutes everywhere
@@ -7424,7 +7486,7 @@ if(sum){sum.innerHTML=`<div class="metric"><div class="metric-label">Lessons</di
      }
      return `
    <tr>
-    <td>${formatLedgerDate(l.date)}${l.time?' <span class="badge badge-blue">'+escapeHtml(formatTime12h(l.time))+'</span>':''}${l.isDoubleSession?' <span class="badge badge-purple" title="Absorbs a missed lesson as a double session">Double Session</span>':''}${(l.makeupForLessonId && !l.isDoubleSession)?' <span class="badge badge-purple" title="This session is a makeup for a previously missed lesson">🔁 Makeup Session</span>':''}</td>
+    <td>${formatLedgerDate(l.date)}${l.time?' <span class="badge badge-blue">'+escapeHtml(formatTime12h(l.time))+'</span>':''}${l.isDoubleSession?' <span class="badge badge-purple" title="Absorbs a missed lesson as a double session">Double Session'+(makeupTagFor(l)?escapeHtml(makeupTagFor(l)):'')+'</span>':''}${(l.makeupForLessonId && !l.isDoubleSession)?' <span class="badge badge-purple" title="This session is a makeup for a previously missed lesson">🔁 Makeup Session</span>':''}</td>
     <td>${escapeHtml(l.student)}${planBadges?' '+planBadges:''}${typeof linkedCourseMarkerFor==='function'?linkedCourseMarkerFor(l):''}</td>
     <td>${escapeHtml(l.instrument)}</td>
     <td>${escapeHtml(l.teacher)}</td>
@@ -7632,6 +7694,13 @@ function editLesson(id){
      This is a <b>double session</b> — 90 minutes, covering ${Number(l.makeupCreditsDue)||1} make-up${(Number(l.makeupCreditsDue)||1)===1?'':'s'}.
      ${(l.status==='attended'||l.status==='absent_paid') ? 'It has been attended, so the credit was used — undoing gives it back.' : 'Not attended yet, so no credit has been used.'}
    </div>
+   <div class="form-field wide" style="margin-bottom:10px"><label for="el-double-split">When marked Absent &amp; Paid</label>
+     <select id="el-double-split">
+       <option value="both">Both sessions absent &amp; paid (teacher paid for 2)</option>
+       <option value="one_makeup">1 absent &amp; paid + 1 make-up owed (teacher paid for 1)</option>
+       <option value="one_attended">1 attended + 1 absent &amp; paid (teacher paid for 2)</option>
+     </select>
+     <small style="color:var(--text-muted);display:block;margin-top:2px">Used only when the status above is Absent &amp; Paid. The last two split it into two 45-minute sessions.</small></div>
    <button class="btn" style="width:100%" onclick="undoDoubleSession('${escapeAttr(String(l.id))}')">
      ↩ Make it a single session again<div style="font-size:11px;opacity:0.75;font-weight:400">Returns the make-up credit and keeps the lesson where it is</div>
    </button>` : ''}
@@ -7706,6 +7775,10 @@ function saveEditLesson(id){
    unpaid=attendedLessonIsUnpaid(l);
  }
  l.unpaid=unpaid;
+ // A double session marked Absent & Paid for only part of it (Mario,
+ // 6 Nov 2026) becomes two 45-minute sessions.
+ const splitMode=document.getElementById('el-double-split')?.value||'both';
+ if(l.isDoubleSession && s==='absent_paid' && splitMode!=='both') splitDoubleSessionForAbsence(l, splitMode);
  save();
  closeModal();
  renderLessons(); renderTeachers(); renderOverview();
@@ -11655,6 +11728,7 @@ async function pushAllDataToCloud(alreadyConfirmed){
       auto_archived: s.autoArchivedAsStaleTrial ? 'trial' : (s.autoArchivedAsStaleMonthly ? 'monthly' : null),
       unarchived_at: s.unarchivedAt||null,
       policy_sent_at: s.policySentAt||null,
+      amounts_due: s.amountsDue||{},
       level: s.level||null,
       bundle_start_date:s.bundleStartDate||null, bundle_deadline:s.bundleDeadline||null,
       discount_percent:(s.discountPercent!=null && s.discountPercent!=='')?Number(s.discountPercent):null
@@ -12981,6 +13055,7 @@ async function _autoLoadFromCloudImpl(){
        autoArchivedAsStaleMonthly: s.auto_archived==='monthly' || undefined,
        unarchivedAt: s.unarchived_at || undefined,
        policySentAt: s.policy_sent_at || undefined,
+       amountsDue: (s.amounts_due && typeof s.amounts_due==='object') ? s.amounts_due : {},
        level: s.level || '',
        discountPercent: (s.discount_percent!=null) ? s.discount_percent : null,
        frozen: !!s.frozen,
@@ -14425,6 +14500,7 @@ async function _addStudentToSupabaseImpl(student){
       auto_archived: student.autoArchivedAsStaleTrial ? 'trial' : (student.autoArchivedAsStaleMonthly ? 'monthly' : null),
       unarchived_at: student.unarchivedAt||null,
       policy_sent_at: student.policySentAt||null,
+      amounts_due: student.amountsDue||{},
       level: student.level||null,
       bundle_start_date: student.bundleStartDate||null, bundle_deadline: student.bundleDeadline||null,
       discount_percent: (student.discountPercent!=null && student.discountPercent!=='') ? Number(student.discountPercent) : null,
@@ -14667,6 +14743,7 @@ async function syncStudentUpdateToSupabase(student){
       auto_archived: student.autoArchivedAsStaleTrial ? 'trial' : (student.autoArchivedAsStaleMonthly ? 'monthly' : null),
       unarchived_at: student.unarchivedAt||null,
       policy_sent_at: student.policySentAt||null,
+      amounts_due: student.amountsDue||{},
       level: student.level||null,
       bundle_start_date: student.bundleStartDate||null, bundle_deadline: student.bundleDeadline||null,
       discount_percent: (student.discountPercent!=null && student.discountPercent!=='') ? Number(student.discountPercent) : null,
@@ -18788,7 +18865,7 @@ function renderStudentScheduleView(){
     <div class="teacher-list">${renderTeacherRows(recentLessons.map(l=>`
       <div class="teacher-row">
         <div>
-          <div class="teacher-row-title">${escapeHtml(formatTeacherLessonDate(l.date))}${l.time?' '+escapeHtml(formatTime12h(l.time)):''}${l.makeupForLessonId?' <span class="badge badge-purple" style="font-size:9px">Make-Up</span>':''}</div>
+          <div class="teacher-row-title">${escapeHtml(formatTeacherLessonDate(l.date))}${l.time?' '+escapeHtml(formatTime12h(l.time)):''}${makeupTagFor(l)?' <span class="badge badge-purple" style="font-size:9px">'+escapeHtml(makeupTagFor(l).replace(/[()]/g,'').trim())+'</span>':''}</div>
           <div class="teacher-row-meta">${escapeHtml(l.instrument||'')} - ${escapeHtml(teacherFacingStatusText(l.status))}</div>
         </div>
       </div>`), 'No lesson history yet.')}</div>`;
@@ -19549,9 +19626,10 @@ function confirmRenewal(id){
       if(typeof syncLessonPaidFlags==='function') syncLessonPaidFlags(student.id, m, markPaid);
       if(typeof syncPaymentToggleToSupabase==='function') syncPaymentToggleToSupabase(student.id, m, markPaid, markPaid?paymentMethod:null);
     });
-    if(markPaid && chargedPricing){
+    if(chargedPricing){
       const newDates=[]; for(let i=0;i<count;i++){ const d=addDaysToDateString(firstNewDate, i*7); if(d) newDates.push(d); }
-      recordChargedAmount(student.id, Array.from(coveredMonths), newDates, chargedPricing.amount);
+      recordAmountDue(student.id, Array.from(coveredMonths), newDates, chargedPricing.amount);
+      if(markPaid) recordChargedAmount(student.id, Array.from(coveredMonths), newDates, chargedPricing.amount);
     }
     // Custom Pay is a one-time override for THIS renewal only — clear it
     // now that the renewal has actually been processed, so it doesn't
@@ -19763,6 +19841,7 @@ function confirmRenewalCustomDates(id, student){
   });
   // Record what was actually CHARGED (deductions, discount, Custom Pay
   // included) — the snapshot re-derived the full plan price instead.
+  if(pricing) recordAmountDue(student.id, Array.from(coveredMonths), dates, pricing.amount);
   if(markPaid) recordChargedAmount(student.id, Array.from(coveredMonths), dates, pricing.amount);
   // The teacher-absence credit was deducted from this renewal's price, so
   // it's settled — exactly as a regular renewal does. Without this the
@@ -20810,7 +20889,7 @@ function getTeacherBookingsByTime(teacherName, dayName, targetDate, excludeStude
     (db.lessons||[]).some(l=>
       lessonBelongsToStudent(l, s) &&
       l.status==='scheduled' && (l.status_record||'active')!=='archived' &&
-      !l.makeupForLessonId &&
+      !isWholeMakeupSession(l) &&
       l.date && l.date>=todayKeyForProjection
     ) &&
     // AND only if targetDate is genuinely beyond what we already know —
@@ -20826,7 +20905,7 @@ function getTeacherBookingsByTime(teacherName, dayName, targetDate, excludeStude
       const ownScheduled=(db.lessons||[]).filter(l=>
         lessonBelongsToStudent(l, s) &&
         l.status==='scheduled' && (l.status_record||'active')!=='archived' &&
-        !l.makeupForLessonId
+        !isWholeMakeupSession(l)
       ).map(l=>l.date).filter(Boolean);
       if(!ownScheduled.length) return false;
       const latestKnown=ownScheduled.reduce((a,b)=>a>b?a:b);
@@ -20838,7 +20917,7 @@ function getTeacherBookingsByTime(teacherName, dayName, targetDate, excludeStude
       // they are not coming to). A new weekly occurrence is at least 7 days
       // after their latest lesson of any kind.
       const latestAny=(db.lessons||[]).filter(l=>
-        lessonBelongsToStudent(l, s) && (l.status_record||'active')!=='archived' && !l.makeupForLessonId && l.date
+        lessonBelongsToStudent(l, s) && (l.status_record||'active')!=='archived' && !isWholeMakeupSession(l) && l.date
       ).map(l=>l.date).reduce((a,b)=>a>b?a:b, '');
       return !latestAny || targetDate>=addDaysToDateString(latestAny, 7);
     })()
@@ -22428,7 +22507,7 @@ function renderCalendarPage(){
         const isGroup=matchedStudent && isGroupPlan(matchedStudent.plan);
         const trialTag=isTrial ? ' 🎓' : '';
         const groupTag=l.isDoubleSession ? ' ⏱ 90min' : (isGroup ? ' 👥 1hr' : '');
-        const makeupTag=l.makeupForLessonId ? ' (Make-Up)' : '';
+        const makeupTag=makeupTagFor(l);
         // Only tag the instrument when this teacher covers more than one —
         // for a single-instrument teacher every cell would carry the same
         // emoji, which is noise rather than information.
@@ -22542,7 +22621,7 @@ function renderCalendarPage(){
         const contIsGroup=contMatchedStudent && isGroupPlan(contMatchedStudent.plan);
         const contTrialTag=contIsTrial ? ' 🎓' : '';
         const contGroupTag=continuing.isDoubleSession ? ' ⏱ 90min' : (contIsGroup ? ' 👥 1hr' : '');
-        const contMakeupTag=continuing.makeupForLessonId ? ' (Make-Up)' : '';
+        const contMakeupTag=makeupTagFor(continuing);
         const contNameBlock=`${escapeHtml(continuing.student||'Student')}${contTrialTag}${contGroupTag}${contMakeupTag}${contMatchedStudent && contMatchedStudent.isOnline ? ' 💻' : ''}${contStudentMissing?' ⚠':''}`;
         const contCellStyle=contIsTrial
           ? {bg:'#1b5e20',color:'#a5d6a7',border:'1px solid #2e7d32'}
@@ -23249,6 +23328,40 @@ function canUndoDoubleSession(lessonId){
   return !!(l && l.isDoubleSession);
 }
 
+// Splits a double session into two 45-minute sessions:
+//   one_makeup   — first: Absent & Paid; second: Excused (a make-up owed)
+//   one_attended — first: Attended (keeps the lesson log); second: Absent & Paid
+// When the double was the student's lesson + ONE make-up, the make-up link
+// moves to the second half; the first half is their own lesson again.
+function splitDoubleSessionForAbsence(l, mode){
+  if(!l || !l.isDoubleSession) return null;
+  const second={
+    id:Date.now()+Math.floor(Math.random()*1000),
+    studentId:l.studentId, student:l.student, instrument:l.instrument||'', teacher:l.teacher||'',
+    date:l.date, time:l.time ? addSlotMinutes(l.time, SESSION_DURATION_MINUTES) : '',
+    status: mode==='one_attended' ? 'absent_paid' : 'absent_excused',
+    month:l.month || String(l.date||'').slice(0,7),
+    timeOverridden:true,
+    notes:'Second half of a double session'
+  };
+  const credits=Number(l.makeupCreditsDue)||1;
+  if(l.makeupForLessonId!=null && credits<2){
+    second.makeupForLessonId=l.makeupForLessonId;
+    l.makeupForLessonId=null;
+  }
+  l.isDoubleSession=false;
+  l.isExtendedDuration=false;
+  l.makeupCreditsDue=null;
+  l.status = mode==='one_attended' ? 'attended' : 'absent_paid';
+  if(l.status==='attended' && typeof attendedLessonIsUnpaid==='function') l.unpaid=attendedLessonIsUnpaid(l);
+  db.lessons.push(second);
+  if(typeof syncLessonToSupabase==='function'){ try{ syncLessonToSupabase(second); }catch(_){} }
+  if(typeof showToast==='function') showToast(mode==='one_attended'
+    ? 'Split into two sessions: 1 attended + 1 absent & paid.'
+    : 'Split into two sessions: 1 absent & paid + 1 make-up owed.');
+  return second;
+}
+
 function undoDoubleSession(lessonId){
   const l=(db.lessons||[]).find(x=>String(x.id)===String(lessonId));
   if(!l || !l.isDoubleSession){ showToast('That lesson is not a double session.'); return; }
@@ -23741,6 +23854,20 @@ function updateMakeupSeparateDaySlots(missedLessonId){
 //     lesson → this session is standing in for the normal one, so only the
 //     other half is a make-up. 1 credit.
 // Returns 1 or 2. Never returns more owed lessons than actually exist.
+// Mario (6 Nov 2026): a double session booked onto the student's own
+// lesson is that lesson + ONE make-up — not a make-up session as a whole.
+// Only a double built from two make-ups (credit 2) is entirely a make-up.
+function isWholeMakeupSession(l){
+  if(!l || l.makeupForLessonId==null || l.makeupForLessonId==='') return false;
+  if(l.isDoubleSession) return (Number(l.makeupCreditsDue)||1)>=2;
+  return true;
+}
+function makeupTagFor(l){
+  if(isWholeMakeupSession(l)) return ' (Make-Up)';
+  if(l && l.isDoubleSession && l.makeupForLessonId!=null && l.makeupForLessonId!=='') return ' (+1 Make-Up)';
+  return '';
+}
+
 function doubleSessionCreditCost(student, date){
   if(!student || !date) return 1;
   const WD=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
@@ -25713,7 +25840,7 @@ function generateTeacherSchedulePhoto(teacherName, dayName, silent){
       isWeekly:!!(matchedStudent && typeof isWeeklyPlan==='function' && isWeeklyPlan(matchedStudent.plan)),
       isTrial:!!(matchedStudent && matchedStudent.plan==='trial'),
       isGroup:!!(matchedStudent && isGroupPlan(matchedStudent.plan)),
-      isMakeup:!!(shown && shown.makeupForLessonId),
+      isMakeup:isWholeMakeupSession(shown), makeupTag:shown ? makeupTagFor(shown) : '',
       occupied:!!shown,
       // True when this row is only covered by a session that started
       // earlier — it's already shown on that earlier row, so repeating it
@@ -25781,7 +25908,7 @@ function generateTeacherSchedulePhoto(teacherName, dayName, silent){
       isWeekly:!!(matchedStudent && typeof isWeeklyPlan==='function' && isWeeklyPlan(matchedStudent.plan)),
       isTrial:!!(matchedStudent && matchedStudent.plan==='trial'),
       isGroup:!!(l.isExtendedDuration || (matchedStudent && isGroupPlan(matchedStudent.plan))),
-      isMakeup:!!l.makeupForLessonId,
+      isMakeup:isWholeMakeupSession(l), makeupTag:makeupTagFor(l),
       occupied:true
     });
     }
@@ -25929,7 +26056,7 @@ function generateTeacherSchedulePhoto(teacherName, dayName, silent){
       let inner=parts.join(' ');
       if(row.isTrialPlan && row.age!=='' && row.age!=null) inner+=(inner?', ':'')+row.age+' yrs';
       const tag=inner ? ' ('+inner+')' : '';
-      ctx.fillText(row.studentName+tag+(row.isGroup?' (Group)':'')+(row.isMakeup?' (Make-Up)':''), timeColWidth+cellColWidth/2, y+rowHeight/2);
+      ctx.fillText(row.studentName+tag+(row.isGroup?' (Group)':'')+(row.makeupTag!=null ? row.makeupTag : (row.isMakeup?' (Make-Up)':'')), timeColWidth+cellColWidth/2, y+rowHeight/2);
     }
   });
 
