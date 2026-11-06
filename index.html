@@ -416,7 +416,7 @@ input::placeholder{color:var(--text-dim)}
       <div class="logo-text">Cymatics</div>
       <div class="logo-sub">Music Academy</div>
     </div>
-    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-344</span>
+    <span id="build-version" title="Build version — check this against what your developer tells you when reporting an issue, to confirm you're on the file they mean" style="font-size:10px;color:var(--text-muted);opacity:0.5;margin-left:8px;align-self:flex-end;padding-bottom:2px">v2026.07.13-346</span>
   </div>
   <div style="display:flex;align-items:center;gap:0">
     <div id="sync-health-badge" onclick="syncHealthClick()" title="Click to sync now" style="cursor:pointer;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;margin-right:12px;display:inline-flex;align-items:center;gap:6px;background:var(--surface2,#242220);border:1px solid var(--border)">
@@ -446,6 +446,7 @@ input::placeholder{color:var(--text-dim)}
   <button class="nav-btn" onclick="switchPage('lessons',this)">✅ Attendance</button>
   <button class="nav-btn" onclick="switchPage('calendar',this)">📅 Calendar</button>
   <button class="nav-btn" onclick="switchPage('practice',this)">🎹 Practice Sessions</button>
+  <button class="nav-btn" onclick="switchPage('events',this)">🎤 Events</button>
   <span class="nav-divider" aria-hidden="true"></span>
   <button class="nav-btn" onclick="switchPage('expenses',this)">🧾 Finances</button>
   <button class="nav-btn" onclick="switchPage('reports',this)">📈 Reports</button>
@@ -936,6 +937,21 @@ input::placeholder{color:var(--text-dim)}
 </div>
 
 <!-- REPORTS -->
+<div id="page-events" class="page">
+  <div class="card">
+    <div class="card-title">New Event</div>
+    <div class="teacher-row-meta" style="margin-bottom:12px">A concert, workshop or any event with a fee per student. Add the students taking part, then mark who has paid.</div>
+    <div class="form-grid">
+      <div class="form-field"><label for="ev-name">Event name</label><input id="ev-name" placeholder="e.g. Cymatics Live"></div>
+      <div class="form-field"><label for="ev-date">Date</label><input id="ev-date" type="date"></div>
+      <div class="form-field"><label for="ev-fee">Fee per student (EGP)</label><input id="ev-fee" type="number" min="0" placeholder="1000"></div>
+    </div>
+    <button class="btn btn-gold" style="margin-top:10px" onclick="createEvent()">+ Create event</button>
+  </div>
+  <div class="card-title">Events</div>
+  <div id="events-list"></div>
+</div>
+
 <div id="page-reports" class="page">
 
   <div class="report-section-header">📋 Action Items</div>
@@ -3438,6 +3454,7 @@ function refresh(parts={}){
   if(run('lessons') && typeof renderLessons==='function') renderLessons();
   if(run('reports') && typeof renderReports==='function') renderReports();
   if(run('database') && typeof renderDatabase==='function') renderDatabase();
+  if(run('events') && typeof renderEventsPage==='function'){ try{ renderEventsPage(); }catch(_){} }
 }
 
 function login(role,user={}){
@@ -5532,21 +5549,41 @@ function renderOtherRevenue(){
 // ── POLICY REMINDER (Mario, 10 Oct 2026) ──────────────────────────────
 // New and converted students (any paid plan — not trials) must be sent the
 // academy policy. One row per PERSON (a two-course student appears once).
-// "Send on WhatsApp" opens WhatsApp with the saved message — the document
-// goes as a LINK (WhatsApp links can't attach files) — and marks it sent.
-// The sent date lives on the student (students.policy_sent_at); the message
-// and link are shared settings in the cloud (app_meta).
-const POLICY_DEFAULT_MESSAGE='Hello {name}! 🎶\nWelcome to Cymatics Music Academy & Art Center. Please take a moment to read our academy policy:\n{link}\n\nIf you have any questions, just reply here. We are happy to have you with us!';
-function policySettings(){ const p=db.policySettings||{}; return {message:p.message||POLICY_DEFAULT_MESSAGE, link:p.link||''}; }
+// The sent date lives on the student (students.policy_sent_at).
+// Mario (6 Nov 2026): he sends the policy himself as a PDF, so the
+// "Message & link" and "Send on WhatsApp" buttons are gone. Instead,
+// "New policy" starts a new version from a chosen month: everyone who
+// RENEWS (pays for that month or later) is listed until marked sent for
+// the new version. The version is shared in the cloud (app_meta key
+// policy_version, JSON {from:'YYYY-MM', created:'YYYY-MM-DD'}).
+function policyVersion(){
+  const v=(db.policySettings||{}).version;
+  return (v && /^\d{4}-\d{2}$/.test(String(v.from||'')) && v.created) ? v : null;
+}
+// Student ids with a payment for month `fromMonth` or later.
+function studentIdsPaidFrom(fromMonth){
+  const ids=new Set();
+  Object.keys(db.payments||{}).forEach(k=>{
+    if(!db.payments[k]) return;
+    const m=/^(.+)_(\d{4}-\d{2})$/.exec(k);
+    if(m && m[2]>=fromMonth) ids.add(String(m[1]));
+  });
+  return ids;
+}
 function policyPeople(){
   const seen=new Set(), out=[];
+  const pv=policyVersion();
+  const renewed=pv ? studentIdsPaidFrom(pv.from) : null;
   (db.students||[]).forEach(st=>{
     if((st.status||'active')==='archived') return;
     if(st.plan==='trial' || st.plan==='group-trial') return;
     const courses=[st].concat((typeof getLinkedCourses==='function') ? getLinkedCourses(st) : []);
     const key=courses.map(c=>String(c.id)).sort().join('|');
     if(seen.has(key)) return; seen.add(key);
-    if(courses.some(c=>c.policySentAt)) return;
+    if(pv){
+      if(!courses.some(c=>renewed.has(String(c.id)))) return;           // not renewed yet
+      if(courses.some(c=>c.policySentAt && c.policySentAt>=pv.created)) return; // already has the new one
+    } else if(courses.some(c=>c.policySentAt)) return;
     out.push({student:st, courses});
   });
   return out.sort((a,b)=>String(a.student.name||'').localeCompare(String(b.student.name||'')));
@@ -5555,18 +5592,19 @@ function renderPolicyCard(){
   const el=document.getElementById('policy-card'); if(!el) return;
   if(!(session && session.role==='admin')){ el.innerHTML=''; return; }
   const rows=policyPeople();
+  const pv=policyVersion();
   const head='<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">'
     +'<b>📄 Policy to send'+(rows.length?' ('+rows.length+')':'')+'</b>'
-    +'<button class="btn btn-sm" onclick="openPolicySettings()">✎ Message &amp; link</button></div>';
-  if(!rows.length){ el.innerHTML=head+'<div style="color:var(--text-muted);margin-top:6px">✓ Everyone on a plan has been sent the policy.</div>'; return; }
+    +'<button class="btn btn-sm" onclick="openNewPolicy()">New policy</button></div>'
+    +(pv ? '<div style="color:var(--text-muted);font-size:12px;margin-top:2px">New policy from '+escapeHtml(policyMonthLabel(pv.from))+' — students show up here once they renew.</div>' : '');
+  if(!rows.length){ el.innerHTML=head+'<div style="color:var(--text-muted);margin-top:6px">✓ '+(pv?'Everyone who has renewed has the new policy.':'Everyone on a plan has been sent the policy.')+'</div>'; return; }
   el.innerHTML=head+'<div style="margin-top:8px">'+rows.map(r=>{
       const id=escapeAttr(String(r.student.id));
       return '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)">'
         +'<span>'+escapeHtml(r.student.name||'?')+' <small style="color:var(--text-muted)">'+escapeHtml(r.courses.map(c=>c.instrument||'').filter(Boolean).join(' + '))+'</small></span>'
-        +'<span style="display:flex;gap:6px"><button class="btn btn-sm btn-gold" onclick="sendPolicyToStudent(\''+id+'\')">Send on WhatsApp</button>'
-        +'<button class="btn btn-sm" onclick="markPolicySent(\''+id+'\', true)">Mark sent</button></span></div>';
+        +'<span style="display:flex;gap:6px"><button class="btn btn-sm btn-gold" onclick="markPolicySent(\''+id+'\', true)">Mark sent</button></span></div>';
     }).join('')+'</div>'
-    +'<div style="margin-top:8px"><button class="btn btn-sm" onclick="markAllCurrentPolicySent()" title="First use: everyone already with you before this feature">Mark everyone current as already sent</button></div>';
+    +'<div style="margin-top:8px"><button class="btn btn-sm" onclick="markAllCurrentPolicySent()">Mark all listed as sent</button></div>';
 }
 function markPolicySent(studentId, sent){
   const st=(db.students||[]).find(x=>String(x.id)===String(studentId)); if(!st) return;
@@ -5578,46 +5616,227 @@ function markPolicySent(studentId, sent){
   });
   save(); renderPolicyCard();
 }
-function sendPolicyToStudent(studentId){
-  const st=(db.students||[]).find(x=>String(x.id)===String(studentId)); if(!st) return;
-  const {message, link}=policySettings();
-  if(/\{link\}/.test(message) && !link){ alert('Add the policy link first (✎ Message & link).'); openPolicySettings(); return; }
-  const phone=String(st.phone1||'').trim() || String(st.phone2||'').trim();
-  if(!phone){ alert('No phone number on file for '+(st.name||'this student')+'.'); return; }
-  const first=st.first_name || String(st.name||'').split(' ')[0] || st.name || '';
-  const text=message.replace(/\{name\}/g, first).replace(/\{link\}/g, link);
-  window.open(whatsAppSendUrl(phone, text), '_blank');
-  markPolicySent(studentId, true);
-  showToast('Policy marked as sent to '+(st.name||'student')+'.');
-}
 function markAllCurrentPolicySent(){
   const rows=policyPeople(); if(!rows.length) return;
-  if(!confirm('Mark all '+rows.length+' current students as already having the policy?\n\nUse this once, for everyone who joined before this reminder existed. From now on only new and converted students will appear.')) return;
+  if(!confirm('Mark all '+rows.length+' listed students as sent the policy?')) return;
   rows.forEach(r=>markPolicySent(r.student.id, true));
   showToast('Marked '+rows.length+' students as already sent.');
 }
-function openPolicySettings(){
-  const {message, link}=policySettings();
-  openModal('Policy message & link', `
-    <div class="form-field wide"><label for="pol-link">Policy document link</label>
-      <input id="pol-link" placeholder="https://… (e.g. a Google Drive link to the PDF)" value="${escapeAttr(link)}"></div>
-    <div class="form-field wide"><label for="pol-message">Message</label>
-      <textarea id="pol-message" rows="7">${escapeHtml(message)}</textarea>
-      <small style="color:var(--text-muted)">{name} = the student's first name · {link} = the link above. WhatsApp can't attach files, so the document goes as a link.</small></div>
-    <div style="text-align:right;margin-top:10px"><button class="btn btn-gold" onclick="savePolicySettings()">Save</button></div>`);
+// Month + year for the policy card ("November 2026"); the app's own
+// formatMonthName gives the month only.
+function policyMonthLabel(ym){
+  const m=/^(\d{4})-(\d{2})$/.exec(String(ym||'')); if(!m) return String(ym||'');
+  return new Date(Number(m[1]), Number(m[2])-1, 1).toLocaleString('en-US',{month:'long', year:'numeric'});
 }
-async function savePolicySettings(){
-  const link=String(document.getElementById('pol-link')?.value||'').trim();
-  const message=String(document.getElementById('pol-message')?.value||'').trim() || POLICY_DEFAULT_MESSAGE;
-  db.policySettings={message, link}; save();
+function openNewPolicy(){
+  const today=(typeof getLocalTodayKey==='function') ? getLocalTodayKey() : new Date().toISOString().slice(0,10);
+  const [y,mo]=today.split('-').map(Number);
+  const opts=[0,1,2].map(i=>{ const d=new Date(y, mo-1+i, 1); const k=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); return '<option value="'+k+'">'+escapeHtml(policyMonthLabel(k))+'</option>'; }).join('');
+  const pv=policyVersion();
+  openModal('New policy', `
+    <div style="margin-bottom:10px;color:var(--text-muted)">Everyone who renews — pays for this month or later — will be listed under "Policy to send" until you mark them sent. New students joining on a plan are listed too.</div>
+    <div class="form-field wide"><label for="np-from">The new policy applies from</label><select id="np-from">${opts}</select></div>
+    ${pv?'<small style="color:var(--text-muted)">This replaces the current new policy (from '+escapeHtml(policyMonthLabel(pv.from))+').</small>':''}
+    <div style="text-align:right;margin-top:10px"><button class="btn btn-gold" onclick="startNewPolicy()">Start new policy</button></div>`);
+}
+async function startNewPolicy(){
+  const from=String(document.getElementById('np-from')?.value||'');
+  if(!/^\d{4}-\d{2}$/.test(from)) return;
+  const created=(typeof getLocalTodayKey==='function') ? getLocalTodayKey() : new Date().toISOString().slice(0,10);
+  db.policySettings=Object.assign({}, db.policySettings||{}, {version:{from, created}});
+  save();
   if(window.supabaseClientV1){
-    const now=new Date().toISOString();
     const {error}=await window.supabaseClientV1.from('app_meta').upsert([
-      {key:'policy_message', value:'', value_string:message, updated_at:now},
-      {key:'policy_link', value:'', value_string:link, updated_at:now}], {onConflict:'key'});
-    if(error){ showToast('⚠ Policy settings not saved to the cloud: '+error.message); return; }
+      {key:'policy_version', value:'', value_string:JSON.stringify({from, created}), updated_at:new Date().toISOString()}], {onConflict:'key'});
+    if(error){ showToast('⚠ New policy not saved to the cloud: '+error.message); }
   }
-  closeModal(); renderPolicyCard(); showToast('Policy message saved.');
+  closeModal(); renderPolicyCard();
+  showToast('New policy from '+policyMonthLabel(from)+' — renewing students will show up to send it to.');
+}
+
+// ── EVENTS (Mario, 6 Nov 2026) ─────────────────────────────────────────
+// Create an event (the student concert, a workshop…) with a fee per
+// student, add the students taking part, and mark who has paid. One row
+// per PERSON. Kept in the cloud table `events` (participants as JSON), so
+// every device sees the same list. Event payments are tracked here only —
+// they are not added to the monthly revenue figures.
+function eventsList(){ db.events=db.events||[]; return db.events; }
+function findEvent(id){ return eventsList().find(e=>String(e.id)===String(id)); }
+function eventSummary(ev){
+  const ps=(ev && ev.participants)||[];
+  const paid=ps.filter(p=>p.paid);
+  const collected=paid.reduce((s,p)=>s+(Number(p.amount)||0),0);
+  const outstanding=ps.filter(p=>!p.paid).length*(Number(ev && ev.fee)||0);
+  return {total:ps.length, paid:paid.length, unpaid:ps.length-paid.length, collected, outstanding};
+}
+async function syncEventToSupabase(ev){
+  try{
+    if(!window.supabaseClientV1 || !ev) return;
+    if(typeof window.__noteOwnWrite==='function') window.__noteOwnWrite();
+    const {error}=await window.supabaseClientV1.from('events').upsert({
+      id:String(ev.id), name:ev.name||'', event_date:ev.date||null, fee:Number(ev.fee)||0,
+      participants:ev.participants||[], notes:ev.notes||'',
+      created_at:ev.createdAt||new Date().toISOString(), updated_at:new Date().toISOString()
+    }, {onConflict:'id'});
+    if(error){
+      console.warn('Event sync failed:', error.message);
+      if(typeof noteNotSaved==='function') noteNotSaved('events', error.message);
+    }
+  }catch(err){ console.warn('Event sync failed:', err.message); }
+}
+async function deleteEventFromSupabase(eventId){
+  try{
+    if(!window.supabaseClientV1 || eventId==null) return;
+    const {error}=await window.supabaseClientV1.from('events').delete().eq('id', String(eventId));
+    if(error) console.warn('Event delete failed:', error.message);
+  }catch(err){ console.warn('Event delete failed:', err.message); }
+}
+function saveEvent(ev){ save(); syncEventToSupabase(ev); renderEventsPage(); }
+
+function createEvent(){
+  const name=String(document.getElementById('ev-name')?.value||'').trim();
+  const date=String(document.getElementById('ev-date')?.value||'').trim();
+  const fee=Number(document.getElementById('ev-fee')?.value||0);
+  if(!name){ showToast('Give the event a name.'); return; }
+  if(!(fee>=0)){ showToast('The fee must be a number.'); return; }
+  const ev={id:'ev_'+Date.now(), name, date, fee, participants:[], createdAt:new Date().toISOString()};
+  eventsList().push(ev);
+  ['ev-name','ev-date','ev-fee'].forEach(i=>{ const el=document.getElementById(i); if(el) el.value=''; });
+  window._openEventId=ev.id;
+  saveEvent(ev);
+  showToast('Event created — now add the students taking part.');
+  openAddEventStudents(ev.id);
+}
+function deleteEvent(eventId){
+  const ev=findEvent(eventId); if(!ev) return;
+  if(!confirm('Delete "'+ev.name+'" and its payment list?\n\nIt can be restored from the Deletion Log.')) return;
+  if(typeof logRecordDeletion==='function') logRecordDeletion('event', ev, 'Deleted from the Events page');
+  db.events=eventsList().filter(e=>String(e.id)!==String(eventId));
+  save(); deleteEventFromSupabase(eventId); renderEventsPage();
+  showToast('Event deleted.');
+}
+// People who can be added: active students, one row per person.
+function eventCandidates(ev){
+  const inIt=new Set(((ev && ev.participants)||[]).map(p=>String(p.studentId)));
+  const seen=new Set(), out=[];
+  (db.students||[]).forEach(st=>{
+    if((st.status||'active')==='archived') return;
+    const courses=[st].concat((typeof getLinkedCourses==='function') ? getLinkedCourses(st) : []);
+    const key=courses.map(c=>String(c.id)).sort().join('|');
+    if(seen.has(key)) return; seen.add(key);
+    if(courses.some(c=>inIt.has(String(c.id)))) return;
+    out.push({student:st, courses});
+  });
+  return out.sort((a,b)=>String(a.student.name||'').localeCompare(String(b.student.name||'')));
+}
+function openAddEventStudents(eventId){
+  const ev=findEvent(eventId); if(!ev) return;
+  const list=eventCandidates(ev);
+  openModal('Add students — '+ev.name, `
+    <input id="evs-search" placeholder="Search by name…" oninput="filterEventStudents()" style="margin-bottom:8px">
+    <div id="evs-list" style="max-height:50vh;overflow:auto">${list.length ? list.map(r=>`
+      <label class="evs-row" data-name="${escapeAttr(String(r.student.name||'').toLowerCase())}" style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);cursor:pointer">
+        <input type="checkbox" class="evs-box" value="${escapeAttr(String(r.student.id))}" style="width:auto">
+        <span>${escapeHtml(r.student.name||'?')} <small style="color:var(--text-muted)">${escapeHtml(r.courses.map(c=>c.instrument||'').filter(Boolean).join(' + '))}</small></span>
+      </label>`).join('') : '<div style="color:var(--text-muted)">Every active student is already in this event.</div>'}</div>
+    <div style="text-align:right;margin-top:10px"><button class="btn btn-gold" onclick="addSelectedEventStudents('${jsString(String(ev.id))}')">Add selected</button></div>`);
+  setTimeout(()=>document.getElementById('evs-search')?.focus(), 50);
+}
+function filterEventStudents(){
+  const q=String(document.getElementById('evs-search')?.value||'').trim().toLowerCase();
+  document.querySelectorAll('#evs-list .evs-row').forEach(r=>{ r.style.display=(!q || (r.dataset.name||'').includes(q)) ? '' : 'none'; });
+}
+function addSelectedEventStudents(eventId){
+  const ev=findEvent(eventId); if(!ev) return;
+  const ids=[...document.querySelectorAll('#evs-list .evs-box')].filter(b=>b.checked).map(b=>b.value);
+  if(!ids.length){ showToast('Tick at least one student.'); return; }
+  ev.participants=ev.participants||[];
+  ids.forEach(id=>{
+    const st=(db.students||[]).find(s=>String(s.id)===String(id)); if(!st) return;
+    if(ev.participants.some(p=>String(p.studentId)===String(id))) return;
+    ev.participants.push({studentId:st.id, name:st.name||'', paid:false, amount:0, method:'', paidAt:''});
+  });
+  closeModal(); window._openEventId=ev.id; saveEvent(ev);
+  showToast(ids.length+' student'+(ids.length===1?'':'s')+' added.');
+}
+function removeEventStudent(eventId, studentId){
+  const ev=findEvent(eventId); if(!ev) return;
+  const p=(ev.participants||[]).find(x=>String(x.studentId)===String(studentId)); if(!p) return;
+  if(!confirm('Remove '+(p.name||'this student')+' from "'+ev.name+'"?'+(p.paid?'\n\nThey are marked as PAID.':''))) return;
+  ev.participants=ev.participants.filter(x=>String(x.studentId)!==String(studentId));
+  saveEvent(ev);
+}
+function openEventPayment(eventId, studentId){
+  const ev=findEvent(eventId); if(!ev) return;
+  const p=(ev.participants||[]).find(x=>String(x.studentId)===String(studentId)); if(!p) return;
+  openModal('Payment — '+(p.name||''), `
+    <div class="form-field wide"><label for="evp-amount">Amount (EGP)</label><input id="evp-amount" type="number" min="0" value="${Number(ev.fee)||0}"></div>
+    <div class="form-field wide"><label for="evp-method">Paid by</label><select id="evp-method"><option>Instapay</option><option>Cash</option></select></div>
+    <div style="text-align:right;margin-top:10px"><button class="btn btn-gold" onclick="confirmEventPayment('${jsString(String(ev.id))}','${jsString(String(studentId))}')">Mark paid</button></div>`);
+}
+function confirmEventPayment(eventId, studentId){
+  const ev=findEvent(eventId); if(!ev) return;
+  const p=(ev.participants||[]).find(x=>String(x.studentId)===String(studentId)); if(!p) return;
+  const amount=Number(document.getElementById('evp-amount')?.value);
+  p.paid=true;
+  p.amount=(amount>=0) ? amount : (Number(ev.fee)||0);
+  p.method=String(document.getElementById('evp-method')?.value||'');
+  p.paidAt=(typeof getLocalTodayKey==='function') ? getLocalTodayKey() : new Date().toISOString().slice(0,10);
+  closeModal(); saveEvent(ev);
+  showToast((p.name||'Student')+' marked paid.');
+}
+function undoEventPayment(eventId, studentId){
+  const ev=findEvent(eventId); if(!ev) return;
+  const p=(ev.participants||[]).find(x=>String(x.studentId)===String(studentId)); if(!p) return;
+  if(!confirm('Mark '+(p.name||'this student')+' as NOT paid?')) return;
+  p.paid=false; p.amount=0; p.method=''; p.paidAt='';
+  saveEvent(ev);
+}
+function toggleEventOpen(eventId){
+  window._openEventId=(String(window._openEventId)===String(eventId)) ? null : eventId;
+  renderEventsPage();
+}
+function setEventFilter(eventId, which){
+  window._eventFilter=window._eventFilter||{};
+  window._eventFilter[eventId]=which;
+  renderEventsPage();
+}
+function renderEventsPage(){
+  const host=document.getElementById('events-list'); if(!host) return;
+  const evs=eventsList().slice().sort((a,b)=>String(b.date||'').localeCompare(String(a.date||'')));
+  if(!evs.length){ host.innerHTML='<div class="empty"><div class="empty-icon">🎤</div><div class="empty-text">No events yet — create one above.</div></div>'; return; }
+  host.innerHTML=evs.map(ev=>{
+    const id=jsString(String(ev.id));
+    const sm=eventSummary(ev);
+    const open=String(window._openEventId)===String(ev.id) || evs.length===1;
+    const filter=(window._eventFilter||{})[ev.id]||'all';
+    const head=`<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap;cursor:pointer" onclick="toggleEventOpen('${id}')">
+      <div><b>${escapeHtml(ev.name||'?')}</b> <small style="color:var(--text-muted)">${ev.date?escapeHtml(formatDateDMY(ev.date))+' · ':''}${egp(Number(ev.fee)||0)} per student</small>
+        <div style="margin-top:4px;display:flex;gap:6px;flex-wrap:wrap">
+          <span class="badge badge-green">${sm.paid} paid</span><span class="badge badge-red">${sm.unpaid} not paid</span>
+          <span class="badge badge-blue">${egp(sm.collected)} collected</span>${sm.unpaid?`<span class="badge badge-amber">${egp(sm.outstanding)} to collect</span>`:''}
+        </div></div>
+      <span style="color:var(--text-muted)">${open?'▲':'▼'}</span></div>`;
+    if(!open) return `<div class="card" style="margin-bottom:10px">${head}</div>`;
+    const ps=(ev.participants||[]).slice().sort((a,b)=>(Number(a.paid)-Number(b.paid)) || String(a.name||'').localeCompare(String(b.name||'')));
+    const shown=ps.filter(p=>filter==='paid' ? p.paid : filter==='unpaid' ? !p.paid : true);
+    const fbtn=(k,l)=>`<button class="btn btn-sm${filter===k?' btn-gold':''}" onclick="setEventFilter('${id}','${k}')">${l}</button>`;
+    const rows=shown.map(p=>{
+      const sid=jsString(String(p.studentId));
+      const status=p.paid
+        ? `<span class="badge badge-green">✓ Paid ${egp(Number(p.amount)||0)}${p.method?' · '+escapeHtml(p.method):''}${p.paidAt?' · '+escapeHtml(formatDateDMY(p.paidAt)):''}</span> <button class="btn btn-sm" onclick="undoEventPayment('${id}','${sid}')">Undo</button>`
+        : `<span class="badge badge-red">Not paid</span> <button class="btn btn-sm btn-gold" onclick="openEventPayment('${id}','${sid}')">Mark paid</button>`;
+      return `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--border);flex-wrap:wrap">
+        <span>${escapeHtml(p.name||'?')}</span>
+        <span style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">${status}<button class="btn btn-sm" title="Remove from this event" onclick="removeEventStudent('${id}','${sid}')">✕</button></span></div>`;
+    }).join('');
+    return `<div class="card" style="margin-bottom:10px">${head}
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0">${fbtn('all','All ('+sm.total+')')}${fbtn('unpaid','Not paid ('+sm.unpaid+')')}${fbtn('paid','Paid ('+sm.paid+')')}
+        <span style="flex:1"></span><button class="btn btn-sm btn-gold" onclick="openAddEventStudents('${id}')">+ Add students</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteEvent('${id}')">Delete event</button></div>
+      ${rows || '<div style="color:var(--text-muted);padding:6px 0">'+(sm.total?'Nobody in this list.':'No students yet — press "+ Add students".')+'</div>'}
+    </div>`;
+  }).join('');
 }
 
 // Short instrument names for the schedule photo: E-Guitar → Electric,
@@ -6526,8 +6745,8 @@ function makeupsLeftNote(students, forName){
 }
 
 // Mario (30 Oct 2026): the make-ups line joins the note before it instead
-// of opening a second "Kindly note…":
-//   "…wasn't made-up ☺+ we still have 3 make-up sessions left."
+// of opening a second "Kindly note…", and the note's emoji moves to the end:
+//   "…wasn't made-up + we still have 3 make-up sessions left. ☺"
 // Several children's lines (a family message) become one phrase
 // ("…2 make-up sessions left for Ali and 1 for Sara"). With no note before
 // it, it stays its own "Kindly note that we still have…" line.
@@ -6548,7 +6767,12 @@ function finalizeReminderNotes(message){
   if(rest.length) phrase+=(rest.length>1 ? ', '+rest.slice(0,-1).join(', ') : '')+' and '+rest[rest.length-1];
   const prev=at>0 ? kept[at-1] : '';
   if(at>0 && /^Kindly note\b/.test(prev.trim())){
-    kept[at-1]=prev.replace(/\s+$/,'')+'+ '+phrase+'.';
+    // The note's closing emoji moves to the end of the joined sentence
+    // (Mario, 30 Oct 2026): "…wasn't made-up + we still have 2 make-up
+    // sessions left. ☺"
+    const em=/\s*(\p{Extended_Pictographic}\uFE0F?)\s*$/u.exec(prev);
+    const base=(em ? prev.slice(0, em.index) : prev).replace(/\s+$/,'');
+    kept[at-1]=base+' + '+phrase+'.'+(em ? ' '+em[1] : '');
   } else {
     kept.splice(at, 0, 'Kindly note that '+phrase+'.');
   }
@@ -8878,7 +9102,8 @@ const DELETABLE_RECORD_TYPES={
   teacher:          {collection:'teacherProfiles',  label:'Teacher',          describe:r=>r.name||'?'},
   lessonLog:        {collection:'lessonLogs',       label:'Lesson log',       describe:r=>(r.studentName||'?')+' — '+(r.lessonDate||'?')},
   product:          {collection:'products',         label:'Product',          describe:r=>(r.name||'?')+' · '+(r.qty||0)+' in stock'},
-  sale:             {collection:'sales',            label:'Sale',             describe:r=>(r.qty||0)+' × '+(r.productName||'?')+' — '+(r.date||'?')}
+  sale:             {collection:'sales',            label:'Sale',             describe:r=>(r.qty||0)+' × '+(r.productName||'?')+' — '+(r.date||'?')},
+  event:            {collection:'events',           label:'Event',            describe:r=>(r.name||'?')+' — '+((r.participants||[]).length)+' student(s)'}
 };
 
 // Generic counterpart to logStudentDeletion, for every OTHER record type.
@@ -8925,6 +9150,7 @@ function pushRestoredRecordToCloud(type, r){
     case 'lessonLog':       return call(typeof syncLessonLogToSupabase==='function' ? syncLessonLogToSupabase : null);
     case 'product':         return call(typeof syncProductToSupabase==='function' ? syncProductToSupabase : null);
     case 'sale':            return call(typeof syncSaleToSupabase==='function' ? syncSaleToSupabase : null);
+    case 'event':           return call(typeof syncEventToSupabase==='function' ? syncEventToSupabase : null);
     case 'refund':
       if(!window.supabaseClientV1) return;
       return window.supabaseClientV1.from('refunds').insert([{
@@ -11584,6 +11810,12 @@ async function pushAllDataToCloud(alreadyConfirmed){
     created_at:p.createdAt||new Date().toISOString()
   }));
 
+  await pushList('events', db.events||[], 'events', 'id', e=>({
+    id:String(e.id), name:e.name||'', event_date:e.date||null, fee:Number(e.fee)||0,
+    participants:e.participants||[], notes:e.notes||'',
+    created_at:e.createdAt||new Date().toISOString(), updated_at:new Date().toISOString()
+  }));
+
   await pushList('sales', db.sales, 'sales', 'id', sa=>({
     id:String(sa.id), product_id:sa.productId!=null?String(sa.productId):null,
     product_name:sa.productName||'', qty:Number(sa.qty)||0,
@@ -12257,6 +12489,7 @@ function switchPage(page, btn){
   if(page==='overview')renderOverview();
   if(page==='students'){renderStudents();populateTeacherDropdowns(); if(typeof setDefaultJoinedDate==='function') setDefaultJoinedDate();}
   if(page==='teachers')renderTeachers();
+  if(page==='events' && typeof renderEventsPage==='function') renderEventsPage();
   if(page==='lessons'){
     // On first landing this session, default the day filter to today's
     // weekday (like the calendar), so the admin sees today's lessons first.
@@ -13437,6 +13670,20 @@ async function _autoLoadFromCloudImpl(){
      }
    }catch(prodErr){ /* silent — non-critical */ }
 
+   // Events (v346) — wholesale replace like products. If the table isn't
+   // there yet (EVENTS.sql not run) the device keeps its own copy.
+   try{
+     const {data:evRows,error:eEv}=await client.from('events').select('*');
+     if(!eEv && evRows){
+       db.events=evRows.map(r=>({
+         id:r.id, name:r.name||'', date:r.event_date||'', fee:Number(r.fee)||0,
+         participants:Array.isArray(r.participants)?r.participants:[], notes:r.notes||'',
+         createdAt:r.created_at||''
+       }));
+       save();
+     }
+   }catch(evErr){ /* silent — non-critical */ }
+
    try{
      const {data:saleRows,error:eSale}=await client.from('sales').select('*');
      if(eSale){ /* table may not exist yet — silent */ }
@@ -13538,10 +13785,12 @@ async function _autoLoadFromCloudImpl(){
      (lessons?.length||0)+' lessons · '+
      (payments?.length||0)+' payments';
    try{
-     const {data:meta}=await client.from('app_meta').select('key,value_string').in('key',['policy_message','policy_link']);
+     const {data:meta}=await client.from('app_meta').select('key,value_string').in('key',['policy_message','policy_link','policy_version']);
      if(Array.isArray(meta)){
        const m={}; meta.forEach(r=>{ m[r.key]=r.value_string||''; });
-       db.policySettings={message:m.policy_message||'', link:m.policy_link||''};
+       let version=null;
+       try{ version=m.policy_version ? JSON.parse(m.policy_version) : null; }catch(_){ version=null; }
+       db.policySettings={message:m.policy_message||'', link:m.policy_link||'', version};
      }
    }catch(_){}
    window.__loadedFromCloudThisSession=true;
@@ -14047,7 +14296,7 @@ const NOT_SAVED_LABELS={students:'a student',lessons:'a lesson',lesson_updates:'
   expenses:'an expense',other_revenue:'other revenue',refunds:'a refund',waiting_list:'a waiting-list entry',
   practice_sessions:'a practice session',deletion_log:'a deletion record',notes:'a note',resources:'a resource',
   sales:'a sale',products:'a product',instruments:'an instrument',wishlists:'a wishlist',
-  reminders_sent:'a reminder record',renewals_dismissed:'a renewal dismissal'};
+  reminders_sent:'a reminder record',renewals_dismissed:'a renewal dismissal',events:'an event'};
 function noteNotSaved(table, detail){
   if(typeof updateSyncHealthBadge==='function'){ try{ updateSyncHealthBadge(); }catch(_){} }
   if(!(typeof session!=='undefined' && session && session.role==='admin')) return;
@@ -26343,7 +26592,7 @@ function renderRevenueTrendChart(){
   // without that no events arrive and nothing else changes.
   const LIVE_TABLES=['students','lessons','lesson_updates','payments','payment_amounts','teachers','teacher_paid',
     'teacher_absences','waiting_list','expenses','other_revenue','refunds','practice_sessions','notes','sales',
-    'products','instruments','wishlists','reminders_sent','renewals_dismissed','resources','deletion_log'];
+    'products','instruments','wishlists','reminders_sent','renewals_dismissed','resources','deletion_log','events'];
   const liveTiming={debounce:3000, ownEchoMs:5000, retryMs:15000, minGap:10000};
   window.__liveTiming=liveTiming;
   let liveChannel=null, liveClient=null, liveTimer=null, lastOwnWriteAt=0;
